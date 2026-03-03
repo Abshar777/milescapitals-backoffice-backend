@@ -1,0 +1,41 @@
+name: Deploy Backend to VPS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/deploy.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          password: ${{ secrets.PASSWORD }}
+
+          script: |
+            # 1. Navigate to the backend directory on your VPS 
+            # IMPORTANT: Update this path if your project is located somewhere else!
+            cd /root/miles-backend
+
+            # 2. Pull the latest code 
+            # (Assuming you have git configured on the VPS)
+            git pull origin main
+
+            # 3. Activate virtual environment and install dependencies
+            source venv/bin/activate
+            pip install -r requirements.txt
+
+            # 4. Reload processes and restart FastAPI
+            sudo systemctl daemon-reload
+            sudo systemctl restart fastapi
+            sudo systemctl enable fastapi
+            sudo systemctl status fastapi
+
+            # 5. Reload NGINX
+            sudo nginx -s reload
