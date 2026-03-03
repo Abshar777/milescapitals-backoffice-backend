@@ -11150,8 +11150,9 @@ app.include_router(api_router)
 
 # CORS middleware
 _cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
-if "https://backoffice.milescapitals.com" not in _cors_origins:
-    _cors_origins.append("https://backoffice.milescapitals.com")
+if "https://miles-backoffice-frontend.vercel.app" not in _cors_origins:
+    _cors_origins.append("https://miles-backoffice-frontend.vercel.app")
+
 
 app.add_middleware(
     CORSMiddleware,
