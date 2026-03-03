@@ -6552,10 +6552,10 @@ async def convert_expense_to_loan(request: Request, entry_id: str, req: ConvertT
     # Only create treasury disbursement transaction if we have a valid treasury
     if treasury_account_id and treasury:
         # Deduct from treasury for loan disbursement
-        await db.treasury_accounts.update_one(
-            {"account_id": treasury_account_id},
-            {"$inc": {"balance": -entry["amount"]}, "$set": {"updated_at": now.isoformat()}}
-        )
+        # await db.treasury_accounts.update_one(
+        #     {"account_id": treasury_account_id},
+        #     {"$inc": {"balance": -entry["amount"]}, "$set": {"updated_at": now.isoformat()}}
+        # )
         
         # Create treasury transaction for loan
         await db.treasury_transactions.insert_one({
