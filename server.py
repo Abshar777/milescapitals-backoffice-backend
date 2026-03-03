@@ -263,6 +263,28 @@ class LPTransactionCreate(BaseModel):
     reference: Optional[str] = None
     notes: Optional[str] = None
 
+# Dealing P&L Models
+class LPPnLEntry(BaseModel):
+    lp_id: str
+    lp_name: Optional[str] = None
+    booked_pnl: float = 0
+    floating_pnl: float = 0
+
+class DealingPnLCreate(BaseModel):
+    date: str  # YYYY-MM-DD format
+    # MT5 Client Side
+    mt5_booked_pnl: float = 0  # Client booked P&L (positive = client profit)
+    mt5_floating_pnl: float = 0  # Today's running floating P&L
+    # LP Hedging Side - Multiple LPs
+    lp_entries: Optional[List[LPPnLEntry]] = []  # List of LP P&L entries
+    # Legacy single LP fields (for backward compatibility)
+    lp_booked_pnl: float = 0
+    lp_floating_pnl: float = 0
+    # Screenshots (base64 or URLs)
+    mt5_screenshot: Optional[str] = None
+    lp_screenshot: Optional[str] = None
+    notes: Optional[str] = None
+
 # PSP Models
 class PSPStatus:
     ACTIVE = "active"
@@ -2092,6 +2114,436 @@ async def export_lp_csv(user: dict = Depends(get_current_user)):
         headers={"Content-Disposition": f"attachment; filename=lp_export_{datetime.now().strftime('%Y%m%d')}.csv"}
     )
 
+
+# ============== DEALING P&L ROUTES ==============
+
+@api_router.get("/dealing-pnl")
+async def get_dealing_pnl_records(
+    limit: int = 30,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: dict = Depends(get_current_user)
+):
+    """Get all dealing P&L records with calculated values"""
+    query = {}
+    if start_date:
+        query["date"] = {"$gte": start_date}
+    if end_date:
+        if "date" in query:
+            query["date"]["$lte"] = end_date
+        else:
+            query["date"] = {"$lte": end_date}
+    
+    records = await db.dealing_pnl.find(query, {"_id": 0}).sort("date", -1).limit(limit).to_list(limit)
+    
+    # Calculate derived values for each record
+    result = []
+    for i, record in enumerate(records):
+        # Get previous day's floating values
+        prev_mt5_floating = 0
+        prev_lp_entries = {}
+        
+        # Find previous record by date
+        prev_record = await db.dealing_pnl.find_one(
+            {"date": {"$lt": record["date"]}},
+            {"_id": 0},
+            sort=[("date", -1)]
+        )
+        if prev_record:
+            prev_mt5_floating = prev_record.get("mt5_floating_pnl", 0)
+            # Build map of previous LP floating values
+            for lp_entry in prev_record.get("lp_entries", []):
+                prev_lp_entries[lp_entry.get("lp_id")] = lp_entry.get("floating_pnl", 0)
+        
+        # Calculate MT5 dealing P&L
+        mt5_booked = record.get("mt5_booked_pnl", 0)
+        mt5_floating = record.get("mt5_floating_pnl", 0)
+        mt5_floating_change = mt5_floating - prev_mt5_floating
+        broker_mt5_pnl = -mt5_booked - mt5_floating_change
+        
+        # Calculate LP dealing P&L for each LP
+        lp_entries_with_calc = []
+        total_lp_booked = 0
+        total_lp_floating = 0
+        total_lp_floating_change = 0
+        total_broker_lp_pnl = 0
+        
+        for lp_entry in record.get("lp_entries", []):
+            lp_id = lp_entry.get("lp_id")
+            lp_booked = lp_entry.get("booked_pnl", 0)
+            lp_floating = lp_entry.get("floating_pnl", 0)
+            prev_floating = prev_lp_entries.get(lp_id, 0)
+            floating_change = lp_floating - prev_floating
+            lp_pnl = lp_booked + floating_change
+            
+            lp_entries_with_calc.append({
+                **lp_entry,
+                "prev_floating": prev_floating,
+                "floating_change": floating_change,
+                "lp_pnl": lp_pnl,
+            })
+            
+            total_lp_booked += lp_booked
+            total_lp_floating += lp_floating
+            total_lp_floating_change += floating_change
+            total_broker_lp_pnl += lp_pnl
+        
+        # Total Dealing P&L
+        total_dealing_pnl = broker_mt5_pnl + total_broker_lp_pnl
+        
+        result.append({
+            **record,
+            "lp_entries": lp_entries_with_calc,
+            "prev_mt5_floating": prev_mt5_floating,
+            "mt5_floating_change": mt5_floating_change,
+            "broker_mt5_pnl": broker_mt5_pnl,
+            "total_lp_booked": total_lp_booked,
+            "total_lp_floating": total_lp_floating,
+            "total_lp_floating_change": total_lp_floating_change,
+            "broker_lp_pnl": total_broker_lp_pnl,
+            "total_dealing_pnl": total_dealing_pnl,
+        })
+    
+    return result
+
+
+@api_router.get("/dealing-pnl/summary")
+async def get_dealing_pnl_summary(
+    days: int = 30,
+    user: dict = Depends(get_current_user)
+):
+    """Get summary statistics for dealing P&L"""
+    from datetime import timedelta
+    
+    end_date = datetime.now(timezone.utc).date()
+    start_date = end_date - timedelta(days=days)
+    
+    records = await db.dealing_pnl.find(
+        {"date": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()}},
+        {"_id": 0}
+    ).sort("date", -1).to_list(1000)
+    
+    if not records:
+        return {
+            "total_dealing_pnl": 0,
+            "total_mt5_booked": 0,
+            "total_lp_booked": 0,
+            "record_count": 0,
+            "profitable_days": 0,
+            "loss_days": 0,
+            "best_day": None,
+            "worst_day": None,
+        }
+    
+    # Calculate totals
+    total_dealing_pnl = 0
+    total_mt5_booked = 0
+    total_lp_booked = 0
+    profitable_days = 0
+    loss_days = 0
+    best_day = {"date": None, "pnl": float('-inf')}
+    worst_day = {"date": None, "pnl": float('inf')}
+    
+    prev_record = None
+    for record in reversed(records):  # Process in chronological order
+        mt5_booked = record.get("mt5_booked_pnl", 0)
+        mt5_floating = record.get("mt5_floating_pnl", 0)
+        lp_booked = record.get("lp_booked_pnl", 0)
+        lp_floating = record.get("lp_floating_pnl", 0)
+        
+        prev_mt5_floating = prev_record.get("mt5_floating_pnl", 0) if prev_record else 0
+        prev_lp_floating = prev_record.get("lp_floating_pnl", 0) if prev_record else 0
+        
+        mt5_floating_change = mt5_floating - prev_mt5_floating
+        lp_floating_change = lp_floating - prev_lp_floating
+        
+        broker_mt5_pnl = -mt5_booked - mt5_floating_change
+        broker_lp_pnl = lp_booked + lp_floating_change
+        day_pnl = broker_mt5_pnl + broker_lp_pnl
+        
+        total_dealing_pnl += day_pnl
+        total_mt5_booked += mt5_booked
+        total_lp_booked += lp_booked
+        
+        if day_pnl > 0:
+            profitable_days += 1
+        elif day_pnl < 0:
+            loss_days += 1
+        
+        if day_pnl > best_day["pnl"]:
+            best_day = {"date": record["date"], "pnl": day_pnl}
+        if day_pnl < worst_day["pnl"]:
+            worst_day = {"date": record["date"], "pnl": day_pnl}
+        
+        prev_record = record
+    
+    return {
+        "total_dealing_pnl": round(total_dealing_pnl, 2),
+        "total_mt5_booked": round(total_mt5_booked, 2),
+        "total_lp_booked": round(total_lp_booked, 2),
+        "record_count": len(records),
+        "profitable_days": profitable_days,
+        "loss_days": loss_days,
+        "best_day": best_day if best_day["date"] else None,
+        "worst_day": worst_day if worst_day["date"] else None,
+    }
+
+
+@api_router.post("/dealing-pnl")
+async def create_dealing_pnl(data: DealingPnLCreate, user: dict = Depends(require_accountant_or_admin)):
+    """Create or update a dealing P&L record for a specific date"""
+    now = datetime.now(timezone.utc)
+    
+    # Check if record already exists for this date
+    existing = await db.dealing_pnl.find_one({"date": data.date}, {"_id": 0})
+    
+    # Process LP entries - fetch LP names if not provided
+    lp_entries = []
+    for entry in (data.lp_entries or []):
+        lp_entry = {
+            "lp_id": entry.lp_id,
+            "lp_name": entry.lp_name,
+            "booked_pnl": entry.booked_pnl,
+            "floating_pnl": entry.floating_pnl,
+        }
+        # Fetch LP name if not provided
+        if not lp_entry["lp_name"]:
+            lp = await db.lp_accounts.find_one({"lp_id": entry.lp_id}, {"_id": 0, "lp_name": 1})
+            if lp:
+                lp_entry["lp_name"] = lp.get("lp_name")
+        lp_entries.append(lp_entry)
+    
+    record = {
+        "date": data.date,
+        "mt5_booked_pnl": data.mt5_booked_pnl,
+        "mt5_floating_pnl": data.mt5_floating_pnl,
+        "lp_entries": lp_entries,
+        "mt5_screenshot": data.mt5_screenshot,
+        "lp_screenshot": data.lp_screenshot,
+        "notes": data.notes,
+        "updated_at": now.isoformat(),
+        "updated_by": user["user_id"],
+        "updated_by_name": user["name"],
+    }
+    
+    if existing:
+        await db.dealing_pnl.update_one(
+            {"date": data.date},
+            {"$set": record}
+        )
+        return {"message": "Dealing P&L record updated", "date": data.date}
+    else:
+        record["record_id"] = f"dpnl_{uuid.uuid4().hex[:12]}"
+        record["created_at"] = now.isoformat()
+        record["created_by"] = user["user_id"]
+        record["created_by_name"] = user["name"]
+        await db.dealing_pnl.insert_one(record)
+        return {"message": "Dealing P&L record created", "date": data.date, "record_id": record["record_id"]}
+
+
+@api_router.get("/dealing-pnl/{date}")
+async def get_dealing_pnl_by_date(date: str, user: dict = Depends(get_current_user)):
+    """Get dealing P&L record for a specific date"""
+    record = await db.dealing_pnl.find_one({"date": date}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=404, detail="No record found for this date")
+    return record
+
+
+@api_router.delete("/dealing-pnl/{date}")
+async def delete_dealing_pnl(date: str, user: dict = Depends(require_admin)):
+    """Delete a dealing P&L record"""
+    result = await db.dealing_pnl.delete_one({"date": date})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return {"message": "Dealing P&L record deleted", "date": date}
+
+
+@api_router.post("/dealing-pnl/{date}/send-email")
+async def send_dealing_pnl_email(date: str, user: dict = Depends(require_accountant_or_admin)):
+    """Send Dealing P&L email notification for a specific date"""
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    # Get the record
+    record = await db.dealing_pnl.find_one({"date": date}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=404, detail="No record found for this date")
+    
+    # Get email settings
+    settings = await db.app_settings.find_one({"type": "email_settings"}, {"_id": 0})
+    if not settings:
+        raise HTTPException(status_code=400, detail="Email settings not configured")
+    
+    director_emails = settings.get("director_emails", [])
+    if not director_emails:
+        raise HTTPException(status_code=400, detail="No director emails configured")
+    
+    # Get previous day's record for calculations
+    prev_record = await db.dealing_pnl.find_one(
+        {"date": {"$lt": date}},
+        {"_id": 0},
+        sort=[("date", -1)]
+    )
+    
+    prev_mt5_floating = prev_record.get("mt5_floating_pnl", 0) if prev_record else 0
+    prev_lp_entries = {}
+    if prev_record:
+        for lp in prev_record.get("lp_entries", []):
+            prev_lp_entries[lp.get("lp_id")] = lp.get("floating_pnl", 0)
+    
+    # Calculate MT5 P&L
+    mt5_booked = record.get("mt5_booked_pnl", 0)
+    mt5_floating = record.get("mt5_floating_pnl", 0)
+    mt5_floating_change = mt5_floating - prev_mt5_floating
+    broker_mt5_pnl = -mt5_booked - mt5_floating_change
+    
+    # Calculate LP P&L
+    total_lp_booked = 0
+    total_broker_lp_pnl = 0
+    lp_rows = ""
+    
+    for lp in record.get("lp_entries", []):
+        lp_id = lp.get("lp_id")
+        lp_name = lp.get("lp_name", lp_id)
+        lp_booked = lp.get("booked_pnl", 0)
+        lp_floating = lp.get("floating_pnl", 0)
+        prev_floating = prev_lp_entries.get(lp_id, 0)
+        floating_change = lp_floating - prev_floating
+        lp_pnl = lp_booked + floating_change
+        
+        total_lp_booked += lp_booked
+        total_broker_lp_pnl += lp_pnl
+        
+        pnl_color = "#4ade80" if lp_pnl >= 0 else "#f87171"
+        lp_rows += f"<tr><td style='padding:8px;border-bottom:1px solid #333;color:white;'>{lp_name}</td><td style='padding:8px;border-bottom:1px solid #333;color:white;text-align:right;'>${lp_booked:,.0f}</td><td style='padding:8px;border-bottom:1px solid #333;color:white;text-align:right;'>${lp_floating:,.0f}</td><td style='padding:8px;border-bottom:1px solid #333;color:{pnl_color};text-align:right;font-weight:bold;'>${lp_pnl:+,.0f}</td></tr>"
+    
+    total_dealing_pnl = broker_mt5_pnl + total_broker_lp_pnl
+    total_color = "#4ade80" if total_dealing_pnl >= 0 else "#f87171"
+    mt5_color = "#4ade80" if broker_mt5_pnl >= 0 else "#f87171"
+    lp_color = "#4ade80" if total_broker_lp_pnl >= 0 else "#f87171"
+    
+    # Generate email HTML
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+    </head>
+    <body style="margin:0;padding:0;background-color:#f5f5f5;font-family:'Segoe UI',Arial,sans-serif;">
+        <div style="max-width:600px;margin:0 auto;background-color:#0B0C10;color:white;">
+            <div style="background:linear-gradient(135deg,#1F2833 0%,#0B0C10 100%);padding:30px;text-align:center;border-bottom:3px solid #66FCF1;">
+                <h1 style="color:#66FCF1;margin:0;font-size:24px;letter-spacing:2px;">MILES CAPITALS</h1>
+                <p style="color:#C5C6C7;margin:10px 0 0;font-size:14px;">Dealing P&L Report - {date}</p>
+            </div>
+            
+            <div style="padding:30px;">
+                <div style="background-color:#1F2833;border-radius:8px;padding:20px;margin-bottom:20px;">
+                    <h2 style="color:#66FCF1;font-size:16px;margin:0 0 20px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #66FCF1;padding-bottom:10px;">📈 Daily Dealing P&L</h2>
+                    
+                    <div style="text-align:center;background-color:#0B0C10;border-radius:6px;padding:25px;margin-bottom:20px;">
+                        <div style="color:#C5C6C7;font-size:11px;text-transform:uppercase;letter-spacing:1px;">TOTAL DEALING P&L</div>
+                        <div style="color:{total_color};font-size:42px;font-weight:bold;margin-top:5px;">${total_dealing_pnl:+,.0f}</div>
+                        <div style="color:#C5C6C7;font-size:12px;margin-top:5px;">USD</div>
+                    </div>
+                    
+                    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                        <tr>
+                            <td style="width:50%;padding:15px;background-color:#0B0C10;border-radius:6px;">
+                                <div style="color:#C5C6C7;font-size:11px;text-transform:uppercase;">MT5 Broker P&L</div>
+                                <div style="color:{mt5_color};font-size:24px;font-weight:bold;margin-top:5px;">${broker_mt5_pnl:+,.0f}</div>
+                            </td>
+                            <td style="width:10px;"></td>
+                            <td style="width:50%;padding:15px;background-color:#0B0C10;border-radius:6px;">
+                                <div style="color:#C5C6C7;font-size:11px;text-transform:uppercase;">LP Hedging P&L</div>
+                                <div style="color:{lp_color};font-size:24px;font-weight:bold;margin-top:5px;">${total_broker_lp_pnl:+,.0f}</div>
+                            </td>
+                        </tr>
+                    </table>
+                    
+                    <div style="background-color:#0B0C10;border-radius:6px;padding:15px;margin-bottom:15px;">
+                        <h4 style="color:#66FCF1;font-size:12px;margin:0 0 10px;text-transform:uppercase;">MT5 Details</h4>
+                        <table style="width:100%;border-collapse:collapse;">
+                            <tr>
+                                <td style="color:#C5C6C7;font-size:12px;padding:5px 0;">Client Booked P&L:</td>
+                                <td style="color:white;font-size:14px;text-align:right;">${mt5_booked:+,.0f}</td>
+                            </tr>
+                            <tr>
+                                <td style="color:#C5C6C7;font-size:12px;padding:5px 0;">Running Floating:</td>
+                                <td style="color:white;font-size:14px;text-align:right;">${mt5_floating:,.0f}</td>
+                            </tr>
+                            <tr>
+                                <td style="color:#C5C6C7;font-size:12px;padding:5px 0;">Floating Change:</td>
+                                <td style="color:white;font-size:14px;text-align:right;">${mt5_floating_change:+,.0f}</td>
+                            </tr>
+                        </table>
+                    </div>
+                    
+                    {f'''<div style="background-color:#0B0C10;border-radius:6px;padding:15px;">
+                        <h4 style="color:#66FCF1;font-size:12px;margin:0 0 10px;text-transform:uppercase;">LP Breakdown</h4>
+                        <table style="width:100%;border-collapse:collapse;">
+                            <tr>
+                                <th style="padding:8px;border-bottom:1px solid #333;color:#66FCF1;font-size:11px;text-align:left;">LP</th>
+                                <th style="padding:8px;border-bottom:1px solid #333;color:#66FCF1;font-size:11px;text-align:right;">Booked</th>
+                                <th style="padding:8px;border-bottom:1px solid #333;color:#66FCF1;font-size:11px;text-align:right;">Floating</th>
+                                <th style="padding:8px;border-bottom:1px solid #333;color:#66FCF1;font-size:11px;text-align:right;">P&L</th>
+                            </tr>
+                            {lp_rows}
+                        </table>
+                    </div>''' if lp_rows else ''}
+                </div>
+            </div>
+            
+            <div style="background-color:#1F2833;padding:20px;text-align:center;border-top:1px solid #333;">
+                <p style="color:#C5C6C7;font-size:12px;margin:0;">This is an automated Dealing P&L report from Miles Capitals</p>
+                <p style="color:#C5C6C7;font-size:12px;margin:5px 0 0;">Submitted by: {user.get('name', 'Unknown')}</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Send email
+    try:
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"Dealing P&L Report - {date} - ${total_dealing_pnl:+,.0f} USD"
+        msg['From'] = settings.get("smtp_user", "")
+        msg['To'] = ", ".join(director_emails)
+        
+        msg.attach(MIMEText(html, 'html'))
+        
+        with smtplib.SMTP(settings.get("smtp_host", "smtp.gmail.com"), settings.get("smtp_port", 587)) as server:
+            server.starttls()
+            server.login(settings.get("smtp_user", ""), settings.get("smtp_password", ""))
+            server.sendmail(msg['From'], director_emails, msg.as_string())
+        
+        # Log the email
+        await db.logs.insert_one({
+            "log_id": f"log_{uuid.uuid4().hex[:12]}",
+            "type": "dealing_pnl_email",
+            "action": "send_dealing_pnl_email",
+            "date": date,
+            "total_dealing_pnl": total_dealing_pnl,
+            "recipients": director_emails,
+            "sent_by": user["user_id"],
+            "sent_by_name": user["name"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "success"
+        })
+        
+        return {
+            "message": "Dealing P&L email sent successfully",
+            "date": date,
+            "total_dealing_pnl": total_dealing_pnl,
+            "recipients": director_emails
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to send dealing P&L email: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+
+
 # ============== PSP ROUTES ==============
 
 @api_router.get("/psp")
@@ -2834,6 +3286,41 @@ async def backfill_psp_settlements(user: dict = Depends(require_admin)):
         backfilled += 1
     
     return {"message": f"Successfully backfilled {backfilled} settlements", "count": backfilled}
+
+
+# Migration endpoint: Fix treasury transaction dates to match linked income/expense entries
+@api_router.post("/treasury/sync-ie-dates")
+async def sync_treasury_ie_dates(user: dict = Depends(require_admin)):
+    """Fix treasury transaction dates to match their linked income/expense entry dates."""
+    # Find all treasury transactions with income_expense_id
+    txs = await db.treasury_transactions.find({"income_expense_id": {"$exists": True}}, {"_id": 0}).to_list(10000)
+    
+    if not txs:
+        return {"message": "No transactions to fix", "count": 0}
+    
+    fixed = 0
+    for tx in txs:
+        ie_id = tx.get("income_expense_id")
+        if not ie_id:
+            continue
+            
+        # Get the linked income/expense entry
+        entry = await db.income_expenses.find_one({"entry_id": ie_id}, {"_id": 0})
+        if not entry or not entry.get("date"):
+            continue
+        
+        entry_date = entry.get("date")
+        # The date format should be YYYY-MM-DD, convert to full ISO format
+        new_created_at = f"{entry_date}T12:00:00+00:00"
+        
+        # Update treasury transaction created_at to match entry date
+        await db.treasury_transactions.update_one(
+            {"treasury_transaction_id": tx.get("treasury_transaction_id")},
+            {"$set": {"created_at": new_created_at}}
+        )
+        fixed += 1
+    
+    return {"message": f"Successfully fixed {fixed} treasury transaction dates", "count": fixed}
 
 
 # ============== RESERVE FUND MANAGEMENT ==============
@@ -5523,7 +6010,7 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, user: dict = De
             "original_currency": entry_currency,
             "reference": f"{category_label}: {entry_data.description or 'N/A'}{conversion_note}",
             "income_expense_id": entry_id,
-            "created_at": now.isoformat(),
+            "created_at": f"{entry_date}T12:00:00+00:00",  # Use entry date, not current time
             "created_by": user["user_id"],
             "created_by_name": user["name"]
         }
@@ -8770,6 +9257,7 @@ async def generate_daily_report_html():
     yesterday = now - timedelta(days=1)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_date = now.strftime('%Y-%m-%d')
     
     # Fetch data for report
     # Today's transactions
@@ -8804,6 +9292,90 @@ async def generate_daily_report_html():
     
     # Pending approvals
     pending_txs = await db.transactions.find({"status": "pending"}, {"_id": 0}).to_list(1000)
+    
+    # Dealing P&L - Get today's record and calculate
+    dealing_pnl_record = await db.dealing_pnl.find_one({"date": today_date}, {"_id": 0})
+    dealing_pnl_html = ""
+    
+    if dealing_pnl_record:
+        # Get previous day's record for floating change calculation
+        prev_record = await db.dealing_pnl.find_one(
+            {"date": {"$lt": today_date}},
+            {"_id": 0},
+            sort=[("date", -1)]
+        )
+        
+        prev_mt5_floating = prev_record.get("mt5_floating_pnl", 0) if prev_record else 0
+        prev_lp_entries = {}
+        if prev_record:
+            for lp in prev_record.get("lp_entries", []):
+                prev_lp_entries[lp.get("lp_id")] = lp.get("floating_pnl", 0)
+        
+        mt5_booked = dealing_pnl_record.get("mt5_booked_pnl", 0)
+        mt5_floating = dealing_pnl_record.get("mt5_floating_pnl", 0)
+        mt5_floating_change = mt5_floating - prev_mt5_floating
+        broker_mt5_pnl = -mt5_booked - mt5_floating_change
+        
+        # Calculate LP P&L
+        total_lp_booked = 0
+        total_lp_floating = 0
+        total_broker_lp_pnl = 0
+        lp_rows = ""
+        
+        for lp in dealing_pnl_record.get("lp_entries", []):
+            lp_id = lp.get("lp_id")
+            lp_name = lp.get("lp_name", lp_id)
+            lp_booked = lp.get("booked_pnl", 0)
+            lp_floating = lp.get("floating_pnl", 0)
+            prev_floating = prev_lp_entries.get(lp_id, 0)
+            floating_change = lp_floating - prev_floating
+            lp_pnl = lp_booked + floating_change
+            
+            total_lp_booked += lp_booked
+            total_lp_floating += lp_floating
+            total_broker_lp_pnl += lp_pnl
+            
+            pnl_color = "green" if lp_pnl >= 0 else "red"
+            lp_rows += f"<tr><td>{lp_name}</td><td>${lp_booked:,.0f}</td><td>${lp_floating:,.0f}</td><td class='{pnl_color}'>${lp_pnl:+,.0f}</td></tr>"
+        
+        total_dealing_pnl = broker_mt5_pnl + total_broker_lp_pnl
+        total_color = "green" if total_dealing_pnl >= 0 else "red"
+        mt5_color = "green" if broker_mt5_pnl >= 0 else "red"
+        lp_color = "green" if total_broker_lp_pnl >= 0 else "red"
+        
+        dealing_pnl_html = f'''
+                <!-- Dealing P&L Section -->
+                <div class="section">
+                    <div class="section-title">📈 Today's Dealing P&L</div>
+                    <div class="stat-grid">
+                        <div class="stat-box">
+                            <div class="stat-label">MT5 Broker P&L</div>
+                            <div class="stat-value {mt5_color}">${broker_mt5_pnl:+,.0f}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">LP Hedging P&L</div>
+                            <div class="stat-value {lp_color}">${total_broker_lp_pnl:+,.0f}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">MT5 Client Booked</div>
+                            <div class="stat-value">${mt5_booked:+,.0f}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">MT5 Floating</div>
+                            <div class="stat-value">${mt5_floating:,.0f}</div>
+                        </div>
+                    </div>
+                    <div style="background-color: #0B0C10; border-radius: 6px; padding: 20px; margin-top: 15px; text-align: center;">
+                        <div class="stat-label">TOTAL DEALING P&L</div>
+                        <div class="stat-value {total_color}" style="font-size: 32px;">${total_dealing_pnl:+,.0f} USD</div>
+                    </div>
+                    {f"""<h4 style="color: #66FCF1; margin-top: 20px; font-size: 12px;">LP BREAKDOWN</h4>
+                    <table>
+                        <tr><th>LP Name</th><th>Booked</th><th>Floating</th><th>P&L</th></tr>
+                        {lp_rows}
+                    </table>""" if lp_rows else ""}
+                </div>
+        '''
     
     # Generate HTML
     html = f"""
@@ -8854,6 +9426,8 @@ async def generate_daily_report_html():
                     <div class="alert-text">{len(pending_txs)} transactions pending approval</div>
                 </div>
                 '''}
+                
+                {dealing_pnl_html}
                 
                 <!-- Today's Activity -->
                 <div class="section">
