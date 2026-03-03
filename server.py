@@ -11145,7 +11145,6 @@ async def clear_old_logs(
     
     return {"message": f"Deleted {result.deleted_count} logs older than {days_to_keep} days"}
 
-
 # Include router
 app.include_router(api_router)
 
@@ -11161,7 +11160,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.on_event("startup")
 async def startup_db_indexes():
