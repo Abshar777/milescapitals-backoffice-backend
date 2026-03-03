@@ -3732,7 +3732,7 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
     # Batch fetch all completed income/expense entries for all vendors
     ie_entries_all = await db.income_expenses.find({
         "vendor_id": {"$in": vendor_ids},
-        "status": "completed",
+        "status":{"$in": ["approved", "completed", "converted_to_loan"]},
         "settled": {"$ne": True}
     }, {"_id": 0}).to_list(10000)
     
@@ -3895,7 +3895,7 @@ async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Mod
     ie_pipeline = [
         {"$match": {
             "vendor_id": vendor_id,
-            "status": "completed",
+            "status": {"$in": ["approved", "completed", "converted_to_loan"]}, 
             "settled": {"$ne": True}
         }},
         {"$group": {
