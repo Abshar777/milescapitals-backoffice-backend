@@ -1230,7 +1230,8 @@ async def get_users(user: dict = Depends(require_permission(Modules.USERS, Actio
     return users
 
 @api_router.post("/users")
-async def create_user(user_data: UserCreate, user: dict = Depends(require_permission(Modules.USERS, Actions.CREATE))):
+async def create_user(request: Request, user_data: UserCreate, user: dict = Depends(require_permission(Modules.USERS, Actions.CREATE))):
+
     existing = await db.users.find_one({"email": user_data.email}, {"_id": 0})
     if existing:
         raise HTTPException(status_code=400, detail="Email already exists")
@@ -1273,10 +1274,13 @@ async def create_user(user_data: UserCreate, user: dict = Depends(require_permis
     
     await db.users.insert_one(user_doc)
     
+    await log_activity(request, user, "create", "users", "Created user")
+
     return {"user_id": user_id, "email": user_data.email, "name": user_data.name, "role": user_data.role}
 
 @api_router.put("/users/{user_id}")
-async def update_user(user_id: str, update_data: UserUpdate, user: dict = Depends(require_permission(Modules.USERS, Actions.EDIT))):
+async def update_user(request: Request, user_id: str, update_data: UserUpdate, user: dict = Depends(require_permission(Modules.USERS, Actions.EDIT))):
+
     updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
@@ -1286,10 +1290,13 @@ async def update_user(user_id: str, update_data: UserUpdate, user: dict = Depend
         raise HTTPException(status_code=404, detail="User not found")
     
     updated_user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "password_hash": 0})
+    await log_activity(request, user, "edit", "users", "Updated user")
+
     return updated_user
 
 @api_router.delete("/users/{user_id}")
-async def delete_user(user_id: str, user: dict = Depends(require_permission(Modules.USERS, Actions.DELETE))):
+async def delete_user(request: Request, user_id: str, user: dict = Depends(require_permission(Modules.USERS, Actions.DELETE))):
+
     if user["user_id"] == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     
@@ -1297,6 +1304,8 @@ async def delete_user(user_id: str, user: dict = Depends(require_permission(Modu
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
     
+    await log_activity(request, user, "delete", "users", "Deleted user")
+
     return {"message": "User deleted"}
 
 # ============== CLIENTS ROUTES ==============
@@ -1397,7 +1406,8 @@ async def get_client(client_id: str, user: dict = Depends(require_permission(Mod
     return client
 
 @api_router.post("/clients")
-async def create_client(client_data: ClientCreate, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.CREATE))):
+async def create_client(request: Request, client_data: ClientCreate, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.CREATE))):
+
     existing = await db.clients.find_one({"email": client_data.email}, {"_id": 0})
     if existing:
         raise HTTPException(status_code=400, detail="Client email already exists")
@@ -1416,10 +1426,13 @@ async def create_client(client_data: ClientCreate, user: dict = Depends(require_
     
     await db.clients.insert_one(client_doc)
     
+    await log_activity(request, user, "create", "clients", "Created client")
+
     return await db.clients.find_one({"client_id": client_id}, {"_id": 0})
 
 @api_router.put("/clients/{client_id}")
-async def update_client(client_id: str, update_data: ClientUpdate, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.EDIT))):
+async def update_client(request: Request, client_id: str, update_data: ClientUpdate, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.EDIT))):
+
     updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
@@ -1430,13 +1443,18 @@ async def update_client(client_id: str, update_data: ClientUpdate, user: dict = 
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Client not found")
     
+    await log_activity(request, user, "edit", "clients", "Updated client")
+
     return await db.clients.find_one({"client_id": client_id}, {"_id": 0})
 
 @api_router.delete("/clients/{client_id}")
-async def delete_client(client_id: str, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.DELETE))):
+async def delete_client(request: Request, client_id: str, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.DELETE))):
+
     result = await db.clients.delete_one({"client_id": client_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Client not found")
+    await log_activity(request, user, "delete", "clients", "Deleted client")
+
     return {"message": "Client deleted"}
 
 # ============== CLIENT BANK ACCOUNTS ROUTES ==============
@@ -1449,6 +1467,9 @@ async def get_client_bank_accounts(client_id: str, user: dict = Depends(require_
 
 @api_router.post("/clients/{client_id}/bank-accounts")
 async def create_client_bank_account(
+
+    request: Request,
+
     client_id: str,
     bank_name: str = Form(...),
     account_name: str = Form(...),
@@ -1488,10 +1509,15 @@ async def create_client_bank_account(
     }
     
     await db.client_bank_accounts.insert_one(bank_doc)
+    await log_activity(request, user, "create", "clients", "Added client bank account")
+
     return await db.client_bank_accounts.find_one({"bank_account_id": bank_account_id}, {"_id": 0})
 
 @api_router.put("/clients/{client_id}/bank-accounts/{bank_account_id}")
 async def update_client_bank_account(
+
+    request: Request,
+
     client_id: str,
     bank_account_id: str,
     bank_name: str = Form(None),
@@ -1526,14 +1552,19 @@ async def update_client_bank_account(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Bank account not found")
     
+    await log_activity(request, user, "edit", "clients", "Updated client bank account")
+
     return await db.client_bank_accounts.find_one({"bank_account_id": bank_account_id}, {"_id": 0})
 
 @api_router.delete("/clients/{client_id}/bank-accounts/{bank_account_id}")
-async def delete_client_bank_account(client_id: str, bank_account_id: str, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.DELETE))):
+async def delete_client_bank_account(request: Request, client_id: str, bank_account_id: str, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.DELETE))):
+
     """Delete a client's bank account"""
     result = await db.client_bank_accounts.delete_one({"bank_account_id": bank_account_id, "client_id": client_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Bank account not found")
+    await log_activity(request, user, "delete", "clients", "Deleted client bank account")
+
     return {"message": "Bank account deleted"}
 
 # ============== TREASURY/BANK ACCOUNTS ROUTES ==============
@@ -1576,7 +1607,8 @@ async def create_treasury_account(account_data: TreasuryAccountCreate, request: 
     return await db.treasury_accounts.find_one({"account_id": account_id}, {"_id": 0})
 
 @api_router.put("/treasury/{account_id}")
-async def update_treasury_account(account_id: str, update_data: TreasuryAccountUpdate, user: dict = Depends(require_permission(Modules.TREASURY, Actions.EDIT))):
+async def update_treasury_account(request: Request, account_id: str, update_data: TreasuryAccountUpdate, user: dict = Depends(require_permission(Modules.TREASURY, Actions.EDIT))):
+
     updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
@@ -1587,6 +1619,8 @@ async def update_treasury_account(account_id: str, update_data: TreasuryAccountU
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Treasury account not found")
     
+    await log_activity(request, user, "edit", "treasury", "Updated treasury account")
+
     return await db.treasury_accounts.find_one({"account_id": account_id}, {"_id": 0})
 
 # Treasury Transaction History
@@ -1671,10 +1705,13 @@ async def get_treasury_history(
     return treasury_txs[:limit]
 
 @api_router.delete("/treasury/{account_id}")
-async def delete_treasury_account(account_id: str, user: dict = Depends(require_permission(Modules.TREASURY, Actions.DELETE))):
+async def delete_treasury_account(request: Request, account_id: str, user: dict = Depends(require_permission(Modules.TREASURY, Actions.DELETE))):
+
     result = await db.treasury_accounts.delete_one({"account_id": account_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Treasury account not found")
+    await log_activity(request, user, "delete", "treasury", "Deleted treasury account")
+
     return {"message": "Treasury account deleted"}
 
 # Inter-Treasury Transfer
@@ -1686,7 +1723,8 @@ class TreasuryTransferRequest(BaseModel):
     notes: Optional[str] = None
 
 @api_router.post("/treasury/transfer")
-async def inter_treasury_transfer(transfer: TreasuryTransferRequest, user: dict = Depends(require_permission(Modules.TREASURY, Actions.CREATE))):
+async def inter_treasury_transfer(request: Request, transfer: TreasuryTransferRequest, user: dict = Depends(require_permission(Modules.TREASURY, Actions.CREATE))):
+
     """Transfer funds between treasury accounts"""
     if transfer.source_account_id == transfer.destination_account_id:
         raise HTTPException(status_code=400, detail="Source and destination accounts must be different")
@@ -1771,6 +1809,8 @@ async def inter_treasury_transfer(transfer: TreasuryTransferRequest, user: dict 
     await db.treasury_transactions.insert_one(dest_tx_doc)
     
     # Return transfer details
+    await log_activity(request, user, "create", "treasury", "Inter-treasury transfer")
+
     return {
         "transfer_id": transfer_id,
         "source_account": source.get("account_name"),
@@ -1825,7 +1865,8 @@ async def get_lp_account(lp_id: str, user: dict = Depends(require_permission(Mod
     return account
 
 @api_router.post("/lp")
-async def create_lp_account(lp_data: LPAccountCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
+async def create_lp_account(request: Request, lp_data: LPAccountCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
+
     """Create a new LP account"""
     lp_id = f"lp_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc)
@@ -1853,10 +1894,13 @@ async def create_lp_account(lp_data: LPAccountCreate, user: dict = Depends(requi
     }
     
     await db.lp_accounts.insert_one(account_doc)
+    await log_activity(request, user, "create", "lp_management", "Created LP account")
+
     return await db.lp_accounts.find_one({"lp_id": lp_id}, {"_id": 0})
 
 @api_router.put("/lp/{lp_id}")
-async def update_lp_account(lp_id: str, lp_data: LPAccountUpdate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.EDIT))):
+async def update_lp_account(request: Request, lp_id: str, lp_data: LPAccountUpdate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.EDIT))):
+
     """Update an LP account"""
     account = await db.lp_accounts.find_one({"lp_id": lp_id}, {"_id": 0})
     if not account:
@@ -1866,6 +1910,8 @@ async def update_lp_account(lp_id: str, lp_data: LPAccountUpdate, user: dict = D
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     
     await db.lp_accounts.update_one({"lp_id": lp_id}, {"$set": updates})
+    await log_activity(request, user, "edit", "lp_management", "Updated LP account")
+
     return await db.lp_accounts.find_one({"lp_id": lp_id}, {"_id": 0})
 
 @api_router.get("/lp/{lp_id}/transactions")
@@ -1882,7 +1928,8 @@ async def get_lp_transactions(lp_id: str, user: dict = Depends(require_permissio
     return transactions
 
 @api_router.post("/lp/{lp_id}/deposit")
-async def create_lp_deposit(lp_id: str, tx_data: LPTransactionCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
+async def create_lp_deposit(request: Request, lp_id: str, tx_data: LPTransactionCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
+
     """Create a deposit to LP (sending funds TO the LP)"""
     account = await db.lp_accounts.find_one({"lp_id": lp_id}, {"_id": 0})
     if not account:
@@ -1967,10 +2014,13 @@ async def create_lp_deposit(lp_id: str, tx_data: LPTransactionCreate, user: dict
     )
     
     tx_doc.pop("_id", None)
+    await log_activity(request, user, "create", "lp_management", "LP deposit recorded")
+
     return tx_doc
 
 @api_router.post("/lp/{lp_id}/withdraw")
-async def create_lp_withdrawal(lp_id: str, tx_data: LPTransactionCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
+async def create_lp_withdrawal(request: Request, lp_id: str, tx_data: LPTransactionCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
+
     """Create a withdrawal from LP (receiving funds FROM the LP)"""
     account = await db.lp_accounts.find_one({"lp_id": lp_id}, {"_id": 0})
     if not account:
@@ -2055,6 +2105,8 @@ async def create_lp_withdrawal(lp_id: str, tx_data: LPTransactionCreate, user: d
     )
     
     tx_doc.pop("_id", None)
+    await log_activity(request, user, "create", "lp_management", "LP withdrawal recorded")
+
     return tx_doc
 
 @api_router.get("/lp/export/csv")
@@ -2267,7 +2319,8 @@ async def get_dealing_pnl_summary(
 
 
 @api_router.post("/dealing-pnl")
-async def create_dealing_pnl(data: DealingPnLCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
+async def create_dealing_pnl(request: Request, data: DealingPnLCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
+
     """Create or update a dealing P&L record for a specific date"""
     now = datetime.now(timezone.utc)
     
@@ -2315,6 +2368,8 @@ async def create_dealing_pnl(data: DealingPnLCreate, user: dict = Depends(requir
         record["created_by"] = user["user_id"]
         record["created_by_name"] = user["name"]
         await db.dealing_pnl.insert_one(record)
+        await log_activity(request, user, "create", "lp_management", "Created Dealing P&L entry")
+
         return {"message": "Dealing P&L record created", "date": data.date, "record_id": record["record_id"]}
 
 
@@ -2328,11 +2383,14 @@ async def get_dealing_pnl_by_date(date: str, user: dict = Depends(require_permis
 
 
 @api_router.delete("/dealing-pnl/{date}")
-async def delete_dealing_pnl(date: str, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.DELETE))):
+async def delete_dealing_pnl(request: Request, date: str, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.DELETE))):
+
     """Delete a dealing P&L record"""
     result = await db.dealing_pnl.delete_one({"date": date})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Record not found")
+    await log_activity(request, user, "delete", "lp_management", "Deleted Dealing P&L entry")
+
     return {"message": "Dealing P&L record deleted", "date": date}
 
 
@@ -2549,7 +2607,8 @@ async def get_psp(psp_id: str, user: dict = Depends(require_permission(Modules.P
     return psp
 
 @api_router.post("/psp")
-async def create_psp(psp_data: PSPCreate, user: dict = Depends(require_permission(Modules.PSP, Actions.CREATE))):
+async def create_psp(request: Request, psp_data: PSPCreate, user: dict = Depends(require_permission(Modules.PSP, Actions.CREATE))):
+
     # Verify settlement destination exists
     dest = await db.treasury_accounts.find_one({"account_id": psp_data.settlement_destination_id}, {"_id": 0})
     if not dest:
@@ -2570,10 +2629,13 @@ async def create_psp(psp_data: PSPCreate, user: dict = Depends(require_permissio
     }
     
     await db.psps.insert_one(psp_doc)
+    await log_activity(request, user, "create", "psp", "Created PSP")
+
     return await db.psps.find_one({"psp_id": psp_id}, {"_id": 0})
 
 @api_router.put("/psp/{psp_id}")
-async def update_psp(psp_id: str, update_data: PSPUpdate, user: dict = Depends(require_permission(Modules.PSP, Actions.EDIT))):
+async def update_psp(request: Request, psp_id: str, update_data: PSPUpdate, user: dict = Depends(require_permission(Modules.PSP, Actions.EDIT))):
+
     updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
@@ -2590,13 +2652,18 @@ async def update_psp(psp_id: str, update_data: PSPUpdate, user: dict = Depends(r
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="PSP not found")
     
+    await log_activity(request, user, "edit", "psp", "Updated PSP")
+
     return await db.psps.find_one({"psp_id": psp_id}, {"_id": 0})
 
 @api_router.delete("/psp/{psp_id}")
-async def delete_psp(psp_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.DELETE))):
+async def delete_psp(request: Request, psp_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.DELETE))):
+
     result = await db.psps.delete_one({"psp_id": psp_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="PSP not found")
+    await log_activity(request, user, "delete", "psp", "Deleted PSP")
+
     return {"message": "PSP deleted"}
 
 # PSP Settlements
@@ -2618,7 +2685,8 @@ async def get_all_settlements(
     return settlements
 
 @api_router.post("/psp/{psp_id}/settle")
-async def create_settlement(psp_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.CREATE))):
+async def create_settlement(request: Request, psp_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.CREATE))):
+
     """Create a settlement for pending PSP transactions"""
     psp = await db.psps.find_one({"psp_id": psp_id}, {"_id": 0})
     if not psp:
@@ -2705,10 +2773,13 @@ async def create_settlement(psp_id: str, user: dict = Depends(require_permission
         {"$inc": {"pending_settlement": net_amount}}
     )
     
+    await log_activity(request, user, "create", "psp", "Created PSP settlement")
+
     return await db.psp_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
 
 @api_router.post("/psp-settlements/{settlement_id}/complete")
-async def complete_settlement(settlement_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))):
+async def complete_settlement(request: Request, settlement_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))):
+
     """Mark a settlement as completed and transfer funds to treasury"""
     settlement = await db.psp_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
     if not settlement:
@@ -2762,6 +2833,8 @@ async def complete_settlement(settlement_id: str, user: dict = Depends(require_p
             }
         )
     
+    await log_activity(request, user, "approve", "psp", "Completed PSP settlement")
+
     return await db.psp_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
 
 # Get pending PSP transactions (not yet settled)
@@ -2863,6 +2936,9 @@ class PSPTransactionCharges(BaseModel):
 
 @api_router.put("/psp/transactions/{transaction_id}/charges")
 async def update_psp_transaction_charges(
+
+    request: Request,
+
     transaction_id: str,
     charges: PSPTransactionCharges,
     user: dict = Depends(require_permission(Modules.PSP, Actions.EDIT))
@@ -2902,6 +2978,8 @@ async def update_psp_transaction_charges(
         {"$set": updates}
     )
     
+    await log_activity(request, user, "edit", "psp", "Updated PSP transaction charges")
+
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 # Mark single PSP transaction as awaiting settlement (holding period)
@@ -3090,6 +3168,9 @@ async def record_psp_payment(
 # Legacy endpoint - Mark single PSP transaction as settled (immediate)
 @api_router.post("/psp/transactions/{transaction_id}/settle")
 async def settle_psp_transaction(
+
+    request: Request,
+
     transaction_id: str, 
     destination_account_id: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))
@@ -3187,6 +3268,8 @@ async def settle_psp_transaction(
             }
         )
     
+    await log_activity(request, user, "approve", "psp", "Settled PSP transaction")
+
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 
@@ -3439,7 +3522,8 @@ async def get_psp_reserve_funds(psp_id: str, user: dict = Depends(require_permis
     }
 
 @api_router.post("/psps/reserve-funds/{transaction_id}/release")
-async def release_reserve_fund(transaction_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))):
+async def release_reserve_fund(request: Request, transaction_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))):
+
     """Mark a reserve fund as released back."""
     tx = await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
     if not tx:
@@ -3500,6 +3584,8 @@ async def release_reserve_fund(transaction_id: str, user: dict = Depends(require
             "created_by_name": user["name"],
         })
     
+    await log_activity(request, user, "approve", "psp", "Released reserve fund")
+
     return {"message": "Reserve fund released", "amount": rf_amount, "transaction_id": transaction_id}
 
 @api_router.post("/psps/reserve-funds/bulk-release")
@@ -3940,7 +4026,8 @@ async def create_vendor(vendor_data: VendorCreate, request: Request, user: dict 
     return await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
 
 @api_router.put("/vendors/{vendor_id}")
-async def update_vendor(vendor_id: str, update_data: VendorUpdate, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.EDIT))):
+async def update_vendor(request: Request, vendor_id: str, update_data: VendorUpdate, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.EDIT))):
+
     updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
@@ -3957,10 +4044,13 @@ async def update_vendor(vendor_id: str, update_data: VendorUpdate, user: dict = 
         if vendor:
             await db.users.update_one({"user_id": vendor["user_id"]}, {"$set": {"name": updates["vendor_name"]}})
     
+    await log_activity(request, user, "edit", "exchangers", "Updated exchanger")
+
     return await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
 
 @api_router.delete("/vendors/{vendor_id}")
-async def delete_vendor(vendor_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.DELETE))):
+async def delete_vendor(request: Request, vendor_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.DELETE))):
+
     vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
@@ -3971,6 +4061,8 @@ async def delete_vendor(vendor_id: str, user: dict = Depends(require_permission(
     # Delete vendor record
     await db.vendors.delete_one({"vendor_id": vendor_id})
     
+    await log_activity(request, user, "delete", "exchangers", "Deleted exchanger")
+
     return {"message": "Vendor deleted"}
 
 # Get vendor's assigned transactions (for vendor portal)
@@ -4347,7 +4439,8 @@ async def vendor_export_pdf(
 
 # Vendor approve transaction
 @api_router.post("/vendor/transactions/{transaction_id}/approve")
-async def vendor_approve_transaction(transaction_id: str, user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE))):
+async def vendor_approve_transaction(request: Request, transaction_id: str, user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE))):
+
     vendor = await db.vendors.find_one({"user_id": user["user_id"]}, {"_id": 0})
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
@@ -4416,11 +4509,16 @@ async def vendor_approve_transaction(transaction_id: str, user: dict = Depends(r
         }
     )
     
+    await log_activity(request, user, "approve", "transactions", "Vendor approved transaction")
+
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 # Vendor reject transaction
 @api_router.post("/vendor/transactions/{transaction_id}/reject")
 async def vendor_reject_transaction(
+
+    request: Request,
+
     transaction_id: str, 
     reason: str = "",
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE))
@@ -4451,11 +4549,16 @@ async def vendor_reject_transaction(
     
     await db.transactions.update_one({"transaction_id": transaction_id}, {"$set": updates})
     
+    await log_activity(request, user, "reject", "transactions", "Vendor rejected transaction")
+
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 # Vendor complete withdrawal with screenshot upload
 @api_router.post("/vendor/transactions/{transaction_id}/upload-proof")
 async def vendor_upload_proof(
+
+    request: Request,
+
     transaction_id: str,
     proof_image: UploadFile = File(...),
     user: dict = Depends(require_vendor)
@@ -4486,11 +4589,16 @@ async def vendor_upload_proof(
         }}
     )
     
+    await log_activity(request, user, "edit", "transactions", "Vendor uploaded proof")
+
     return {"message": "Proof uploaded successfully", "transaction_id": transaction_id}
 
 # Vendor complete withdrawal with screenshot upload
 @api_router.post("/vendor/transactions/{transaction_id}/complete")
 async def vendor_complete_withdrawal(
+
+    request: Request,
+
     transaction_id: str,
     proof_image: UploadFile = File(...),
     user: dict = Depends(require_vendor)
@@ -4528,6 +4636,8 @@ async def vendor_complete_withdrawal(
     
     await db.transactions.update_one({"transaction_id": transaction_id}, {"$set": updates})
     
+    await log_activity(request, user, "edit", "transactions", "Vendor completed withdrawal")
+
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 # Vendor settlements
@@ -4573,6 +4683,9 @@ class VendorSettlementRequest(BaseModel):
 
 @api_router.post("/vendors/{vendor_id}/settle")
 async def settle_vendor_balance(
+
+    request: Request,
+
     vendor_id: str, 
     settlement_request: VendorSettlementRequest,
     user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.CREATE))
@@ -4707,6 +4820,8 @@ async def settle_vendor_balance(
             {"$set": {"settlement_id": settlement_id, "settlement_status": "pending_approval"}}
         )
     
+    await log_activity(request, user, "create", "exchangers", "Created vendor settlement")
+
     return await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
 
 # Get all pending settlements (for approval page)
@@ -4721,7 +4836,8 @@ async def get_pending_settlements(user: dict = Depends(require_permission(Module
 
 # Approve vendor settlement
 @api_router.post("/settlements/{settlement_id}/approve")
-async def approve_settlement(settlement_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.APPROVE))):
+async def approve_settlement(request: Request, settlement_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.APPROVE))):
+
     """Approve a pending vendor settlement"""
     settlement = await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
     if not settlement:
@@ -4792,11 +4908,14 @@ async def approve_settlement(settlement_id: str, user: dict = Depends(require_pe
     }
     await db.treasury_transactions.insert_one(treasury_tx_doc)
     
+    await log_activity(request, user, "approve", "exchangers", "Approved settlement")
+
     return await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
 
 # Reject vendor settlement
 @api_router.post("/settlements/{settlement_id}/reject")
-async def reject_settlement(settlement_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.APPROVE))):
+async def reject_settlement(request: Request, settlement_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.APPROVE))):
+
     """Reject a pending vendor settlement"""
     settlement = await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
     if not settlement:
@@ -4825,6 +4944,8 @@ async def reject_settlement(settlement_id: str, reason: str = "", user: dict = D
         {"$set": {"settlement_id": None, "settlement_status": None}}
     )
     
+    await log_activity(request, user, "reject", "exchangers", "Rejected settlement")
+
     return await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
 
 # ============== TRANSACTIONS ROUTES ==============
@@ -4877,6 +4998,9 @@ async def get_transaction(transaction_id: str, user: dict = Depends(require_perm
 
 @api_router.post("/transactions")
 async def create_transaction(
+
+    request: Request,
+
     client_id: str = Form(...),
     transaction_type: str = Form(...),
     amount: float = Form(...),
@@ -5153,10 +5277,13 @@ async def create_transaction(
         )
     
     result = await db.transactions.find_one({"transaction_id": tx_id}, {"_id": 0})
+    await log_activity(request, user, "create", "transactions", "Created transaction")
+
     return result
 
 @api_router.put("/transactions/{transaction_id}")
-async def update_transaction(transaction_id: str, update_data: TransactionUpdate, user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.EDIT))):
+async def update_transaction(request: Request, transaction_id: str, update_data: TransactionUpdate, user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.EDIT))):
+
     updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
@@ -5183,10 +5310,15 @@ async def update_transaction(transaction_id: str, update_data: TransactionUpdate
     
     await db.transactions.update_one({"transaction_id": transaction_id}, {"$set": updates})
     
+    await log_activity(request, user, "edit", "transactions", "Updated transaction")
+
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 @api_router.post("/transactions/{transaction_id}/approve")
 async def approve_transaction(
+
+    request: Request,
+
     transaction_id: str, 
     source_account_id: Optional[str] = None,
     require_proof: bool = True,
@@ -5325,10 +5457,15 @@ async def approve_transaction(
     
     await db.transactions.update_one({"transaction_id": transaction_id}, {"$set": updates})
     
+    await log_activity(request, user, "approve", "transactions", "Approved transaction")
+
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 @api_router.post("/transactions/{transaction_id}/upload-proof")
 async def upload_transaction_proof(
+
+    request: Request,
+
     transaction_id: str,
     proof_image: UploadFile = File(...),
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.EDIT))
@@ -5356,10 +5493,13 @@ async def upload_transaction_proof(
         }}
     )
     
+    await log_activity(request, user, "edit", "transactions", "Uploaded transaction proof")
+
     return {"message": "Proof uploaded successfully", "transaction_id": transaction_id}
 
 @api_router.post("/transactions/{transaction_id}/reject")
-async def reject_transaction(transaction_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE))):
+async def reject_transaction(request: Request, transaction_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE))):
+
     """Reject a pending transaction"""
     tx = await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
     if not tx:
@@ -5380,6 +5520,8 @@ async def reject_transaction(transaction_id: str, reason: str = "", user: dict =
     
     await db.transactions.update_one({"transaction_id": transaction_id}, {"$set": updates})
     
+    await log_activity(request, user, "reject", "transactions", "Rejected transaction")
+
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 # ============== REPORTS/ANALYTICS ROUTES ==============
@@ -5925,6 +6067,9 @@ async def get_ie_import_template_route(user: dict = Depends(require_permission(M
 
 @api_router.post("/income-expenses/bulk-import")
 async def bulk_import_ie_entries_route(
+
+    request: Request,
+
     user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.CREATE)),
     file: UploadFile = File(...),
     treasury_account_id: str = Form(...)
@@ -6046,6 +6191,8 @@ async def bulk_import_ie_entries_route(
         except Exception as e:
             errors.append(f"Row {row_idx}: {str(e)}")
     
+    await log_activity(request, user, "create", "income_expenses", "Bulk imported I&E entries")
+
     return {
         "message": f"Import completed",
         "imported": imported,
@@ -6240,7 +6387,8 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
     return entry_doc
 
 @api_router.put("/income-expenses/{entry_id}")
-async def update_income_expense(entry_id: str, update_data: IncomeExpenseUpdate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT))):
+async def update_income_expense(request: Request, entry_id: str, update_data: IncomeExpenseUpdate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT))):
+
     """Update an income/expense entry (only description, reference, category - not amount)"""
     entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
     if not entry:
@@ -6259,6 +6407,8 @@ async def update_income_expense(entry_id: str, update_data: IncomeExpenseUpdate,
     await db.income_expenses.update_one({"entry_id": entry_id}, {"$set": update_dict})
     
     updated = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
+    await log_activity(request, user, "edit", "income_expenses", "Updated I&E entry")
+
     return updated
 
 @api_router.delete("/income-expenses/{entry_id}")
@@ -6341,7 +6491,8 @@ async def get_loan_borrowers(user: dict = Depends(require_permission(Modules.LOA
     return {"borrowers": sorted(borrowers, key=lambda x: x["name"])}
 
 @api_router.post("/income-expenses/{entry_id}/convert-to-loan")
-async def convert_expense_to_loan(entry_id: str, req: ConvertToLoanRequest, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT))):
+async def convert_expense_to_loan(request: Request, entry_id: str, req: ConvertToLoanRequest, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT))):
+
     """Convert an expense entry to a loan (marks expense as converted, creates loan)"""
     entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
     if not entry:
@@ -6430,10 +6581,13 @@ async def convert_expense_to_loan(entry_id: str, req: ConvertToLoanRequest, user
     )
     
     loan_doc.pop("_id", None)
+    await log_activity(request, user, "edit", "income_expenses", "Converted expense to loan")
+
     return {"message": "Expense converted to loan", "loan": loan_doc}
 
 @api_router.post("/income-expenses/{entry_id}/vendor-approve")
-async def vendor_approve_ie(entry_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.APPROVE))):
+async def vendor_approve_ie(request: Request, entry_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.APPROVE))):
+
     """Vendor approves a pending income/expense entry with commission calculation"""
     entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
     if not entry:
@@ -6498,6 +6652,8 @@ async def vendor_approve_ie(entry_id: str, user: dict = Depends(require_permissi
         }
     )
     
+    await log_activity(request, user, "approve", "income_expenses", "Vendor approved I&E entry")
+
     return {
         "message": "Entry approved",
         "status": "completed",
@@ -6507,7 +6663,8 @@ async def vendor_approve_ie(entry_id: str, user: dict = Depends(require_permissi
     }
 
 @api_router.post("/income-expenses/{entry_id}/vendor-reject")
-async def vendor_reject_ie(entry_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.APPROVE))):
+async def vendor_reject_ie(request: Request, entry_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.APPROVE))):
+
     """Vendor rejects a pending income/expense entry"""
     entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
     if not entry:
@@ -6525,6 +6682,8 @@ async def vendor_reject_ie(entry_id: str, reason: str = "", user: dict = Depends
         {"$set": {"status": "rejected", "rejection_reason": reason, "vendor_rejected_at": now.isoformat()}}
     )
     
+    await log_activity(request, user, "reject", "income_expenses", "Vendor rejected I&E entry")
+
     return {"message": "Entry rejected"}
 
 @api_router.post("/income-expenses/{entry_id}/vendor-upload-proof")
@@ -6550,7 +6709,8 @@ async def vendor_upload_ie_proof(entry_id: str, user: dict = Depends(require_ven
     return {"message": "Proof uploaded"}
 
 @api_router.post("/income-expenses/{entry_id}/upload-invoice")
-async def upload_ie_invoice(entry_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT)), invoice_file: UploadFile = File(...)):
+async def upload_ie_invoice(request: Request, entry_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT)), invoice_file: UploadFile = File(...)):
+
     """Upload invoice/document to an income/expense entry"""
     entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
     if not entry:
@@ -6575,6 +6735,8 @@ async def upload_ie_invoice(entry_id: str, user: dict = Depends(require_permissi
         {"$set": {"invoice_file": file_info, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     
+    await log_activity(request, user, "edit", "income_expenses", "Uploaded I&E invoice")
+
     return {"message": "Invoice uploaded successfully", "filename": invoice_file.filename}
 
 @api_router.get("/vendor/income-expenses")
@@ -6622,7 +6784,8 @@ async def get_vendor_supplier(supplier_id: str, user: dict = Depends(require_per
     return supplier
 
 @api_router.post("/vendor-suppliers")
-async def create_vendor_supplier(data: VendorSupplierCreate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.CREATE))):
+async def create_vendor_supplier(request: Request, data: VendorSupplierCreate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.CREATE))):
+
     """Create a new vendor supplier (for services like rent, utilities)"""
     # Check for duplicate name
     existing = await db.vendor_suppliers.find_one({"name": {"$regex": f"^{data.name}$", "$options": "i"}})
@@ -6653,10 +6816,13 @@ async def create_vendor_supplier(data: VendorSupplierCreate, user: dict = Depend
     
     await db.vendor_suppliers.insert_one(supplier_doc)
     supplier_doc.pop("_id", None)
+    await log_activity(request, user, "create", "income_expenses", "Created vendor supplier")
+
     return supplier_doc
 
 @api_router.put("/vendor-suppliers/{supplier_id}")
-async def update_vendor_supplier(supplier_id: str, data: VendorSupplierUpdate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT))):
+async def update_vendor_supplier(request: Request, supplier_id: str, data: VendorSupplierUpdate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT))):
+
     """Update a vendor supplier"""
     supplier = await db.vendor_suppliers.find_one({"supplier_id": supplier_id})
     if not supplier:
@@ -6668,10 +6834,13 @@ async def update_vendor_supplier(supplier_id: str, data: VendorSupplierUpdate, u
         await db.vendor_suppliers.update_one({"supplier_id": supplier_id}, {"$set": update_dict})
     
     updated = await db.vendor_suppliers.find_one({"supplier_id": supplier_id}, {"_id": 0})
+    await log_activity(request, user, "edit", "income_expenses", "Updated vendor supplier")
+
     return updated
 
 @api_router.delete("/vendor-suppliers/{supplier_id}")
-async def delete_vendor_supplier(supplier_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.DELETE))):
+async def delete_vendor_supplier(request: Request, supplier_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.DELETE))):
+
     """Delete a vendor supplier"""
     # Check if there are linked income/expenses
     linked_entries = await db.income_expenses.count_documents({"vendor_supplier_id": supplier_id})
@@ -6686,6 +6855,8 @@ async def delete_vendor_supplier(supplier_id: str, user: dict = Depends(require_
     result = await db.vendor_suppliers.delete_one({"supplier_id": supplier_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Vendor supplier not found")
+    await log_activity(request, user, "delete", "income_expenses", "Deleted vendor supplier")
+
     return {"message": "Supplier deleted"}
 
 # ============== IE CATEGORIES (Account Categories) ROUTES ==============
@@ -6715,7 +6886,8 @@ async def get_ie_category(category_id: str, user: dict = Depends(require_permiss
     return category
 
 @api_router.post("/ie-categories")
-async def create_ie_category(data: IECategoryCreate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.CREATE))):
+async def create_ie_category(request: Request, data: IECategoryCreate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.CREATE))):
+
     """Create a new income/expense category"""
     # Check for duplicate name within same type
     existing = await db.ie_categories.find_one({
@@ -6742,10 +6914,13 @@ async def create_ie_category(data: IECategoryCreate, user: dict = Depends(requir
     
     await db.ie_categories.insert_one(category_doc)
     category_doc.pop("_id", None)
+    await log_activity(request, user, "create", "income_expenses", "Created I&E category")
+
     return category_doc
 
 @api_router.put("/ie-categories/{category_id}")
-async def update_ie_category(category_id: str, data: IECategoryUpdate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT))):
+async def update_ie_category(request: Request, category_id: str, data: IECategoryUpdate, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.EDIT))):
+
     """Update a category"""
     category = await db.ie_categories.find_one({"category_id": category_id})
     if not category:
@@ -6757,10 +6932,13 @@ async def update_ie_category(category_id: str, data: IECategoryUpdate, user: dic
         await db.ie_categories.update_one({"category_id": category_id}, {"$set": update_dict})
     
     updated = await db.ie_categories.find_one({"category_id": category_id}, {"_id": 0})
+    await log_activity(request, user, "edit", "income_expenses", "Updated I&E category")
+
     return updated
 
 @api_router.delete("/ie-categories/{category_id}")
-async def delete_ie_category(category_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.DELETE))):
+async def delete_ie_category(request: Request, category_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.DELETE))):
+
     """Delete a category (soft delete if linked to entries)"""
     # Check if there are linked income/expenses
     linked_entries = await db.income_expenses.count_documents({"ie_category_id": category_id})
@@ -6775,6 +6953,8 @@ async def delete_ie_category(category_id: str, user: dict = Depends(require_perm
     result = await db.ie_categories.delete_one({"category_id": category_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Category not found")
+    await log_activity(request, user, "delete", "income_expenses", "Deleted I&E category")
+
     return {"message": "Category deleted"}
 
 
@@ -7174,7 +7354,8 @@ async def create_loan(loan_data: LoanCreate, request: Request, user: dict = Depe
     return loan_doc
 
 @api_router.put("/loans/{loan_id}")
-async def update_loan(loan_id: str, update_data: LoanUpdate, user: dict = Depends(require_permission(Modules.LOANS, Actions.EDIT))):
+async def update_loan(request: Request, loan_id: str, update_data: LoanUpdate, user: dict = Depends(require_permission(Modules.LOANS, Actions.EDIT))):
+
     """Update loan details (not amount)"""
     loan = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
     if not loan:
@@ -7189,10 +7370,13 @@ async def update_loan(loan_id: str, update_data: LoanUpdate, user: dict = Depend
     await db.loans.update_one({"loan_id": loan_id}, {"$set": update_dict})
     
     updated = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
+    await log_activity(request, user, "edit", "loans", "Updated loan")
+
     return updated
 
 @api_router.post("/loans/{loan_id}/repayment")
-async def record_loan_repayment(loan_id: str, repayment: LoanRepaymentCreate, user: dict = Depends(require_permission(Modules.LOANS, Actions.CREATE))):
+async def record_loan_repayment(request: Request, loan_id: str, repayment: LoanRepaymentCreate, user: dict = Depends(require_permission(Modules.LOANS, Actions.CREATE))):
+
     """Record a loan repayment"""
     loan = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
     if not loan:
@@ -7324,6 +7508,8 @@ async def record_loan_repayment(loan_id: str, repayment: LoanRepaymentCreate, us
     repayment_doc["treasury_account_name"] = treasury["account_name"]
     repayment_doc["new_outstanding"] = max(0, outstanding)
     repayment_doc["loan_status"] = new_status
+    await log_activity(request, user, "create", "loans", "Recorded loan repayment")
+
     return repayment_doc
 
 @api_router.get("/loans/{loan_id}/repayments")
@@ -7343,7 +7529,8 @@ async def get_loan_repayments(loan_id: str, user: dict = Depends(require_permiss
     return repayments
 
 @api_router.delete("/loans/{loan_id}")
-async def delete_loan(loan_id: str, user: dict = Depends(require_permission(Modules.LOANS, Actions.DELETE))):
+async def delete_loan(request: Request, loan_id: str, user: dict = Depends(require_permission(Modules.LOANS, Actions.DELETE))):
+
     """Delete a loan (admin only) - reverses treasury if no repayments"""
     loan = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
     if not loan:
@@ -7368,6 +7555,8 @@ async def delete_loan(loan_id: str, user: dict = Depends(require_permission(Modu
     # Delete related treasury transaction
     await db.treasury_transactions.delete_one({"loan_id": loan_id})
     
+    await log_activity(request, user, "delete", "loans", "Deleted loan")
+
     return {"message": "Loan deleted successfully"}
 
 @api_router.get("/loans/reports/summary")
@@ -7668,7 +7857,8 @@ async def get_debt(debt_id: str, user: dict = Depends(require_permission(Modules
     return debt
 
 @api_router.post("/debts")
-async def create_debt(debt_data: DebtCreate, user: dict = Depends(require_permission(Modules.DEBTS, Actions.CREATE))):
+async def create_debt(request: Request, debt_data: DebtCreate, user: dict = Depends(require_permission(Modules.DEBTS, Actions.CREATE))):
+
     """Create a new debt record"""
     debt_id = f"debt_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc)
@@ -7709,10 +7899,13 @@ async def create_debt(debt_data: DebtCreate, user: dict = Depends(require_permis
     }
     
     await db.debts.insert_one(debt_doc)
+    await log_activity(request, user, "create", "debts", "Created debt record")
+
     return await db.debts.find_one({"debt_id": debt_id}, {"_id": 0})
 
 @api_router.put("/debts/{debt_id}")
-async def update_debt(debt_id: str, update_data: DebtUpdate, user: dict = Depends(require_permission(Modules.DEBTS, Actions.EDIT))):
+async def update_debt(request: Request, debt_id: str, update_data: DebtUpdate, user: dict = Depends(require_permission(Modules.DEBTS, Actions.EDIT))):
+
     """Update a debt record"""
     debt = await db.debts.find_one({"debt_id": debt_id}, {"_id": 0})
     if not debt:
@@ -7729,10 +7922,13 @@ async def update_debt(debt_id: str, update_data: DebtUpdate, user: dict = Depend
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     
     await db.debts.update_one({"debt_id": debt_id}, {"$set": updates})
+    await log_activity(request, user, "edit", "debts", "Updated debt")
+
     return await db.debts.find_one({"debt_id": debt_id}, {"_id": 0})
 
 @api_router.delete("/debts/{debt_id}")
-async def delete_debt(debt_id: str, user: dict = Depends(require_permission(Modules.DEBTS, Actions.DELETE))):
+async def delete_debt(request: Request, debt_id: str, user: dict = Depends(require_permission(Modules.DEBTS, Actions.DELETE))):
+
     """Delete a debt record (admin only)"""
     debt = await db.debts.find_one({"debt_id": debt_id}, {"_id": 0})
     if not debt:
@@ -7742,10 +7938,15 @@ async def delete_debt(debt_id: str, user: dict = Depends(require_permission(Modu
         raise HTTPException(status_code=400, detail="Cannot delete debt with payments. Mark as cancelled instead.")
     
     await db.debts.delete_one({"debt_id": debt_id})
+    await log_activity(request, user, "delete", "debts", "Deleted debt")
+
     return {"message": "Debt deleted"}
 
 @api_router.post("/debts/{debt_id}/payments")
 async def record_debt_payment(
+
+    request: Request,
+
     debt_id: str,
     payment_data: DebtPaymentCreate,
     user: dict = Depends(require_permission(Modules.DEBTS, Actions.CREATE))
@@ -7903,6 +8104,8 @@ async def record_debt_payment(
         }}
     )
     
+    await log_activity(request, user, "create", "debts", "Recorded debt payment")
+
     return await db.debts.find_one({"debt_id": debt_id}, {"_id": 0})
 
 @api_router.get("/debts/{debt_id}/payments")
@@ -8610,6 +8813,9 @@ class ReconciliationType(str, Enum):
 # Bank Statement Upload and Reconciliation
 @api_router.post("/reconciliation/bank/upload")
 async def upload_bank_statement(
+
+    request: Request,
+
     account_id: str = Form(...),
     file: UploadFile = File(...),
     user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.CREATE))
@@ -8805,6 +9011,8 @@ async def upload_bank_statement(
         }}
     )
     
+    await log_activity(request, user, "create", "reconciliation", "Uploaded bank statement")
+
     return {
         "batch_id": batch_id,
         "total_rows": len(parsed_rows),
@@ -9253,6 +9461,9 @@ async def get_daily_reconciliation(user: dict = Depends(require_permission(Modul
 # Quick Reconcile - Mark item as reconciled
 @api_router.post("/reconciliation/quick-reconcile")
 async def quick_reconcile(
+
+    request: Request,
+
     reference_id: str,
     item_type: str,
     notes: str = "",
@@ -9305,12 +9516,17 @@ async def quick_reconcile(
         "created_at": now.isoformat()
     })
     
+    await log_activity(request, user, "edit", "reconciliation", "Quick reconciled item")
+
     return {"message": "Item reconciled successfully", "reference_id": reference_id}
 
 
 # Bulk Reconcile - Mark multiple items as reconciled
 @api_router.post("/reconciliation/bulk-reconcile")
 async def bulk_reconcile(
+
+    request: Request,
+
     items: List[dict] = Body(...),  # List of {reference_id, item_type}
     notes: str = "",
     user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.EDIT))
@@ -9369,12 +9585,17 @@ async def bulk_reconcile(
         "created_at": now.isoformat()
     })
     
+    await log_activity(request, user, "edit", "reconciliation", "Bulk reconciled items")
+
     return {"message": f"Reconciled {reconciled_count} items", "count": reconciled_count}
 
 
 # Flag for Review
 @api_router.post("/reconciliation/flag")
 async def flag_for_review(
+
+    request: Request,
+
     reference_id: str,
     item_type: str,
     reason: str,
@@ -9426,12 +9647,17 @@ async def flag_for_review(
         "created_at": now.isoformat()
     })
     
+    await log_activity(request, user, "edit", "reconciliation", "Flagged for review")
+
     return {"message": "Item flagged for review", "reference_id": reference_id}
 
 
 # Create Adjustment Entry
 @api_router.post("/reconciliation/adjustment")
 async def create_adjustment(
+
+    request: Request,
+
     reference_id: str,
     item_type: str,
     adjustment_amount: float,
@@ -9510,6 +9736,8 @@ async def create_adjustment(
     })
     
     adjustment_doc.pop("_id", None)
+    await log_activity(request, user, "create", "reconciliation", "Created adjustment")
+
     return adjustment_doc
 
 
@@ -9577,6 +9805,9 @@ async def export_unmatched(
 # Write-off Small Variance
 @api_router.post("/reconciliation/write-off")
 async def write_off_variance(
+
+    request: Request,
+
     reference_id: str,
     item_type: str,
     variance_amount: float,
@@ -9615,6 +9846,8 @@ async def write_off_variance(
         "created_at": now.isoformat()
     })
     
+    await log_activity(request, user, "edit", "reconciliation", "Wrote off variance")
+
     return {"message": "Variance written off successfully", "reference_id": reference_id}
 
 
@@ -9707,7 +9940,8 @@ async def get_role(role_id: str, user: dict = Depends(require_permission(Modules
     return role
 
 @api_router.post("/roles")
-async def create_role(role_data: RoleCreate, user: dict = Depends(require_permission(Modules.ROLES, Actions.CREATE))):
+async def create_role(request: Request, role_data: RoleCreate, user: dict = Depends(require_permission(Modules.ROLES, Actions.CREATE))):
+
     """Create a new role"""
     # Check if role name already exists
     existing = await db.roles.find_one({"name": role_data.name}, {"_id": 0})
@@ -9745,10 +9979,13 @@ async def create_role(role_data: RoleCreate, user: dict = Depends(require_permis
         "created_at": now.isoformat()
     })
     
+    await log_activity(request, user, "create", "roles", "Created role")
+
     return await db.roles.find_one({"role_id": role_id}, {"_id": 0})
 
 @api_router.put("/roles/{role_id}")
-async def update_role(role_id: str, role_data: RoleUpdate, user: dict = Depends(require_permission(Modules.ROLES, Actions.EDIT))):
+async def update_role(request: Request, role_id: str, role_data: RoleUpdate, user: dict = Depends(require_permission(Modules.ROLES, Actions.EDIT))):
+
     """Update a role"""
     role = await db.roles.find_one({"role_id": role_id}, {"_id": 0})
     if not role:
@@ -9776,10 +10013,13 @@ async def update_role(role_id: str, role_data: RoleUpdate, user: dict = Depends(
         "created_at": now.isoformat()
     })
     
+    await log_activity(request, user, "edit", "roles", "Updated role")
+
     return await db.roles.find_one({"role_id": role_id}, {"_id": 0})
 
 @api_router.delete("/roles/{role_id}")
-async def delete_role(role_id: str, user: dict = Depends(require_permission(Modules.ROLES, Actions.DELETE))):
+async def delete_role(request: Request, role_id: str, user: dict = Depends(require_permission(Modules.ROLES, Actions.DELETE))):
+
     """Delete a role (soft delete)"""
     role = await db.roles.find_one({"role_id": role_id}, {"_id": 0})
     if not role:
@@ -9795,6 +10035,8 @@ async def delete_role(role_id: str, user: dict = Depends(require_permission(Modu
     
     await db.roles.update_one({"role_id": role_id}, {"$set": {"is_active": False}})
     
+    await log_activity(request, user, "delete", "roles", "Deleted role")
+
     return {"message": "Role deleted successfully"}
 
 @api_router.get("/permissions/modules")
@@ -9823,7 +10065,8 @@ async def get_my_permissions(user: dict = Depends(get_current_user)):
     }
 
 @api_router.put("/users/{user_id}/role")
-async def assign_user_role(user_id: str, role_id: str = Form(...), user: dict = Depends(require_permission(Modules.USERS, Actions.EDIT))):
+async def assign_user_role(request: Request, user_id: str, role_id: str = Form(...), user: dict = Depends(require_permission(Modules.USERS, Actions.EDIT))):
+
     """Assign a role to a user"""
     target_user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
     if not target_user:
@@ -9851,10 +10094,15 @@ async def assign_user_role(user_id: str, role_id: str = Form(...), user: dict = 
         "created_at": now.isoformat()
     })
     
+    await log_activity(request, user, "edit", "users", "Assigned role to user")
+
     return {"message": "Role assigned successfully"}
 
 @api_router.put("/users/{user_id}/permissions")
 async def set_user_permission_overrides(
+
+    request: Request,
+
     user_id: str, 
     permissions: dict,
     user: dict = Depends(require_permission(Modules.USERS, Actions.EDIT))
@@ -9870,6 +10118,8 @@ async def set_user_permission_overrides(
         {"$set": {"permission_overrides": permissions, "updated_at": now.isoformat()}}
     )
     
+    await log_activity(request, user, "edit", "users", "Updated user permissions")
+
     return {"message": "Permission overrides updated successfully"}
 
 # ============== EMAIL SETTINGS & DAILY REPORTS ==============
@@ -9911,7 +10161,8 @@ async def get_email_settings(user: dict = Depends(require_permission(Modules.SET
     }
 
 @api_router.put("/settings/email")
-async def update_email_settings(settings: EmailSettingsUpdate, user: dict = Depends(require_permission(Modules.SETTINGS, Actions.EDIT))):
+async def update_email_settings(request: Request, settings: EmailSettingsUpdate, user: dict = Depends(require_permission(Modules.SETTINGS, Actions.EDIT))):
+
     """Update email/report settings"""
     now = datetime.now(timezone.utc)
     
@@ -9950,6 +10201,8 @@ async def update_email_settings(settings: EmailSettingsUpdate, user: dict = Depe
     if settings.report_time or settings.report_enabled is not None:
         await reschedule_daily_report()
     
+    await log_activity(request, user, "edit", "settings", "Updated email settings")
+
     return {"message": "Email settings updated successfully"}
 
 @api_router.post("/settings/email/test")
@@ -10850,7 +11103,8 @@ async def run_audit_checks() -> dict:
     }
 
 @api_router.post("/audit/run-scan")
-async def run_audit_scan(user: dict = Depends(require_permission(Modules.AUDIT, Actions.CREATE))):
+async def run_audit_scan(request: Request, user: dict = Depends(require_permission(Modules.AUDIT, Actions.CREATE))):
+
     """Run a full audit scan and save results."""
     result = await run_audit_checks()
     
@@ -10859,6 +11113,8 @@ async def run_audit_scan(user: dict = Depends(require_permission(Modules.AUDIT, 
     
     # Remove _id before returning
     result.pop("_id", None)
+    await log_activity(request, user, "create", "audit", "Ran audit scan")
+
     return result
 
 @api_router.get("/audit/latest")
@@ -10898,7 +11154,8 @@ class AuditSettingsUpdate(BaseModel):
     alert_emails: Optional[List[str]] = None
 
 @api_router.put("/audit/settings")
-async def update_audit_settings(settings: AuditSettingsUpdate, user: dict = Depends(require_permission(Modules.AUDIT, Actions.EDIT))):
+async def update_audit_settings(request: Request, settings: AuditSettingsUpdate, user: dict = Depends(require_permission(Modules.AUDIT, Actions.EDIT))):
+
     """Update audit module settings."""
     updates = {k: v for k, v in settings.model_dump().items() if v is not None}
     updates["setting_type"] = "audit"
@@ -10913,6 +11170,8 @@ async def update_audit_settings(settings: AuditSettingsUpdate, user: dict = Depe
     if settings.auto_scan_enabled is not None or settings.auto_scan_time is not None:
         await reschedule_audit_scan()
     
+    await log_activity(request, user, "edit", "audit", "Updated audit settings")
+
     return await db.app_settings.find_one({"setting_type": "audit"}, {"_id": 0})
 
 async def send_audit_alert_email(result: dict):
@@ -11094,6 +11353,8 @@ async def update_commission_settings(request: Request, user: dict = Depends(requ
         }},
         upsert=True
     )
+    await log_activity(request, user, "edit", "settings", "Updated commission settings")
+
     return {"message": "Commission settings updated", "deposit_commission_rate": deposit_rate, "withdrawal_commission_rate": withdrawal_rate, "commission_enabled": enabled}
 
 # ============== LOGS MANAGEMENT ==============
@@ -11398,7 +11659,6 @@ async def get_impersonation_logs(
     ).sort("login_time", -1).to_list(limit)
     return logs
 
-
 # Include router
 app.include_router(api_router)
 
@@ -11415,7 +11675,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 @app.on_event("startup")
 async def startup_db_indexes():
     """Create database indexes and start scheduler"""
