@@ -388,6 +388,9 @@ class IncomeExpenseCreate(BaseModel):
     custom_category: Optional[str] = None
     amount: float
     currency: str = "USD"
+    base_currency: Optional[str] = None  # Payment currency (e.g., INR)
+    base_amount: Optional[float] = None  # Amount in payment currency
+    exchange_rate: Optional[float] = None  # Rate: 1 base_currency = ? USD
     treasury_account_id: Optional[str] = None  # Optional when vendor handles it
     vendor_id: Optional[str] = None  # If linked to an exchanger (money partner)
     vendor_supplier_id: Optional[str] = None  # If linked to a service supplier (rent, utilities)
@@ -3861,6 +3864,8 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
         vendor["pending_amount"] = total_net_usd
     
     return vendors
+
+
 @api_router.get("/vendors/{vendor_id}")
 async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW))):
     vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
@@ -6565,6 +6570,9 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
         "custom_category": entry_data.custom_category,
         "amount": entry_data.amount,
         "currency": entry_data.currency,
+        "base_currency": entry_data.base_currency,
+        "base_amount": entry_data.base_amount,
+        "exchange_rate": entry_data.exchange_rate,
         "amount_usd": amount_usd,
         "treasury_account_id": entry_data.treasury_account_id,
         "treasury_account_name": treasury["account_name"] if treasury else None,
@@ -6603,14 +6611,38 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
     
     # Only update treasury if not vendor-linked (vendor must approve first)
     if not vendor_info and treasury:
-        # Convert amount to treasury currency if different
         treasury_currency = treasury.get("currency", "USD")
-        entry_currency = entry_data.currency
         
-        if treasury_currency.upper() != entry_currency.upper():
-            converted_amount = convert_currency(entry_data.amount, entry_currency, treasury_currency)
+        # Determine the amount to use for treasury update
+        # If base_currency matches treasury currency, use base_amount directly
+        # Otherwise convert from the appropriate currency
+        if entry_data.base_currency and entry_data.base_amount:
+            # Payment was made in a non-USD currency
+            if treasury_currency.upper() == entry_data.base_currency.upper():
+                # Treasury currency matches payment currency - use base_amount directly
+                converted_amount = entry_data.base_amount
+                original_amount = entry_data.base_amount
+                original_currency = entry_data.base_currency
+            elif treasury_currency.upper() == "USD":
+                # Treasury is in USD - use the USD amount
+                converted_amount = entry_data.amount
+                original_amount = entry_data.base_amount
+                original_currency = entry_data.base_currency
+            else:
+                # Treasury is in a different currency - convert from USD
+                converted_amount = convert_currency(entry_data.amount, "USD", treasury_currency)
+                original_amount = entry_data.base_amount
+                original_currency = entry_data.base_currency
         else:
-            converted_amount = entry_data.amount
+            # Payment was made in USD (no base_currency)
+            if treasury_currency.upper() == "USD":
+                converted_amount = entry_data.amount
+                original_amount = entry_data.amount
+                original_currency = "USD"
+            else:
+                converted_amount = convert_currency(entry_data.amount, "USD", treasury_currency)
+                original_amount = entry_data.amount
+                original_currency = "USD"
         
         if entry_data.entry_type == IncomeExpenseType.INCOME:
             await db.treasury_accounts.update_one(
@@ -6630,11 +6662,13 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
         tx_type = "income" if entry_data.entry_type == IncomeExpenseType.INCOME else "expense"
         tx_amount = converted_amount if entry_data.entry_type == IncomeExpenseType.INCOME else -converted_amount
         
-        # Build reference from category name (either standard category or custom ie_category)
+        # Build reference from category name
         category_label = entry_data.category.replace('_', ' ').title() if entry_data.category else (ie_category_info["name"] if ie_category_info else "Other")
         
-        # Include conversion info in reference if currencies differ
-        conversion_note = f" (Converted from {entry_data.amount:,.2f} {entry_currency})" if treasury_currency.upper() != entry_currency.upper() else ""
+        # Include conversion info if applicable
+        conversion_note = ""
+        if original_currency.upper() != treasury_currency.upper():
+            conversion_note = f" (Converted from {original_amount:,.2f} {original_currency})"
         
         tx_doc = {
             "treasury_transaction_id": tx_id,
@@ -6642,11 +6676,14 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
             "transaction_type": tx_type,
             "amount": tx_amount,
             "currency": treasury_currency,
-            "original_amount": entry_data.amount,
-            "original_currency": entry_currency,
+            "original_amount": original_amount,
+            "original_currency": original_currency,
+            "base_amount": entry_data.base_amount,
+            "base_currency": entry_data.base_currency,
+            "exchange_rate": entry_data.exchange_rate,
             "reference": f"{category_label}: {entry_data.description or 'N/A'}{conversion_note}",
             "income_expense_id": entry_id,
-            "created_at": f"{entry_date}T12:00:00+00:00",  # Use entry date, not current time
+            "created_at": f"{entry_date}T12:00:00+00:00",
             "created_by": user["user_id"],
             "created_by_name": user["name"]
         }
@@ -12159,7 +12196,6 @@ async def get_impersonation_logs(
     ).sort("login_time", -1).to_list(limit)
     return logs
 
-
 # Include router
 app.include_router(api_router)
 
@@ -12176,7 +12212,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.on_event("startup")
 async def startup_db_indexes():
