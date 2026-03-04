@@ -14,7 +14,7 @@ import requests
 import os
 import io
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://fx-broker-control.preview.emergentagent.com')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://loan-approval-portal-1.preview.emergentagent.com')
 
 @pytest.fixture(scope="module")
 def auth_token():
