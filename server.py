@@ -1,4 +1,5 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, UploadFile, File, Form, BackgroundTasks, Body, Query
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -1727,14 +1728,25 @@ async def get_treasury_history(
     regular_txs = await db.transactions.find(tx_query, {"_id": 0}).sort("created_at", -1).to_list(limit)
     
     # Convert regular transactions to history format ONLY if they don't already have a treasury_transaction
+    account_currency = account.get("currency", "USD")
     for tx in regular_txs:
         if tx.get("transaction_id") not in existing_tx_ids:
+            # For non-USD accounts, use base_amount if available and currency matches
+            display_amount = tx.get("amount", 0)
+            if account_currency != "USD":
+                # If the transaction has base_amount in the same currency as the account, use it
+                if tx.get("base_currency") == account_currency and tx.get("base_amount"):
+                    display_amount = tx.get("base_amount")
+                else:
+                    # Convert USD amount to account currency
+                    display_amount = convert_from_usd(tx.get("amount", 0), account_currency)
+            
             treasury_txs.append({
                 "treasury_transaction_id": tx.get("transaction_id"),
                 "account_id": account_id,
                 "transaction_type": tx.get("transaction_type"),
-                "amount": tx.get("amount") if tx.get("transaction_type") == "deposit" else -tx.get("amount", 0),
-                "currency": account.get("currency", "USD"),
+                "amount": display_amount if tx.get("transaction_type") == "deposit" else -display_amount,
+                "currency": account_currency,
                 "reference": f"{tx.get('transaction_type', '').capitalize()}: {tx.get('client_name', 'Unknown')} - {tx.get('reference', '')}",
                 "client_id": tx.get("client_id"),
                 "client_name": tx.get("client_name"),
@@ -5779,8 +5791,11 @@ async def approve_transaction(
             tx_currency = tx.get("currency", "USD")
             deposit_amount = tx["amount"]
             
-            # Convert if currencies are different
-            if tx_currency == "USD" and dest_currency != "USD":
+            # Check if transaction has base_amount in the same currency as destination
+            if tx.get("base_currency") == dest_currency and tx.get("base_amount"):
+                # Use the actual base_amount (e.g., 100,000 AED deposited to AED account)
+                deposit_amount = tx["base_amount"]
+            elif tx_currency == "USD" and dest_currency != "USD":
                 # Convert from USD to destination currency
                 deposit_amount = convert_from_usd(tx["amount"], dest_currency)
             elif tx_currency != "USD" and dest_currency == "USD":
@@ -5798,15 +5813,19 @@ async def approve_transaction(
             
             # Record treasury transaction for deposit
             treasury_tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+            # Determine the original amount and currency for reference
+            original_amt = tx.get("base_amount") if tx.get("base_amount") else tx["amount"]
+            original_curr = tx.get("base_currency") if tx.get("base_currency") else tx_currency
+            
             treasury_tx_doc = {
                 "treasury_transaction_id": treasury_tx_id,
                 "account_id": tx["destination_account_id"],
                 "transaction_type": "deposit",
                 "amount": deposit_amount,
                 "currency": dest_currency,
-                "original_amount": tx["amount"],
-                "original_currency": tx_currency,
-                "exchange_rate": deposit_amount / tx["amount"] if tx["amount"] > 0 else 1,
+                "original_amount": original_amt,
+                "original_currency": original_curr,
+                "exchange_rate": tx.get("exchange_rate") or (deposit_amount / tx["amount"] if tx["amount"] > 0 else 1),
                 "reference": f"Deposit: {tx.get('client_name', 'Client')} - {tx.get('reference', '')}",
                 "transaction_id": transaction_id,
                 "client_id": tx.get("client_id"),
@@ -10883,6 +10902,17 @@ async def test_email_settings(user: dict = Depends(require_permission(Modules.SE
         raise HTTPException(status_code=500, detail=f"Failed to send test email: {str(e)}")
 
 
+@api_router.get("/reports/daily/preview")
+async def preview_daily_report(user: dict = Depends(require_permission(Modules.REPORTS, Actions.VIEW))):
+    """Preview the daily report HTML without sending it"""
+    try:
+        html_content = await generate_daily_report_html()
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        logger.error(f"Daily report preview failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
+
+
 @api_router.post("/settings/email/send-daily-report")
 async def send_daily_report_now(user: dict = Depends(require_permission(Modules.REPORTS, Actions.EXPORT))):
     """Manually trigger and send the daily report"""
@@ -11142,6 +11172,87 @@ async def generate_daily_report_html():
     # Pending approvals
     pending_txs = await db.transactions.find({"status": "pending"}, {"_id": 0}).to_list(1000)
     
+    # ===== NEW: Daily Loan Transactions =====
+    today_loan_txs = await db.loan_transactions.find({
+        "created_at": {"$gte": today_start.isoformat()}
+    }, {"_id": 0}).to_list(1000)
+    
+    today_disbursements = [lt for lt in today_loan_txs if lt.get("transaction_type") == "disbursement"]
+    today_repayments = [lt for lt in today_loan_txs if lt.get("transaction_type") == "repayment"]
+    total_disbursed_today = sum(lt.get("amount", 0) for lt in today_disbursements)
+    total_repaid_today = sum(lt.get("amount", 0) for lt in today_repayments)
+    
+    # Get loan details for context
+    loans = await db.loans.find({}, {"_id": 0}).to_list(1000)
+    loans_dict = {l.get("loan_id"): l for l in loans}
+    
+    # ===== NEW: Exchangers Summary with Commissions & Settlements =====
+    # Calculate vendor balances including I&E and Loans
+    vendor_summaries = []
+    for vendor in vendors:
+        vendor_id = vendor.get("vendor_id")
+        vendor_name = vendor.get("vendor_name", "Unknown")
+        
+        # Get pending transactions for this vendor
+        vendor_txs = await db.transactions.find({
+            "vendor_id": vendor_id,
+            "status": "approved",
+            "settled": {"$ne": True}
+        }, {"_id": 0}).to_list(1000)
+        
+        pending_deposits = sum(t.get("amount", 0) for t in vendor_txs if t.get("transaction_type") == "deposit")
+        pending_withdrawals = sum(t.get("amount", 0) for t in vendor_txs if t.get("transaction_type") == "withdrawal")
+        total_commission = sum(t.get("vendor_commission_amount", 0) or 0 for t in vendor_txs)
+        
+        # Get I&E entries for this vendor
+        vendor_ie = await db.income_expense_entries.find({
+            "vendor_id": vendor_id,
+            "status": "approved"
+        }, {"_id": 0}).to_list(1000)
+        
+        ie_income = sum(e.get("base_amount", e.get("amount", 0)) for e in vendor_ie if e.get("entry_type") == "income")
+        ie_expense = sum(e.get("base_amount", e.get("amount", 0)) for e in vendor_ie if e.get("entry_type") == "expense")
+        
+        # Get loan transactions for this vendor
+        vendor_loans = await db.loan_transactions.find({
+            "vendor_id": vendor_id,
+            "status": "approved"
+        }, {"_id": 0}).to_list(1000)
+        
+        loan_in = sum(lt.get("amount", 0) for lt in vendor_loans if lt.get("transaction_type") == "repayment")
+        loan_out = sum(lt.get("amount", 0) for lt in vendor_loans if lt.get("transaction_type") == "disbursement")
+        
+        # Calculate settlement balance (what we owe vendor or vendor owes us)
+        # Deposits: vendor collected money for us (we owe them)
+        # Withdrawals: vendor paid out for us (they owe us)
+        # I&E Income from vendor: they owe us
+        # I&E Expense to vendor: we owe them
+        # Loan repayments: they paid us (reduces what we owe)
+        # Loan disbursements: we gave them (increases what we owe)
+        settlement_balance = (pending_deposits - pending_withdrawals) - total_commission + (ie_expense - ie_income) + (loan_out - loan_in)
+        
+        # Get today's settlements
+        today_settlements = await db.vendor_settlements.find({
+            "vendor_id": vendor_id,
+            "created_at": {"$gte": today_start.isoformat()}
+        }, {"_id": 0}).to_list(100)
+        settled_today = sum(s.get("amount", 0) for s in today_settlements)
+        
+        vendor_summaries.append({
+            "name": vendor_name,
+            "pending_deposits": pending_deposits,
+            "pending_withdrawals": pending_withdrawals,
+            "commission": total_commission,
+            "ie_balance": ie_expense - ie_income,
+            "loan_balance": loan_out - loan_in,
+            "settlement_balance": settlement_balance,
+            "settled_today": settled_today
+        })
+    
+    total_vendor_settlements_today = sum(v["settled_today"] for v in vendor_summaries)
+    total_pending_to_vendors = sum(v["settlement_balance"] for v in vendor_summaries if v["settlement_balance"] > 0)
+    total_pending_from_vendors = sum(abs(v["settlement_balance"]) for v in vendor_summaries if v["settlement_balance"] < 0)
+    
     # Dealing P&L - Get today's record and calculate
     dealing_pnl_record = await db.dealing_pnl.find_one({"date": today_date}, {"_id": 0})
     dealing_pnl_html = ""
@@ -11348,6 +11459,67 @@ async def generate_daily_report_html():
                             <div class="stat-value red">${total_payables:,.2f}</div>
                         </div>
                     </div>
+                </div>
+                
+                <!-- Daily Loan Transactions Log -->
+                <div class="section">
+                    <div class="section-title">💰 Daily Loan Transactions</div>
+                    <div class="stat-grid">
+                        <div class="stat-box">
+                            <div class="stat-label">Total Disbursed Today</div>
+                            <div class="stat-value red">-${total_disbursed_today:,.2f}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Total Repaid Today</div>
+                            <div class="stat-value green">+${total_repaid_today:,.2f}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Disbursements</div>
+                            <div class="stat-value">{len(today_disbursements)}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Repayments</div>
+                            <div class="stat-value">{len(today_repayments)}</div>
+                        </div>
+                    </div>
+                    {"" if len(today_loan_txs) == 0 else f'''
+                    <table>
+                        <tr><th>Type</th><th>Borrower</th><th>Amount</th><th>Currency</th></tr>
+                        {"".join(f"<tr><td style='color: {'#4ade80' if lt.get('transaction_type') == 'repayment' else '#f87171'}'>{lt.get('transaction_type', 'N/A').upper()}</td><td>{loans_dict.get(lt.get('loan_id'), dict()).get('borrower_name', 'N/A')}</td><td>${lt.get('amount', 0):,.2f}</td><td>{lt.get('currency', 'USD')}</td></tr>" for lt in today_loan_txs[:10])}
+                    </table>
+                    {f"<p style='color: #C5C6C7; font-size: 11px; margin-top: 10px;'>Showing 10 of {len(today_loan_txs)} transactions</p>" if len(today_loan_txs) > 10 else ""}
+                    '''}
+                </div>
+                
+                <!-- Exchangers Summary -->
+                <div class="section">
+                    <div class="section-title">🏪 Exchangers Summary</div>
+                    <div class="stat-grid">
+                        <div class="stat-box">
+                            <div class="stat-label">Settled Today</div>
+                            <div class="stat-value cyan">${total_vendor_settlements_today:,.2f}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">Active Exchangers</div>
+                            <div class="stat-value">{len(vendors)}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">We Owe (Total)</div>
+                            <div class="stat-value red">${total_pending_to_vendors:,.2f}</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-label">They Owe (Total)</div>
+                            <div class="stat-value green">${total_pending_from_vendors:,.2f}</div>
+                        </div>
+                    </div>
+                    {"" if len(vendor_summaries) == 0 else f'''
+                    <table>
+                        <tr><th>Exchanger</th><th>Deposits</th><th>Withdrawals</th><th>Commission</th><th>I&E</th><th>Loans</th><th>Balance</th></tr>
+                        {"".join(f"<tr><td>{v['name']}</td><td style='color: #4ade80'>${v['pending_deposits']:,.0f}</td><td style='color: #f87171'>${v['pending_withdrawals']:,.0f}</td><td>${v['commission']:,.0f}</td><td>${v['ie_balance']:,.0f}</td><td>${v['loan_balance']:,.0f}</td><td style='color: {'#f87171' if v['settlement_balance'] > 0 else '#4ade80' if v['settlement_balance'] < 0 else 'white'}'>${v['settlement_balance']:+,.0f}</td></tr>" for v in vendor_summaries[:10])}
+                    </table>
+                    {f"<p style='color: #C5C6C7; font-size: 11px; margin-top: 10px;'>Showing 10 of {len(vendor_summaries)} exchangers</p>" if len(vendor_summaries) > 10 else ""}
+                    <p style='color: #C5C6C7; font-size: 10px; margin-top: 5px;'>* Positive balance = We owe them | Negative balance = They owe us</p>
+                    '''}
                 </div>
                 
                 <!-- Pending Actions -->
@@ -12308,8 +12480,8 @@ app.include_router(api_router)
 
 # CORS middleware
 _cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
-if "https://miles-backoffice-frontend.vercel.app" not in _cors_origins:
-    _cors_origins.append("https://miles-backoffice-frontend.vercel.app")
+if "https://backoffice.milescapitals.com" not in _cors_origins:
+    _cors_origins.append("https://backoffice.milescapitals.com")
 
 
 app.add_middleware(
