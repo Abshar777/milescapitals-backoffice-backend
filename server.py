@@ -3741,6 +3741,15 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
         "settled": {"$ne": True}
     }, {"_id": 0}).to_list(10000)
     
+    # Batch fetch completed loan transactions involving vendors
+    loan_txs_all = await db.loan_transactions.find({
+        "$or": [
+            {"source_vendor_id": {"$in": vendor_ids}},
+            {"credit_to_vendor_id": {"$in": vendor_ids}}
+        ],
+        "status": "completed"
+    }, {"_id": 0}).to_list(10000)
+    
     # Group transactions and IE entries by vendor_id
     from collections import defaultdict
     pending_by_vendor = defaultdict(list)
@@ -3750,6 +3759,14 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
     ie_by_vendor = defaultdict(list)
     for ie in ie_entries_all:
         ie_by_vendor[ie["vendor_id"]].append(ie)
+    
+    # Group loan transactions by vendor
+    loan_tx_by_vendor = defaultdict(list)
+    for ltx in loan_txs_all:
+        if ltx.get("source_vendor_id"):
+            loan_tx_by_vendor[ltx["source_vendor_id"]].append({"type": "out", "tx": ltx})
+        if ltx.get("credit_to_vendor_id"):
+            loan_tx_by_vendor[ltx["credit_to_vendor_id"]].append({"type": "in", "tx": ltx})
     
     # Populate vendor data
     for vendor in vendors:
@@ -3811,6 +3828,21 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
             currency_breakdown[currency]["commission_base"] += commission_base
             currency_breakdown[currency]["commission_usd"] += commission_usd
         
+        # Include loan transactions: repayments TO vendor = Money In, disbursements FROM vendor = Money Out
+        for loan_entry in loan_tx_by_vendor.get(vendor["vendor_id"], []):
+            ltx = loan_entry["tx"]
+            currency = ltx.get("currency", "USD")
+            ensure_currency(currency)
+            
+            amount = ltx.get("amount", 0)
+            
+            if loan_entry["type"] == "in":  # Repayment TO vendor
+                currency_breakdown[currency]["deposits_base"] += amount
+                currency_breakdown[currency]["deposits_usd"] += amount
+            else:  # Disbursement FROM vendor
+                currency_breakdown[currency]["withdrawals_base"] += amount
+                currency_breakdown[currency]["withdrawals_usd"] += amount
+        
         # Build settlement by currency for list view
         settlement_by_currency = []
         total_net_usd = 0
@@ -3838,7 +3870,8 @@ async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Mod
     
     # Calculate settlement balance by currency (unsettled approved/completed transactions)
     # Settlement = (Money In - Money Out - Commission)
-    # Money In = deposits + income, Money Out = withdrawals + expense
+    # Money In = deposits + income + loan repayments TO vendor
+    # Money Out = withdrawals + expense + loan disbursements FROM vendor
     settlement_pipeline = [
         {"$match": {
             "vendor_id": vendor_id,
@@ -3895,6 +3928,50 @@ async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Mod
     ]
     
     settlement_by_currency = await db.transactions.aggregate(settlement_pipeline).to_list(100)
+    
+    # Fetch loan transactions involving this vendor (disbursements FROM vendor and repayments TO vendor)
+    # Disbursements from vendor = Money OUT (like withdrawals)
+    # Repayments to vendor = Money IN (like deposits)
+    loan_tx_pipeline = [
+        {"$match": {
+            "$or": [
+                {"source_vendor_id": vendor_id},  # Disbursements from this vendor
+                {"credit_to_vendor_id": vendor_id}  # Repayments to this vendor
+            ],
+            "status": "completed"
+        }},
+        {"$group": {
+            "_id": "$currency",
+            # Loan repayments TO vendor = Money IN
+            "loan_in_amount": {
+                "$sum": {
+                    "$cond": [
+                        {"$eq": ["$credit_to_vendor_id", vendor_id]},
+                        "$amount",
+                        0
+                    ]
+                }
+            },
+            # Loan disbursements FROM vendor = Money OUT
+            "loan_out_amount": {
+                "$sum": {
+                    "$cond": [
+                        {"$eq": ["$source_vendor_id", vendor_id]},
+                        "$amount",
+                        0
+                    ]
+                }
+            },
+            "loan_in_count": {
+                "$sum": {"$cond": [{"$eq": ["$credit_to_vendor_id", vendor_id]}, 1, 0]}
+            },
+            "loan_out_count": {
+                "$sum": {"$cond": [{"$eq": ["$source_vendor_id", vendor_id]}, 1, 0]}
+            }
+        }}
+    ]
+    loan_tx_by_currency = await db.loan_transactions.aggregate(loan_tx_pipeline).to_list(100)
+    loan_tx_map = {item["_id"] or "USD": item for item in loan_tx_by_currency}
     
     # Also fetch completed income/expense entries for this vendor
     # IMPORTANT: Exclude converted_to_loan entries - they're tracked under Loans, not as settlement
@@ -3964,6 +4041,23 @@ async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Mod
         currency_data[curr]["withdrawal_count"] += ie_item["expense_count"]
         currency_data[curr]["commission_usd"] += ie_item["ie_commission_usd"]
         currency_data[curr]["commission_base"] += ie_item["ie_commission_base"]
+    
+    # Add loan transactions to settlement
+    # Loan repayments TO vendor = Money IN (deposits), Loan disbursements FROM vendor = Money OUT (withdrawals)
+    for curr, loan_item in loan_tx_map.items():
+        if curr not in currency_data:
+            currency_data[curr] = {
+                "deposit_amount": 0, "withdrawal_amount": 0,
+                "deposit_usd": 0, "withdrawal_usd": 0,
+                "deposit_count": 0, "withdrawal_count": 0,
+                "commission_usd": 0, "commission_base": 0,
+            }
+        currency_data[curr]["deposit_amount"] += loan_item["loan_in_amount"]
+        currency_data[curr]["deposit_usd"] += loan_item["loan_in_amount"]  # Assuming USD for loans
+        currency_data[curr]["deposit_count"] += loan_item["loan_in_count"]
+        currency_data[curr]["withdrawal_amount"] += loan_item["loan_out_amount"]
+        currency_data[curr]["withdrawal_usd"] += loan_item["loan_out_amount"]  # Assuming USD for loans
+        currency_data[curr]["withdrawal_count"] += loan_item["loan_out_count"]
     
     vendor["settlement_by_currency"] = [
         {
@@ -4111,7 +4205,8 @@ async def get_my_vendor_info(user: dict = Depends(require_vendor)):
     
     # Calculate settlement balance by currency (unsettled approved/completed transactions)
     # Settlement = (Money In - Money Out - Commission)
-    # Money In = deposits + income, Money Out = withdrawals + expense
+    # Money In = deposits + income + loan repayments TO vendor
+    # Money Out = withdrawals + expense + loan disbursements FROM vendor
     settlement_pipeline = [
         {"$match": {
             "vendor_id": vendor["vendor_id"],
@@ -4168,6 +4263,46 @@ async def get_my_vendor_info(user: dict = Depends(require_vendor)):
     ]
     
     settlement_by_currency = await db.transactions.aggregate(settlement_pipeline).to_list(100)
+    
+    # Fetch loan transactions involving this vendor
+    loan_tx_pipeline = [
+        {"$match": {
+            "$or": [
+                {"source_vendor_id": vendor["vendor_id"]},
+                {"credit_to_vendor_id": vendor["vendor_id"]}
+            ],
+            "status": "completed"
+        }},
+        {"$group": {
+            "_id": "$currency",
+            "loan_in_amount": {
+                "$sum": {
+                    "$cond": [
+                        {"$eq": ["$credit_to_vendor_id", vendor["vendor_id"]]},
+                        "$amount",
+                        0
+                    ]
+                }
+            },
+            "loan_out_amount": {
+                "$sum": {
+                    "$cond": [
+                        {"$eq": ["$source_vendor_id", vendor["vendor_id"]]},
+                        "$amount",
+                        0
+                    ]
+                }
+            },
+            "loan_in_count": {
+                "$sum": {"$cond": [{"$eq": ["$credit_to_vendor_id", vendor["vendor_id"]]}, 1, 0]}
+            },
+            "loan_out_count": {
+                "$sum": {"$cond": [{"$eq": ["$source_vendor_id", vendor["vendor_id"]]}, 1, 0]}
+            }
+        }}
+    ]
+    loan_tx_by_currency = await db.loan_transactions.aggregate(loan_tx_pipeline).to_list(100)
+    loan_tx_map = {item["_id"] or "USD": item for item in loan_tx_by_currency}
     
     # Also fetch approved/completed income/expense entries for this vendor
     # IMPORTANT: Exclude "converted_to_loan" status - when an expense is converted to loan,
@@ -4237,6 +4372,22 @@ async def get_my_vendor_info(user: dict = Depends(require_vendor)):
         currency_data[curr]["withdrawal_count"] += ie_item["expense_count"]
         currency_data[curr]["commission_usd"] += ie_item["ie_commission_usd"]
         currency_data[curr]["commission_base"] += ie_item["ie_commission_base"]
+    
+    # Add loan transactions to settlement
+    for curr, loan_item in loan_tx_map.items():
+        if curr not in currency_data:
+            currency_data[curr] = {
+                "deposit_amount": 0, "withdrawal_amount": 0,
+                "deposit_usd": 0, "withdrawal_usd": 0,
+                "deposit_count": 0, "withdrawal_count": 0,
+                "commission_usd": 0, "commission_base": 0,
+            }
+        currency_data[curr]["deposit_amount"] += loan_item["loan_in_amount"]
+        currency_data[curr]["deposit_usd"] += loan_item["loan_in_amount"]
+        currency_data[curr]["deposit_count"] += loan_item["loan_in_count"]
+        currency_data[curr]["withdrawal_amount"] += loan_item["loan_out_amount"]
+        currency_data[curr]["withdrawal_usd"] += loan_item["loan_out_amount"]
+        currency_data[curr]["withdrawal_count"] += loan_item["loan_out_count"]
     
     vendor["settlement_by_currency"] = [
         {
