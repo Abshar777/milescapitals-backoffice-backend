@@ -7370,6 +7370,7 @@ async def get_loan_dashboard(user: dict = Depends(require_permission(Modules.LOA
 async def get_loan_transactions(
     loan_id: Optional[str] = None,
     transaction_type: Optional[str] = None,
+    vendor_id: Optional[str] = None,
     limit: int = 100,
     user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW))
 ):
@@ -7379,12 +7380,21 @@ async def get_loan_transactions(
         query["loan_id"] = loan_id
     if transaction_type:
         query["transaction_type"] = transaction_type
+    if vendor_id:
+        # Filter by vendor involvement (either as source or credit destination)
+        query["$or"] = [
+            {"source_vendor_id": vendor_id},
+            {"credit_to_vendor_id": vendor_id}
+        ]
     
     transactions = await db.loan_transactions.find(query, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
     
     # Enrich with treasury/vendor names
     treasury_ids = list(set([tx.get("treasury_account_id") for tx in transactions if tx.get("treasury_account_id")]))
-    vendor_ids = list(set([tx.get("credit_to_vendor_id") for tx in transactions if tx.get("credit_to_vendor_id")]))
+    vendor_ids = list(set(
+        [tx.get("credit_to_vendor_id") for tx in transactions if tx.get("credit_to_vendor_id")] +
+        [tx.get("source_vendor_id") for tx in transactions if tx.get("source_vendor_id")]
+    ))
     
     # Get treasury accounts
     treasury_map = {}
@@ -7410,6 +7420,7 @@ async def get_loan_transactions(
     for tx in transactions:
         tx["treasury_account_name"] = treasury_map.get(tx.get("treasury_account_id"))
         tx["credit_vendor_name"] = vendor_map.get(tx.get("credit_to_vendor_id"))
+        tx["source_vendor_name"] = vendor_map.get(tx.get("source_vendor_id"))
         tx["status"] = tx.get("status", "completed")
         
         # For disbursements, get source from loan
@@ -12148,7 +12159,6 @@ async def get_impersonation_logs(
         {}, {"_id": 0}
     ).sort("login_time", -1).to_list(limit)
     return logs
-
 
 # Include router
 app.include_router(api_router)
