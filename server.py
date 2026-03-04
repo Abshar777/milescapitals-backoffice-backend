@@ -12160,6 +12160,7 @@ async def get_impersonation_logs(
     ).sort("login_time", -1).to_list(limit)
     return logs
 
+
 # Include router
 app.include_router(api_router)
 
@@ -12176,6 +12177,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.on_event("startup")
 async def startup_db_indexes():
