@@ -3790,13 +3790,13 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
                 }
         
         for tx in pending_txs:
-            currency = tx.get("base_currency") or tx.get("currency", "USD")
+            currency = tx.get("base_currency") or tx.get("currency") or "USD"
             ensure_currency(currency)
             
-            base_amount = tx.get("base_amount") or tx.get("amount", 0)
-            usd_amount = tx.get("amount", 0)
-            commission_base = tx.get("vendor_commission_base_amount", 0)
-            commission_usd = tx.get("vendor_commission_amount", 0)
+            base_amount = tx.get("base_amount") or tx.get("amount") or 0
+            usd_amount = tx.get("amount") or 0
+            commission_base = tx.get("vendor_commission_base_amount") or 0
+            commission_usd = tx.get("vendor_commission_amount") or 0
             
             if tx.get("transaction_type") == "deposit":
                 currency_breakdown[currency]["deposits_base"] += base_amount
@@ -3810,13 +3810,13 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
         
         # Include income/expense entries: income = Money In, expense = Money Out
         for ie in ie_by_vendor.get(vendor["vendor_id"], []):
-            currency = ie.get("currency", "USD")
+            currency = ie.get("currency") or "USD"
             ensure_currency(currency)
             
-            base_amount = ie.get("amount", 0)
+            base_amount = ie.get("amount") or 0
             usd_amount = ie.get("amount_usd") or base_amount
-            commission_base = ie.get("vendor_commission_base_amount", 0)
-            commission_usd = ie.get("vendor_commission_amount", 0)
+            commission_base = ie.get("vendor_commission_base_amount") or 0
+            commission_usd = ie.get("vendor_commission_amount") or 0
             
             if ie.get("entry_type") == "income":
                 currency_breakdown[currency]["deposits_base"] += base_amount
@@ -3831,10 +3831,10 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
         # Include loan transactions: repayments TO vendor = Money In, disbursements FROM vendor = Money Out
         for loan_entry in loan_tx_by_vendor.get(vendor["vendor_id"], []):
             ltx = loan_entry["tx"]
-            currency = ltx.get("currency", "USD")
+            currency = ltx.get("currency") or "USD"
             ensure_currency(currency)
             
-            amount = ltx.get("amount", 0)
+            amount = ltx.get("amount") or 0
             
             if loan_entry["type"] == "in":  # Repayment TO vendor
                 currency_breakdown[currency]["deposits_base"] += amount
@@ -3861,7 +3861,6 @@ async def get_vendors(user: dict = Depends(require_permission(Modules.EXCHANGERS
         vendor["pending_amount"] = total_net_usd
     
     return vendors
-
 @api_router.get("/vendors/{vendor_id}")
 async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW))):
     vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
