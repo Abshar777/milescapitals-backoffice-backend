@@ -12160,19 +12160,22 @@ async def get_impersonation_logs(
     ).sort("login_time", -1).to_list(limit)
     return logs
 
-
 # Include router
 app.include_router(api_router)
 
 # CORS middleware
+_cors_origins = os.environ.get("CORS_ORIGINS", "*").split(",")
+if "https://miles-backoffice-frontend.vercel.app" not in _cors_origins:
+    _cors_origins.append("https://miles-backoffice-frontend.vercel.app")
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 @app.on_event("startup")
 async def startup_db_indexes():
     """Create database indexes and start scheduler"""
