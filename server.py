@@ -12176,6 +12176,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 @app.on_event("startup")
 async def startup_db_indexes():
     """Create database indexes and start scheduler"""
