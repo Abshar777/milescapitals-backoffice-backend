@@ -5319,8 +5319,21 @@ async def get_transactions(
     client_id: Optional[str] = None,
     transaction_type: Optional[str] = None,
     status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
     limit: int = 100
 ):
+    # Use page_size if provided, otherwise fall back to limit for backwards compatibility
+    actual_limit = min(page_size, limit, 100)  # Cap at 100 for performance
+    skip = (page - 1) * actual_limit
+    
+    # Try cache first
+    cache_key = get_cache_key("transactions:list", page=page, page_size=actual_limit, 
+                              client_id=client_id, transaction_type=transaction_type, status=status)
+    cached = get_cached(cache_key)
+    if cached:
+        return cached
+    
     query = {}
     if client_id:
         query["client_id"] = client_id
@@ -5329,7 +5342,7 @@ async def get_transactions(
     if status:
         query["status"] = status
     
-    transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(actual_limit).to_list(actual_limit)
     
     # Enrich transactions with client email
     client_ids = list(set(tx.get("client_id") for tx in transactions if tx.get("client_id")))
@@ -5340,6 +5353,9 @@ async def get_transactions(
     
     for tx in transactions:
         tx["client_email"] = clients_map.get(tx.get("client_id"), "")
+    
+    # Cache the result
+    set_cached(cache_key, transactions, CACHE_TTL.get('transactions', 30))
     
     return transactions
 
@@ -5635,6 +5651,9 @@ async def create_transaction(
     
     await db.transactions.insert_one(tx_doc)
     
+    # Invalidate transaction cache
+    invalidate_transaction_cache()
+    
     # Update PSP pending balance if this is a PSP transaction
     if destination_type == "psp" and psp_info:
         await db.psps.update_one(
@@ -5837,6 +5856,10 @@ async def approve_transaction(
     
     await db.transactions.update_one({"transaction_id": transaction_id}, {"$set": updates})
     
+    # Invalidate transaction cache
+    invalidate_transaction_cache()
+    invalidate_treasury_cache()
+    
     await log_activity(request, user, "approve", "transactions", "Approved transaction")
 
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
@@ -5899,6 +5922,9 @@ async def reject_transaction(request: Request, transaction_id: str, reason: str 
     }
     
     await db.transactions.update_one({"transaction_id": transaction_id}, {"$set": updates})
+    
+    # Invalidate transaction cache
+    invalidate_transaction_cache()
     
     await log_activity(request, user, "reject", "transactions", "Rejected transaction")
 
@@ -10019,6 +10045,501 @@ async def get_reconciliation_summary(user: dict = Depends(require_permission(Mod
         }
     }
 
+# ============== CALENDAR-BASED RECONCILIATION ==============
+
+@api_router.get("/reconciliation/dates-with-transactions")
+async def get_dates_with_transactions(user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW))):
+    """Get all dates that have transactions for calendar display"""
+    from datetime import datetime, timezone, timedelta
+    
+    # Get dates with transactions in the last 90 days
+    ninety_days_ago = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    
+    # Aggregate dates from transactions
+    tx_dates_pipeline = [
+        {"$match": {"created_at": {"$gte": ninety_days_ago}}},
+        {"$project": {"date": {"$substr": ["$created_at", 0, 10]}}},
+        {"$group": {"_id": "$date"}}
+    ]
+    
+    tx_dates = await db.transactions.aggregate(tx_dates_pipeline).to_list(100)
+    
+    # Get reconciliation status for each date
+    recon_records = await db.reconciliations.find(
+        {"date": {"$gte": ninety_days_ago[:10]}},
+        {"_id": 0, "date": 1, "status": 1}
+    ).to_list(1000)
+    
+    status_map = {}
+    for rec in recon_records:
+        date = rec.get("date")
+        if date:
+            # If any are flagged, show flagged; else if any pending, show pending; else completed
+            current = status_map.get(date)
+            new_status = rec.get("status", "pending")
+            if current == "flagged" or new_status == "flagged":
+                status_map[date] = "flagged"
+            elif current == "pending" or new_status == "pending":
+                status_map[date] = "pending"
+            elif current is None:
+                status_map[date] = new_status
+    
+    dates = [d["_id"] for d in tx_dates if d["_id"]]
+    
+    return {"dates": dates, "status": status_map}
+
+
+@api_router.get("/reconciliation/daily-summary")
+async def get_reconciliation_daily_summary(
+    date: str,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW))
+):
+    """Get reconciliation summary for a specific date"""
+    # Get all reconciliation records for this date
+    recon_records = await db.reconciliations.find({"date": date}, {"_id": 0}).to_list(100)
+    
+    reconciled = sum(1 for r in recon_records if r.get("status") == "completed")
+    pending = sum(1 for r in recon_records if r.get("status") == "pending")
+    flagged = sum(r.get("flagged_count", 0) for r in recon_records)
+    
+    # Get transaction count for this date
+    tx_count = await db.transactions.count_documents({
+        "created_at": {"$gte": f"{date}T00:00:00", "$lt": f"{date}T23:59:59"}
+    })
+    
+    return {
+        "date": date,
+        "reconciled": reconciled,
+        "pending": pending,
+        "flagged": flagged,
+        "total": max(tx_count, len(recon_records))
+    }
+
+
+@api_router.get("/reconciliation/account-history")
+async def get_account_history_for_reconciliation(
+    type: str,
+    account_id: str,
+    date: str,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW))
+):
+    """Get transaction history for an account on a specific date"""
+    date_start = f"{date}T00:00:00"
+    date_end = f"{date}T23:59:59"
+    
+    transactions = []
+    
+    if type == "treasury":
+        # Get treasury transactions
+        txs = await db.treasury_transactions.find({
+            "account_id": account_id,
+            "created_at": {"$gte": date_start, "$lte": date_end}
+        }, {"_id": 0}).to_list(500)
+        
+        for tx in txs:
+            transactions.append({
+                "transaction_id": tx.get("treasury_transaction_id"),
+                "reference": tx.get("reference", ""),
+                "amount": tx.get("amount", 0),
+                "currency": tx.get("currency", "USD"),
+                "description": tx.get("reference", "Treasury Transaction"),
+                "created_at": tx.get("created_at"),
+                "type": tx.get("transaction_type")
+            })
+        
+        # Also get regular transactions to this account
+        reg_txs = await db.transactions.find({
+            "destination_account_id": account_id,
+            "created_at": {"$gte": date_start, "$lte": date_end},
+            "status": {"$in": ["approved", "completed"]}
+        }, {"_id": 0}).to_list(500)
+        
+        for tx in reg_txs:
+            transactions.append({
+                "transaction_id": tx.get("transaction_id"),
+                "reference": tx.get("reference", ""),
+                "amount": tx.get("amount", 0),
+                "currency": tx.get("currency", "USD"),
+                "description": f"{tx.get('transaction_type', 'Transaction')} - {tx.get('client_name', '')}",
+                "created_at": tx.get("created_at"),
+                "type": tx.get("transaction_type")
+            })
+            
+    elif type == "psp":
+        # Get PSP transactions
+        txs = await db.transactions.find({
+            "psp_id": account_id,
+            "created_at": {"$gte": date_start, "$lte": date_end},
+            "status": {"$in": ["approved", "completed", "pending"]}
+        }, {"_id": 0}).to_list(500)
+        
+        for tx in txs:
+            transactions.append({
+                "transaction_id": tx.get("transaction_id"),
+                "reference": tx.get("reference", ""),
+                "amount": tx.get("amount", 0),
+                "currency": tx.get("currency", "USD"),
+                "description": f"{tx.get('transaction_type', 'Transaction')} - {tx.get('client_name', '')}",
+                "created_at": tx.get("created_at"),
+                "type": tx.get("transaction_type")
+            })
+            
+    elif type == "exchanger":
+        # Get vendor transactions
+        txs = await db.transactions.find({
+            "vendor_id": account_id,
+            "created_at": {"$gte": date_start, "$lte": date_end},
+            "status": {"$in": ["approved", "completed", "pending"]}
+        }, {"_id": 0}).to_list(500)
+        
+        for tx in txs:
+            transactions.append({
+                "transaction_id": tx.get("transaction_id"),
+                "reference": tx.get("reference", ""),
+                "amount": tx.get("amount", 0),
+                "currency": tx.get("currency", "USD"),
+                "description": f"{tx.get('transaction_type', 'Transaction')} - {tx.get('client_name', '')}",
+                "created_at": tx.get("created_at"),
+                "type": tx.get("transaction_type")
+            })
+    
+    # Sort by created_at
+    transactions.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    
+    return transactions
+
+
+@api_router.post("/reconciliation/upload-statement")
+async def upload_statement_for_reconciliation(
+    request: Request,
+    file: UploadFile = File(...),
+    account_type: str = Form(...),
+    account_id: str = Form(...),
+    date: str = Form(...),
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.CREATE))
+):
+    """Upload and parse a statement file for reconciliation"""
+    import pdfplumber
+    
+    content = await file.read()
+    filename = file.filename.lower()
+    
+    parsed_entries = []
+    entry_id = 0
+    
+    try:
+        if filename.endswith('.csv'):
+            decoded = content.decode('utf-8')
+            reader = csv.DictReader(io.StringIO(decoded))
+            for row in reader:
+                entry_id += 1
+                # Try to extract common fields
+                entry = {
+                    "id": f"stmt_{entry_id}",
+                    "date": row.get("Date") or row.get("date") or row.get("Transaction Date") or date,
+                    "description": row.get("Description") or row.get("description") or row.get("Narration") or row.get("Particulars") or "",
+                    "reference": row.get("Reference") or row.get("reference") or row.get("Ref") or "",
+                    "amount": float(row.get("Amount") or row.get("amount") or row.get("Credit") or row.get("Debit") or 0)
+                }
+                # Handle credit/debit columns
+                if "Credit" in row and "Debit" in row:
+                    credit = float(row.get("Credit") or 0) if row.get("Credit") else 0
+                    debit = float(row.get("Debit") or 0) if row.get("Debit") else 0
+                    entry["amount"] = credit - debit
+                parsed_entries.append(entry)
+                
+        elif filename.endswith(('.xlsx', '.xls')):
+            wb = load_workbook(filename=io.BytesIO(content), read_only=True)
+            ws = wb.active
+            headers = [str(cell.value).lower() if cell.value else "" for cell in ws[1]]
+            
+            # Find column indices
+            date_col = next((i for i, h in enumerate(headers) if "date" in h), 0)
+            desc_col = next((i for i, h in enumerate(headers) if any(x in h for x in ["description", "narration", "particulars"])), 1)
+            ref_col = next((i for i, h in enumerate(headers) if "ref" in h), -1)
+            amount_col = next((i for i, h in enumerate(headers) if "amount" in h), 2)
+            credit_col = next((i for i, h in enumerate(headers) if "credit" in h), -1)
+            debit_col = next((i for i, h in enumerate(headers) if "debit" in h), -1)
+            
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not any(row):
+                    continue
+                entry_id += 1
+                
+                amount = 0
+                if credit_col >= 0 and debit_col >= 0:
+                    credit = float(row[credit_col] or 0) if credit_col < len(row) else 0
+                    debit = float(row[debit_col] or 0) if debit_col < len(row) else 0
+                    amount = credit - debit
+                elif amount_col < len(row):
+                    amount = float(row[amount_col] or 0)
+                
+                entry = {
+                    "id": f"stmt_{entry_id}",
+                    "date": str(row[date_col]) if date_col < len(row) and row[date_col] else date,
+                    "description": str(row[desc_col]) if desc_col < len(row) and row[desc_col] else "",
+                    "reference": str(row[ref_col]) if ref_col >= 0 and ref_col < len(row) and row[ref_col] else "",
+                    "amount": amount
+                }
+                parsed_entries.append(entry)
+                
+        elif filename.endswith('.pdf'):
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                for page in pdf.pages:
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if table and len(table) > 1:
+                            headers = [str(h).lower() if h else "" for h in table[0]]
+                            date_col = next((i for i, h in enumerate(headers) if "date" in h), 0)
+                            desc_col = next((i for i, h in enumerate(headers) if any(x in h for x in ["description", "narration"])), 1)
+                            amount_col = next((i for i, h in enumerate(headers) if "amount" in h), -1)
+                            
+                            for row in table[1:]:
+                                if not any(row):
+                                    continue
+                                entry_id += 1
+                                
+                                amount = 0
+                                if amount_col >= 0 and amount_col < len(row):
+                                    try:
+                                        amount = float(str(row[amount_col]).replace(",", "").replace("$", ""))
+                                    except:
+                                        pass
+                                
+                                entry = {
+                                    "id": f"stmt_{entry_id}",
+                                    "date": str(row[date_col]) if date_col < len(row) and row[date_col] else date,
+                                    "description": str(row[desc_col]) if desc_col < len(row) and row[desc_col] else "",
+                                    "reference": "",
+                                    "amount": amount
+                                }
+                                parsed_entries.append(entry)
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV, XLSX, or PDF.")
+            
+    except Exception as e:
+        logger.error(f"Statement parse error: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to parse statement: {str(e)}")
+    
+    return {"entries": parsed_entries, "count": len(parsed_entries)}
+
+
+@api_router.post("/reconciliation/submit")
+async def submit_reconciliation(
+    request: Request,
+    data: dict = Body(...),
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.CREATE))
+):
+    """Submit reconciliation results"""
+    now = datetime.now(timezone.utc)
+    
+    recon_id = f"recon_{uuid.uuid4().hex[:12]}"
+    
+    matched_pairs = data.get("matched_pairs", [])
+    flagged_entries = data.get("flagged_entries", [])
+    
+    # Determine status
+    status = "completed"
+    if flagged_entries:
+        status = "flagged"
+    elif data.get("unmatched_system", 0) > 0 or data.get("unmatched_statement", 0) > 0:
+        status = "pending"
+    
+    recon_doc = {
+        "recon_id": recon_id,
+        "date": data.get("date"),
+        "account_type": data.get("account_type"),
+        "account_id": data.get("account_id"),
+        "matched_pairs": matched_pairs,
+        "flagged_entries": flagged_entries,
+        "matched_count": len(matched_pairs),
+        "flagged_count": len(flagged_entries),
+        "unmatched_system": data.get("unmatched_system", 0),
+        "unmatched_statement": data.get("unmatched_statement", 0),
+        "remarks": data.get("remarks", ""),
+        "status": status,
+        "created_at": now.isoformat(),
+        "created_by": user["user_id"],
+        "created_by_name": user["name"]
+    }
+    
+    await db.reconciliations.insert_one(recon_doc)
+    
+    await log_activity(request, user, "create", "reconciliation", f"Submitted reconciliation for {data.get('date')}")
+    
+    return {"message": "Reconciliation submitted successfully", "recon_id": recon_id, "status": status}
+
+
+@api_router.get("/reconciliation/calendar-history")
+async def get_calendar_reconciliation_history(
+    limit: int = 50,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW))
+):
+    """Get reconciliation history for calendar view"""
+    records = await db.reconciliations.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return records
+
+
+# ============== INTERNAL MESSAGING SYSTEM ==============
+
+@api_router.get("/messages/conversations")
+async def get_conversations(user: dict = Depends(get_current_user)):
+    """Get all conversations for the current user"""
+    user_id = user["user_id"]
+    
+    # Get all messages where user is sender or recipient
+    messages = await db.user_messages.find({
+        "$or": [{"sender_id": user_id}, {"recipient_id": user_id}]
+    }, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
+    # Group by conversation partner
+    conversations = {}
+    for msg in messages:
+        partner_id = msg["recipient_id"] if msg["sender_id"] == user_id else msg["sender_id"]
+        if partner_id not in conversations:
+            # Get partner info
+            partner = await db.users.find_one({"user_id": partner_id}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "role": 1})
+            if partner:
+                conversations[partner_id] = {
+                    "user_id": partner_id,
+                    "name": partner.get("name", "Unknown"),
+                    "email": partner.get("email", ""),
+                    "role": partner.get("role", "user"),
+                    "last_message": msg.get("content", "")[:50],
+                    "last_message_at": msg.get("created_at"),
+                    "unread_count": 0
+                }
+        
+        # Count unread messages
+        if msg["recipient_id"] == user_id and not msg.get("read"):
+            if partner_id in conversations:
+                conversations[partner_id]["unread_count"] += 1
+    
+    return list(conversations.values())
+
+
+@api_router.get("/messages/conversation/{recipient_id}")
+async def get_conversation_messages(
+    recipient_id: str,
+    limit: int = 100,
+    user: dict = Depends(get_current_user)
+):
+    """Get messages between current user and recipient"""
+    user_id = user["user_id"]
+    
+    messages = await db.user_messages.find({
+        "$or": [
+            {"sender_id": user_id, "recipient_id": recipient_id},
+            {"sender_id": recipient_id, "recipient_id": user_id}
+        ]
+    }, {"_id": 0}).sort("created_at", 1).to_list(limit)
+    
+    return messages
+
+
+@api_router.post("/messages/send")
+async def send_user_message(
+    request: Request,
+    data: dict = Body(...),
+    user: dict = Depends(get_current_user)
+):
+    """Send a message to another user"""
+    now = datetime.now(timezone.utc)
+    
+    recipient_id = data.get("recipient_id")
+    if not recipient_id:
+        raise HTTPException(status_code=400, detail="Recipient ID is required")
+    
+    # Verify recipient exists
+    recipient = await db.users.find_one({"user_id": recipient_id})
+    if not recipient:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+    
+    message_id = f"msg_{uuid.uuid4().hex[:12]}"
+    
+    message_doc = {
+        "message_id": message_id,
+        "sender_id": user["user_id"],
+        "sender_name": user["name"],
+        "recipient_id": recipient_id,
+        "recipient_name": recipient.get("name", "Unknown"),
+        "content": data.get("content", ""),
+        "read": False,
+        "created_at": now.isoformat()
+    }
+    
+    await db.user_messages.insert_one(message_doc)
+    
+    return {"message": "Message sent", "message_id": message_id}
+
+
+@api_router.put("/messages/mark-read/{recipient_id}")
+async def mark_conversation_read(
+    recipient_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """Mark all messages from a sender as read"""
+    await db.user_messages.update_many(
+        {"sender_id": recipient_id, "recipient_id": user["user_id"], "read": False},
+        {"$set": {"read": True}}
+    )
+    return {"message": "Messages marked as read"}
+
+
+@api_router.get("/messages")
+async def get_messages(
+    limit: int = 100,
+    context_type: Optional[str] = None,
+    user: dict = Depends(get_current_user)
+):
+    """Get internal messages (legacy endpoint)"""
+    query = {}
+    if context_type:
+        query["context.type"] = context_type
+    
+    messages = await db.internal_messages.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return messages
+
+
+@api_router.post("/messages")
+async def send_message(
+    request: Request,
+    data: dict = Body(...),
+    user: dict = Depends(get_current_user)
+):
+    """Send an internal message (legacy endpoint)"""
+    now = datetime.now(timezone.utc)
+    
+    message_id = f"msg_{uuid.uuid4().hex[:12]}"
+    
+    message_doc = {
+        "message_id": message_id,
+        "content": data.get("content", ""),
+        "context": data.get("context"),
+        "sender_id": user["user_id"],
+        "sender_name": user["name"],
+        "created_at": now.isoformat(),
+        "read_by": []
+    }
+    
+    await db.internal_messages.insert_one(message_doc)
+    
+    return {"message": "Message sent", "message_id": message_id}
+
+
+@api_router.put("/messages/{message_id}/read")
+async def mark_message_read(
+    message_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """Mark a message as read"""
+    await db.internal_messages.update_one(
+        {"message_id": message_id},
+        {"$addToSet": {"read_by": user["user_id"]}}
+    )
+    return {"message": "Message marked as read"}
+
+
 # ============== ENHANCED RECONCILIATION FEATURES ==============
 
 # Daily Reconciliation Dashboard
@@ -11537,7 +12058,6 @@ async def generate_daily_report_html():
                     </div>
                 </div>
                 
-                {await generate_reconciliation_section_html()}
             </div>
             
             <div class="footer">
@@ -12505,6 +13025,30 @@ async def startup_db_indexes():
             ("amount", 1),
             ("created_at", -1)
         ])
+        # Index for common transaction queries
+        await db.transactions.create_index([("created_at", -1)])
+        await db.transactions.create_index([("status", 1), ("created_at", -1)])
+        await db.transactions.create_index([("vendor_id", 1), ("status", 1)])
+        await db.transactions.create_index([("destination_account_id", 1), ("status", 1)])
+        
+        # Vendor indexes
+        await db.vendors.create_index("vendor_id", unique=True, sparse=True)
+        await db.vendors.create_index([("status", 1)])
+        await db.vendors.create_index([("vendor_name", "text")])
+        
+        # Income/Expense indexes
+        await db.income_expense_entries.create_index([("created_at", -1)])
+        await db.income_expense_entries.create_index([("entry_type", 1), ("created_at", -1)])
+        await db.income_expense_entries.create_index([("vendor_id", 1), ("status", 1)])
+        
+        # Treasury transaction indexes
+        await db.treasury_transactions.create_index([("account_id", 1), ("created_at", -1)])
+        await db.treasury_transactions.create_index([("transaction_id", 1)])
+        
+        # Client indexes
+        await db.clients.create_index("client_id", unique=True, sparse=True)
+        await db.clients.create_index([("first_name", "text"), ("last_name", "text"), ("email", "text")])
+        
         # Index for roles
         await db.roles.create_index("role_id", unique=True, sparse=True)
         await db.roles.create_index("name", unique=True, sparse=True)
