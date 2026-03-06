@@ -5319,21 +5319,19 @@ async def get_transactions(
     client_id: Optional[str] = None,
     transaction_type: Optional[str] = None,
     status: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = 25,
     limit: int = 100
 ):
+    """Get transactions with pagination and filtering"""
     # Use page_size if provided, otherwise fall back to limit for backwards compatibility
     actual_limit = min(page_size, limit, 100)  # Cap at 100 for performance
     skip = (page - 1) * actual_limit
     
-    # Try cache first
-    cache_key = get_cache_key("transactions:list", page=page, page_size=actual_limit, 
-                              client_id=client_id, transaction_type=transaction_type, status=status)
-    cached = get_cached(cache_key)
-    if cached:
-        return cached
-    
+    # Build query
     query = {}
     if client_id:
         query["client_id"] = client_id
@@ -5341,6 +5339,31 @@ async def get_transactions(
         query["transaction_type"] = transaction_type
     if status:
         query["status"] = status
+    if date_from:
+        query["created_at"] = {"$gte": date_from}
+    if date_to:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = date_to + "T23:59:59"
+        else:
+            query["created_at"] = {"$lte": date_to + "T23:59:59"}
+    if search:
+        query["$or"] = [
+            {"reference": {"$regex": search, "$options": "i"}},
+            {"client_name": {"$regex": search, "$options": "i"}},
+            {"transaction_id": {"$regex": search, "$options": "i"}}
+        ]
+    
+    # Try cache first
+    cache_key = get_cache_key("transactions:list", page=page, page_size=actual_limit, 
+                              client_id=client_id, transaction_type=transaction_type, status=status,
+                              search=search, date_from=date_from, date_to=date_to)
+    cached = get_cached(cache_key)
+    if cached:
+        return cached
+    
+    # Get total count for pagination
+    total = await db.transactions.count_documents(query)
+    total_pages = (total + actual_limit - 1) // actual_limit
     
     transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(actual_limit).to_list(actual_limit)
     
@@ -5354,10 +5377,18 @@ async def get_transactions(
     for tx in transactions:
         tx["client_email"] = clients_map.get(tx.get("client_id"), "")
     
-    # Cache the result
-    set_cached(cache_key, transactions, CACHE_TTL.get('transactions', 30))
+    result = {
+        "items": transactions,
+        "total": total,
+        "page": page,
+        "page_size": actual_limit,
+        "total_pages": total_pages
+    }
     
-    return transactions
+    # Cache the result
+    set_cached(cache_key, result, CACHE_TTL.get('transactions', 30))
+    
+    return result
 
 @api_router.get("/transactions/pending")
 async def get_pending_transactions(user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.VIEW))):
@@ -5754,10 +5785,18 @@ async def approve_transaction(
             tx_currency = tx.get("currency", "USD")
             withdrawal_amount = tx["amount"]
             
-            # Convert if currencies are different
-            if tx_currency == "USD" and source_currency != "USD":
-                # Convert from USD to source account currency
-                withdrawal_amount = convert_from_usd(tx["amount"], source_currency)
+            # PRIORITY: Use manual base_amount if source currency matches base_currency
+            # This ensures the treasury uses the same amount the user entered (e.g., 10,000 AED)
+            if tx.get("base_currency") == source_currency and tx.get("base_amount"):
+                # Use the original base_amount from the transaction (manual entry)
+                withdrawal_amount = tx["base_amount"]
+            # Convert if currencies are different and no matching base_amount
+            elif tx_currency == "USD" and source_currency != "USD":
+                # Convert from USD to source account currency using manual exchange rate if available
+                if tx.get("exchange_rate") and tx.get("base_amount") and tx.get("base_currency") == source_currency:
+                    withdrawal_amount = tx["base_amount"]
+                else:
+                    withdrawal_amount = convert_from_usd(tx["amount"], source_currency)
             elif tx_currency != "USD" and source_currency == "USD":
                 # Convert from transaction currency to USD
                 withdrawal_amount = convert_to_usd(tx["amount"], tx_currency)
@@ -5782,15 +5821,21 @@ async def approve_transaction(
             
             # Record treasury transaction
             treasury_tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+            # Determine original amount/currency - use base_amount if available (manual entry)
+            original_amt = tx.get("base_amount") if tx.get("base_amount") else tx["amount"]
+            original_curr = tx.get("base_currency") if tx.get("base_currency") else tx_currency
+            # Use manual exchange rate if provided, otherwise calculate
+            manual_rate = tx.get("exchange_rate") if tx.get("exchange_rate") else (withdrawal_amount / tx["amount"] if tx["amount"] > 0 else 1)
+            
             treasury_tx_doc = {
                 "treasury_transaction_id": treasury_tx_id,
                 "account_id": source_account_id,
                 "transaction_type": "withdrawal",
                 "amount": -withdrawal_amount,
                 "currency": source_currency,
-                "original_amount": tx["amount"],
-                "original_currency": tx_currency,
-                "exchange_rate": withdrawal_amount / tx["amount"] if tx["amount"] > 0 else 1,
+                "original_amount": original_amt,
+                "original_currency": original_curr,
+                "exchange_rate": manual_rate,
                 "reference": f"Withdrawal: {tx.get('client_name', 'Client')} - {tx.get('reference', '')}",
                 "transaction_id": transaction_id,
                 "client_id": tx.get("client_id"),
@@ -10049,7 +10094,9 @@ async def get_reconciliation_summary(user: dict = Depends(require_permission(Mod
 
 @api_router.get("/reconciliation/dates-with-transactions")
 async def get_dates_with_transactions(user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW))):
-    """Get all dates that have transactions for calendar display"""
+    """Get all dates that have transactions for calendar display.
+    Returns status breakdown by type (treasury, psp, exchanger) for each date.
+    """
     from datetime import datetime, timezone, timedelta
     
     # Get dates with transactions in the last 90 days
@@ -10064,25 +10111,47 @@ async def get_dates_with_transactions(user: dict = Depends(require_permission(Mo
     
     tx_dates = await db.transactions.aggregate(tx_dates_pipeline).to_list(100)
     
-    # Get reconciliation status for each date
+    # Get reconciliation records with account_type
     recon_records = await db.reconciliations.find(
         {"date": {"$gte": ninety_days_ago[:10]}},
-        {"_id": 0, "date": 1, "status": 1}
+        {"_id": 0, "date": 1, "status": 1, "account_type": 1}
     ).to_list(1000)
     
+    # Build status map with type breakdown
     status_map = {}
     for rec in recon_records:
         date = rec.get("date")
-        if date:
-            # If any are flagged, show flagged; else if any pending, show pending; else completed
-            current = status_map.get(date)
-            new_status = rec.get("status", "pending")
-            if current == "flagged" or new_status == "flagged":
-                status_map[date] = "flagged"
-            elif current == "pending" or new_status == "pending":
-                status_map[date] = "pending"
-            elif current is None:
-                status_map[date] = new_status
+        if not date:
+            continue
+            
+        if date not in status_map:
+            status_map[date] = {
+                "byType": {},
+                "overall": None
+            }
+        
+        account_type = rec.get("account_type", "").lower()
+        rec_status = rec.get("status", "pending")
+        
+        # Set status for this type
+        if account_type in ["treasury", "psp", "exchanger"]:
+            # If already exists, keep the worst status (flagged > pending > completed)
+            existing = status_map[date]["byType"].get(account_type)
+            if existing == "flagged" or rec_status == "flagged":
+                status_map[date]["byType"][account_type] = "flagged"
+            elif existing == "pending" or rec_status == "pending":
+                status_map[date]["byType"][account_type] = "pending"
+            else:
+                status_map[date]["byType"][account_type] = "completed"
+        
+        # Determine overall status (worst case: flagged > pending > completed)
+        current_overall = status_map[date]["overall"]
+        if rec_status == "flagged" or current_overall == "flagged":
+            status_map[date]["overall"] = "flagged"
+        elif rec_status == "pending" or current_overall == "pending":
+            status_map[date]["overall"] = "pending"
+        elif rec_status == "completed" and current_overall is None:
+            status_map[date]["overall"] = "completed"
     
     dates = [d["_id"] for d in tx_dates if d["_id"]]
     
@@ -10216,112 +10285,113 @@ async def upload_statement_for_reconciliation(
     account_type: str = Form(...),
     account_id: str = Form(...),
     date: str = Form(...),
+    statement_type: str = Form(default="auto"),  # auto, bank, or psp
     user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.CREATE))
 ):
-    """Upload and parse a statement file for reconciliation"""
-    import pdfplumber
+    """Upload and parse a statement file for reconciliation.
+    Supports:
+    - Banks: Emirates NBD, ADCB, FAB, Mashreq, RAK Bank, DIB, CBD, and more
+    - PSPs: PayTabs, Telr, Network International, Stripe, PayPal, and more
+    """
+    from bank_parsers import (
+        parse_bank_statement_pdf, 
+        parse_bank_statement_csv, 
+        parse_bank_statement_excel,
+        parse_psp_statement_pdf,
+        parse_psp_statement_csv,
+        detect_statement_type,
+        SUPPORTED_BANKS,
+        SUPPORTED_PSPS
+    )
     
     content = await file.read()
-    filename = file.filename.lower()
+    filename = file.filename.lower() if file.filename else ""
     
     parsed_entries = []
-    entry_id = 0
+    detected_source = "unknown"
+    source_type = "unknown"
     
     try:
+        # Auto-detect statement type if not specified
+        if statement_type == "auto":
+            # Try to detect from filename first
+            if filename.endswith('.pdf'):
+                # Need to read content for detection
+                try:
+                    from pdf2image import convert_from_bytes
+                    import pytesseract
+                    images = convert_from_bytes(content, dpi=100, first_page=1, last_page=1)
+                    sample_text = pytesseract.image_to_string(images[0]) if images else ""
+                    detected_type, detected_name = detect_statement_type(sample_text, filename)
+                    statement_type = detected_type if detected_type != "unknown" else "bank"
+                except:
+                    statement_type = "bank"  # Default to bank
+            else:
+                statement_type = "bank"  # Default for non-PDF
+        
         if filename.endswith('.csv'):
             decoded = content.decode('utf-8')
-            reader = csv.DictReader(io.StringIO(decoded))
-            for row in reader:
-                entry_id += 1
-                # Try to extract common fields
-                entry = {
-                    "id": f"stmt_{entry_id}",
-                    "date": row.get("Date") or row.get("date") or row.get("Transaction Date") or date,
-                    "description": row.get("Description") or row.get("description") or row.get("Narration") or row.get("Particulars") or "",
-                    "reference": row.get("Reference") or row.get("reference") or row.get("Ref") or "",
-                    "amount": float(row.get("Amount") or row.get("amount") or row.get("Credit") or row.get("Debit") or 0)
-                }
-                # Handle credit/debit columns
-                if "Credit" in row and "Debit" in row:
-                    credit = float(row.get("Credit") or 0) if row.get("Credit") else 0
-                    debit = float(row.get("Debit") or 0) if row.get("Debit") else 0
-                    entry["amount"] = credit - debit
-                parsed_entries.append(entry)
+            if statement_type == "psp":
+                parsed_entries, detected_source = parse_psp_statement_csv(decoded, filename)
+                source_type = "psp"
+            else:
+                parsed_entries, detected_source = parse_bank_statement_csv(decoded, filename)
+                source_type = "bank"
                 
         elif filename.endswith(('.xlsx', '.xls')):
-            wb = load_workbook(filename=io.BytesIO(content), read_only=True)
-            ws = wb.active
-            headers = [str(cell.value).lower() if cell.value else "" for cell in ws[1]]
-            
-            # Find column indices
-            date_col = next((i for i, h in enumerate(headers) if "date" in h), 0)
-            desc_col = next((i for i, h in enumerate(headers) if any(x in h for x in ["description", "narration", "particulars"])), 1)
-            ref_col = next((i for i, h in enumerate(headers) if "ref" in h), -1)
-            amount_col = next((i for i, h in enumerate(headers) if "amount" in h), 2)
-            credit_col = next((i for i, h in enumerate(headers) if "credit" in h), -1)
-            debit_col = next((i for i, h in enumerate(headers) if "debit" in h), -1)
-            
-            for row in ws.iter_rows(min_row=2, values_only=True):
-                if not any(row):
-                    continue
-                entry_id += 1
-                
-                amount = 0
-                if credit_col >= 0 and debit_col >= 0:
-                    credit = float(row[credit_col] or 0) if credit_col < len(row) else 0
-                    debit = float(row[debit_col] or 0) if debit_col < len(row) else 0
-                    amount = credit - debit
-                elif amount_col < len(row):
-                    amount = float(row[amount_col] or 0)
-                
-                entry = {
-                    "id": f"stmt_{entry_id}",
-                    "date": str(row[date_col]) if date_col < len(row) and row[date_col] else date,
-                    "description": str(row[desc_col]) if desc_col < len(row) and row[desc_col] else "",
-                    "reference": str(row[ref_col]) if ref_col >= 0 and ref_col < len(row) and row[ref_col] else "",
-                    "amount": amount
-                }
-                parsed_entries.append(entry)
+            parsed_entries, detected_source = parse_bank_statement_excel(content, filename)
+            source_type = "bank"
                 
         elif filename.endswith('.pdf'):
-            with pdfplumber.open(io.BytesIO(content)) as pdf:
-                for page in pdf.pages:
-                    tables = page.extract_tables()
-                    for table in tables:
-                        if table and len(table) > 1:
-                            headers = [str(h).lower() if h else "" for h in table[0]]
-                            date_col = next((i for i, h in enumerate(headers) if "date" in h), 0)
-                            desc_col = next((i for i, h in enumerate(headers) if any(x in h for x in ["description", "narration"])), 1)
-                            amount_col = next((i for i, h in enumerate(headers) if "amount" in h), -1)
-                            
-                            for row in table[1:]:
-                                if not any(row):
-                                    continue
-                                entry_id += 1
-                                
-                                amount = 0
-                                if amount_col >= 0 and amount_col < len(row):
-                                    try:
-                                        amount = float(str(row[amount_col]).replace(",", "").replace("$", ""))
-                                    except:
-                                        pass
-                                
-                                entry = {
-                                    "id": f"stmt_{entry_id}",
-                                    "date": str(row[date_col]) if date_col < len(row) and row[date_col] else date,
-                                    "description": str(row[desc_col]) if desc_col < len(row) and row[desc_col] else "",
-                                    "reference": "",
-                                    "amount": amount
-                                }
-                                parsed_entries.append(entry)
+            if statement_type == "psp":
+                parsed_entries, detected_source = parse_psp_statement_pdf(content, filename, date)
+                source_type = "psp"
+            else:
+                parsed_entries, detected_source = parse_bank_statement_pdf(content, filename, date)
+                source_type = "bank"
+            
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV, XLSX, or PDF.")
             
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Statement parse error: {e}")
         raise HTTPException(status_code=400, detail=f"Failed to parse statement: {str(e)}")
     
-    return {"entries": parsed_entries, "count": len(parsed_entries)}
+    return {
+        "entries": parsed_entries, 
+        "count": len(parsed_entries),
+        "detected_source": detected_source,
+        "source_type": source_type,
+        "supported_banks": [b["name"] for b in SUPPORTED_BANKS],
+        "supported_psps": [p["name"] for p in SUPPORTED_PSPS]
+    }
+
+
+@api_router.get("/reconciliation/supported-banks")
+async def get_supported_banks(user: dict = Depends(get_current_user)):
+    """Get list of supported bank statement formats"""
+    from bank_parsers import SUPPORTED_BANKS
+    return {"banks": SUPPORTED_BANKS}
+
+
+@api_router.get("/reconciliation/supported-psps")
+async def get_supported_psps(user: dict = Depends(get_current_user)):
+    """Get list of supported PSP statement formats"""
+    from bank_parsers import SUPPORTED_PSPS
+    return {"psps": SUPPORTED_PSPS}
+
+
+@api_router.get("/reconciliation/supported-sources")
+async def get_supported_sources(user: dict = Depends(get_current_user)):
+    """Get all supported statement sources (banks and PSPs)"""
+    from bank_parsers import SUPPORTED_BANKS, SUPPORTED_PSPS
+    return {
+        "banks": SUPPORTED_BANKS,
+        "psps": SUPPORTED_PSPS,
+        "total_count": len(SUPPORTED_BANKS) + len(SUPPORTED_PSPS)
+    }
 
 
 @api_router.post("/reconciliation/submit")
@@ -10380,7 +10450,86 @@ async def get_calendar_reconciliation_history(
     return records
 
 
+@api_router.get("/reconciliation/calendar-status")
+async def get_calendar_status(
+    month: str = None,  # Format: YYYY-MM
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW))
+):
+    """Get reconciliation status by date and type for calendar view.
+    Returns status breakdown by type (treasury, psp, exchanger) for each date.
+    """
+    from datetime import datetime, timedelta
+    from calendar import monthrange
+    
+    # Default to current month if not specified
+    if month:
+        year, month_num = map(int, month.split('-'))
+    else:
+        now = datetime.now()
+        year, month_num = now.year, now.month
+    
+    # Get date range for the month
+    _, last_day = monthrange(year, month_num)
+    start_date = f"{year}-{month_num:02d}-01"
+    end_date = f"{year}-{month_num:02d}-{last_day:02d}"
+    
+    # Query reconciliations for this month
+    reconciliations = await db.reconciliations.find({
+        "date": {"$gte": start_date, "$lte": end_date}
+    }, {"_id": 0}).to_list(1000)
+    
+    # Build status by date and type
+    status_by_date = {}
+    
+    for recon in reconciliations:
+        date = recon.get("date")
+        account_type = recon.get("account_type", "").lower()
+        recon_status = recon.get("status", "pending")
+        
+        if not date:
+            continue
+        
+        if date not in status_by_date:
+            status_by_date[date] = {
+                "byType": {},
+                "overall": None
+            }
+        
+        # Set status for this type
+        if account_type in ["treasury", "psp", "exchanger"]:
+            status_by_date[date]["byType"][account_type] = recon_status
+        
+        # Determine overall status (worst case: flagged > pending > completed)
+        current_overall = status_by_date[date]["overall"]
+        if recon_status == "flagged" or current_overall == "flagged":
+            status_by_date[date]["overall"] = "flagged"
+        elif recon_status == "pending" or current_overall == "pending":
+            status_by_date[date]["overall"] = "pending"
+        elif recon_status == "completed":
+            if current_overall is None:
+                status_by_date[date]["overall"] = "completed"
+    
+    return {
+        "month": f"{year}-{month_num:02d}",
+        "status": status_by_date
+    }
+
+
 # ============== INTERNAL MESSAGING SYSTEM ==============
+
+@api_router.get("/messages/unread-count")
+async def get_unread_messages_count(user: dict = Depends(get_current_user)):
+    """Get total count of unread messages for the current user"""
+    user_id = user["user_id"]
+    
+    # Count unread messages where user is the recipient
+    unread_count = await db.user_messages.count_documents({
+        "recipient_id": user_id,
+        "read": {"$ne": True}
+    })
+    
+    return {"count": unread_count}
+
 
 @api_router.get("/messages/conversations")
 async def get_conversations(user: dict = Depends(get_current_user)):
@@ -10538,6 +10687,94 @@ async def mark_message_read(
         {"$addToSet": {"read_by": user["user_id"]}}
     )
     return {"message": "Message marked as read"}
+
+
+# Admin: View all conversations in the system
+@api_router.get("/messages/admin/all-conversations")
+async def get_all_conversations_admin(user: dict = Depends(get_current_user)):
+    """Get all conversations in the system (admin only)"""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Aggregate all unique conversation pairs
+    pipeline = [
+        {
+            "$group": {
+                "_id": {
+                    "pair": {
+                        "$cond": [
+                            {"$lt": ["$sender_id", "$recipient_id"]},
+                            ["$sender_id", "$recipient_id"],
+                            ["$recipient_id", "$sender_id"]
+                        ]
+                    }
+                },
+                "message_count": {"$sum": 1},
+                "last_message_at": {"$max": "$created_at"},
+                "first_message_at": {"$min": "$created_at"}
+            }
+        },
+        {"$sort": {"last_message_at": -1}}
+    ]
+    
+    conversations = await db.user_messages.aggregate(pipeline).to_list(100)
+    
+    # Get user details for each conversation
+    result = []
+    for conv in conversations:
+        pair = conv["_id"]["pair"]
+        if len(pair) != 2:
+            continue
+            
+        user1_id, user2_id = pair
+        
+        # Fetch user names
+        user1 = await db.users.find_one({"user_id": user1_id}, {"_id": 0, "name": 1, "email": 1})
+        user2 = await db.users.find_one({"user_id": user2_id}, {"_id": 0, "name": 1, "email": 1})
+        
+        result.append({
+            "user1_id": user1_id,
+            "user1_name": user1.get("name") if user1 else "Unknown",
+            "user1_email": user1.get("email") if user1 else "",
+            "user2_id": user2_id,
+            "user2_name": user2.get("name") if user2 else "Unknown",
+            "user2_email": user2.get("email") if user2 else "",
+            "message_count": conv["message_count"],
+            "last_message_at": conv["last_message_at"],
+            "first_message_at": conv["first_message_at"]
+        })
+    
+    return result
+
+
+@api_router.get("/messages/admin/conversation/{user1_id}/{user2_id}")
+async def get_conversation_messages_admin(
+    user1_id: str,
+    user2_id: str,
+    user: dict = Depends(get_current_user)
+):
+    """Get all messages between two users (admin only)"""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Fetch messages between the two users
+    messages = await db.user_messages.find({
+        "$or": [
+            {"sender_id": user1_id, "recipient_id": user2_id},
+            {"sender_id": user2_id, "recipient_id": user1_id}
+        ]
+    }, {"_id": 0}).sort("created_at", 1).to_list(500)
+    
+    # Add sender names
+    user_cache = {}
+    for msg in messages:
+        sender_id = msg.get("sender_id")
+        if sender_id not in user_cache:
+            sender = await db.users.find_one({"user_id": sender_id}, {"_id": 0, "name": 1})
+            user_cache[sender_id] = sender.get("name") if sender else "Unknown"
+        msg["sender_name"] = user_cache[sender_id]
+    
+    return messages
 
 
 # ============== ENHANCED RECONCILIATION FEATURES ==============
@@ -10927,29 +11164,211 @@ async def create_adjustment(
 # Get Reconciliation History / Audit Trail
 @api_router.get("/reconciliation/history")
 async def get_reconciliation_history(
-    start_date: str = None,
-    end_date: str = None,
-    action_type: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    account_type: str = None,
+    account_id: str = None,
+    status: str = None,
+    has_matched: str = None,
+    has_flagged: str = None,
     limit: int = 100,
     user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW))
 ):
-    """Get reconciliation audit trail"""
-    from datetime import datetime, timezone, timedelta
-    
+    """Get reconciliation submissions history with filters"""
     query = {}
     
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_date:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
+    if date_from:
+        query["date"] = {"$gte": date_from}
+    if date_to:
+        if "date" in query:
+            query["date"]["$lte"] = date_to
         else:
-            query["created_at"] = {"$lte": end_date}
-    if action_type:
-        query["action"] = action_type
+            query["date"] = {"$lte": date_to}
+    if account_type:
+        query["account_type"] = account_type
+    if account_id:
+        query["account_id"] = account_id
+    if status:
+        query["status"] = status
+    if has_matched == "true":
+        query["matched_count"] = {"$gt": 0}
+    elif has_matched == "false":
+        query["$or"] = [{"matched_count": 0}, {"matched_count": {"$exists": False}}]
+    if has_flagged == "true":
+        query["flagged_count"] = {"$gt": 0}
+    elif has_flagged == "false":
+        query["$or"] = [{"flagged_count": 0}, {"flagged_count": {"$exists": False}}]
     
-    history = await db.reconciliation_history.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    history = await db.reconciliations.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
     return history
+
+
+@api_router.get("/reconciliation/history/export")
+async def export_reconciliation_history(
+    format: str = "xlsx",
+    date_from: str = None,
+    date_to: str = None,
+    account_type: str = None,
+    account_id: str = None,
+    status: str = None,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.EXPORT))
+):
+    """Export reconciliation history to PDF or Excel"""
+    from io import BytesIO
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    
+    # Build query
+    query = {}
+    if date_from:
+        query["date"] = {"$gte": date_from}
+    if date_to:
+        if "date" in query:
+            query["date"]["$lte"] = date_to
+        else:
+            query["date"] = {"$lte": date_to}
+    if account_type:
+        query["account_type"] = account_type
+    if account_id:
+        query["account_id"] = account_id
+    if status:
+        query["status"] = status
+    
+    # Fetch data
+    history = await db.reconciliations.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
+    if format == "pdf":
+        # Generate PDF
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), topMargin=30, bottomMargin=30)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            spaceAfter=20,
+            alignment=1  # Center
+        )
+        elements.append(Paragraph("Reconciliation History Report", title_style))
+        
+        # Subtitle with filters
+        filter_text = f"Generated on: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+        if date_from or date_to:
+            filter_text += f" | Period: {date_from or 'Start'} to {date_to or 'Now'}"
+        elements.append(Paragraph(filter_text, styles['Normal']))
+        elements.append(Spacer(1, 20))
+        
+        # Table data
+        table_data = [["Date", "Type", "Account ID", "Matched", "Flagged", "Status", "Created By", "Created At"]]
+        for item in history:
+            table_data.append([
+                item.get("date", ""),
+                item.get("account_type", "").title(),
+                item.get("account_id", "")[:15],
+                str(item.get("matched_count", 0)),
+                str(item.get("flagged_count", 0)),
+                item.get("status", "").title(),
+                item.get("created_by_name", ""),
+                item.get("created_at", "")[:16]
+            ])
+        
+        # Create table
+        table = Table(table_data, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a5f')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ]))
+        elements.append(table)
+        
+        # Summary
+        elements.append(Spacer(1, 20))
+        total = len(history)
+        completed = sum(1 for h in history if h.get("status") == "completed")
+        pending = sum(1 for h in history if h.get("status") == "pending")
+        elements.append(Paragraph(f"Total Records: {total} | Completed: {completed} | Pending: {pending}", styles['Normal']))
+        
+        doc.build(elements)
+        buffer.seek(0)
+        
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=reconciliation_history_{datetime.now().strftime('%Y%m%d')}.pdf"}
+        )
+    
+    else:  # Excel
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Reconciliation History"
+        
+        # Header style
+        header_fill = PatternFill(start_color="1e3a5f", end_color="1e3a5f", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Headers
+        headers = ["Date", "Type", "Account ID", "Matched", "Flagged", "Status", "Remarks", "Created By", "Created At"]
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+            cell.border = thin_border
+        
+        # Data
+        for row_num, item in enumerate(history, 2):
+            data = [
+                item.get("date", ""),
+                item.get("account_type", "").title(),
+                item.get("account_id", ""),
+                item.get("matched_count", 0),
+                item.get("flagged_count", 0),
+                item.get("status", "").title(),
+                item.get("remarks", ""),
+                item.get("created_by_name", ""),
+                item.get("created_at", "")[:19]
+            ]
+            for col, value in enumerate(data, 1):
+                cell = ws.cell(row=row_num, column=col, value=value)
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal='center' if col in [4, 5] else 'left')
+        
+        # Auto-width columns
+        for col in ws.columns:
+            max_length = max(len(str(cell.value or "")) for cell in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max_length + 2, 30)
+        
+        buffer = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=reconciliation_history_{datetime.now().strftime('%Y%m%d')}.xlsx"}
+        )
 
 
 # Get Flagged Items
@@ -12994,7 +13413,6 @@ async def get_impersonation_logs(
     ).sort("login_time", -1).to_list(limit)
     return logs
 
-
 # Include router
 app.include_router(api_router)
 
@@ -13011,6 +13429,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 @app.on_event("startup")
 async def startup_db_indexes():
