@@ -3963,7 +3963,6 @@ async def get_vendors(
     
     return response
 
-
 @api_router.get("/vendors/{vendor_id}")
 async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW))):
     vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
