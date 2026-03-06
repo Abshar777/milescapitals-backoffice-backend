@@ -1770,6 +1770,36 @@ async def delete_treasury_account(request: Request, account_id: str, user: dict 
 
     return {"message": "Treasury account deleted"}
 
+@api_router.get("/treasury/transactions")
+async def get_all_treasury_transactions(
+    limit: int = 500,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW))
+):
+    """Get all treasury transactions across all accounts"""
+    query = {}
+    
+    if start_date:
+        query["created_at"] = {"$gte": start_date}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = end_date
+        else:
+            query["created_at"] = {"$lte": end_date}
+    
+    # Get all treasury transactions
+    treasury_txs = await db.treasury_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    
+    # Adjust amounts for display - outflows should be negative
+    outflow_types = ["debt_payment", "withdrawal", "transfer_out", "expense"]
+    for ttx in treasury_txs:
+        if ttx.get("transaction_type") in outflow_types:
+            ttx["amount"] = -abs(ttx.get("amount", 0))
+    
+    return {"transactions": treasury_txs, "total": len(treasury_txs)}
+
+
 # Inter-Treasury Transfer
 class TreasuryTransferRequest(BaseModel):
     source_account_id: str
@@ -13413,6 +13443,8 @@ async def get_impersonation_logs(
     ).sort("login_time", -1).to_list(limit)
     return logs
 
+
+
 # Include router
 app.include_router(api_router)
 
@@ -13429,7 +13461,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 
 @app.on_event("startup")
