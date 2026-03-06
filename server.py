@@ -3875,10 +3875,10 @@ async def get_vendors(
             currency = tx.get("base_currency") or tx.get("currency", "USD")
             ensure_currency(currency)
             
-            base_amount = tx.get("base_amount") or tx.get("amount", 0) or 0
-            usd_amount = tx.get("amount", 0) or 0
-            commission_base = tx.get("vendor_commission_base_amount") or 0
-            commission_usd = tx.get("vendor_commission_amount") or 0
+            base_amount = tx.get("base_amount") or tx.get("amount", 0)
+            usd_amount = tx.get("amount", 0)
+            commission_base = tx.get("vendor_commission_base_amount", 0)
+            commission_usd = tx.get("vendor_commission_amount", 0)
             
             if tx.get("transaction_type") == "deposit":
                 currency_breakdown[currency]["deposits_base"] += base_amount
@@ -3896,10 +3896,10 @@ async def get_vendors(
             currency = ie.get("base_currency") or ie.get("currency", "USD")
             ensure_currency(currency)
             
-            base_amount = ie.get("base_amount") or ie.get("amount", 0) or 0
-            usd_amount = ie.get("amount_usd") or ie.get("amount", 0) or 0
-            commission_base = ie.get("vendor_commission_base_amount") or 0
-            commission_usd = ie.get("vendor_commission_amount") or 0
+            base_amount = ie.get("base_amount") or ie.get("amount", 0)
+            usd_amount = ie.get("amount_usd") or ie.get("amount", 0)
+            commission_base = ie.get("vendor_commission_base_amount", 0)
+            commission_usd = ie.get("vendor_commission_amount", 0)
             
             if ie.get("entry_type") == "income":
                 currency_breakdown[currency]["deposits_base"] += base_amount
@@ -3917,7 +3917,9 @@ async def get_vendors(
             currency = ltx.get("currency", "USD")
             ensure_currency(currency)
             
-            amount = ltx.get("amount", 0) or 0
+            amount = ltx.get("amount", 0)
+            commission_base = ltx.get("vendor_commission_base_amount", 0)
+            commission_amount = ltx.get("vendor_commission_amount", 0)
             
             if loan_entry["type"] == "in":  # Repayment TO vendor
                 currency_breakdown[currency]["deposits_base"] += amount
@@ -3925,6 +3927,10 @@ async def get_vendors(
             else:  # Disbursement FROM vendor
                 currency_breakdown[currency]["withdrawals_base"] += amount
                 currency_breakdown[currency]["withdrawals_usd"] += amount
+            
+            # Add loan commission
+            currency_breakdown[currency]["commission_base"] += commission_base
+            currency_breakdown[currency]["commission_usd"] += commission_amount
         
         # Build settlement by currency for list view
         settlement_by_currency = []
@@ -3957,8 +3963,6 @@ async def get_vendors(
     
     return response
 
-
-    
 @api_router.get("/vendors/{vendor_id}")
 async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW))):
     vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
@@ -4064,7 +4068,10 @@ async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Mod
             },
             "loan_out_count": {
                 "$sum": {"$cond": [{"$eq": ["$source_vendor_id", vendor_id]}, 1, 0]}
-            }
+            },
+            # Loan commission (in transaction currency)
+            "loan_commission_amount": {"$sum": {"$ifNull": ["$vendor_commission_amount", 0]}},
+            "loan_commission_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}}
         }}
     ]
     loan_tx_by_currency = await db.loan_transactions.aggregate(loan_tx_pipeline).to_list(100)
@@ -4156,6 +4163,9 @@ async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Mod
         currency_data[curr]["withdrawal_amount"] += loan_item["loan_out_amount"]
         currency_data[curr]["withdrawal_usd"] += loan_item["loan_out_amount"]  # Assuming USD for loans
         currency_data[curr]["withdrawal_count"] += loan_item["loan_out_count"]
+        # Add loan commission to total commission
+        currency_data[curr]["commission_usd"] += loan_item.get("loan_commission_amount", 0)
+        currency_data[curr]["commission_base"] += loan_item.get("loan_commission_base", 0)
     
     vendor["settlement_by_currency"] = [
         {
@@ -4396,7 +4406,10 @@ async def get_my_vendor_info(user: dict = Depends(require_vendor)):
             },
             "loan_out_count": {
                 "$sum": {"$cond": [{"$eq": ["$source_vendor_id", vendor["vendor_id"]]}, 1, 0]}
-            }
+            },
+            # Loan commission (in transaction currency)
+            "loan_commission_amount": {"$sum": {"$ifNull": ["$vendor_commission_amount", 0]}},
+            "loan_commission_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}}
         }}
     ]
     loan_tx_by_currency = await db.loan_transactions.aggregate(loan_tx_pipeline).to_list(100)
@@ -4487,6 +4500,9 @@ async def get_my_vendor_info(user: dict = Depends(require_vendor)):
         currency_data[curr]["withdrawal_amount"] += loan_item["loan_out_amount"]
         currency_data[curr]["withdrawal_usd"] += loan_item["loan_out_amount"]
         currency_data[curr]["withdrawal_count"] += loan_item["loan_out_count"]
+        # Add loan commission to total commission
+        currency_data[curr]["commission_usd"] += loan_item.get("loan_commission_amount", 0)
+        currency_data[curr]["commission_base"] += loan_item.get("loan_commission_base", 0)
     
     vendor["settlement_by_currency"] = [
         {
@@ -4736,13 +4752,12 @@ async def vendor_approve_transaction(request: Request, transaction_id: str, user
         else:
             commission_rate = vendor.get("withdrawal_commission", 0) / 100
     
-    # Calculate commission on the USD amount
-    commission_amount_usd = round(tx["amount"] * commission_rate, 2)
-    
-    # Calculate commission in base currency (original currency)
+    # Calculate commission in BASE/PAYMENT currency (original currency)
     base_amount = tx.get("base_amount") or tx["amount"]
     base_currency = tx.get("base_currency") or tx.get("currency", "USD")
     commission_amount_base = round(base_amount * commission_rate, 2)
+    # Calculate USD commission separately
+    commission_amount_usd = round(tx["amount"] * commission_rate, 2)
     
     updates = {
         "status": TransactionStatus.APPROVED,
@@ -4750,8 +4765,8 @@ async def vendor_approve_transaction(request: Request, transaction_id: str, user
         "processed_by_name": user["name"],
         "processed_at": now.isoformat(),
         "vendor_commission_rate": commission_rate * 100,  # Store as percentage
-        "vendor_commission_amount": commission_amount_usd,  # USD amount
-        "vendor_commission_base_amount": commission_amount_base,  # Base currency amount
+        "vendor_commission_amount": commission_amount_usd,  # USD commission amount
+        "vendor_commission_base_amount": commission_amount_base,  # Base currency commission amount
         "vendor_commission_base_currency": base_currency  # Base currency code
     }
     
@@ -5619,9 +5634,11 @@ async def create_transaction(
             else:
                 vendor_commission_rate = vendor_info.get("withdrawal_commission", 0)
         if vendor_commission_rate > 0:
-            vendor_commission_amount = round(usd_amount * vendor_commission_rate / 100, 2)
+            # Calculate commission in BASE currency (base_amount), not USD
             v_base = base_amount if (base_currency and base_currency != "USD" and base_amount) else usd_amount
             vendor_commission_base_amount = round(v_base * vendor_commission_rate / 100, 2)
+            # USD commission (separate)
+            vendor_commission_amount = round(usd_amount * vendor_commission_rate / 100, 2)
 
     tx_doc = {
         "transaction_id": tx_id,
@@ -6768,10 +6785,14 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
             else:
                 ie_commission_rate = vendor_info.get("withdrawal_commission", 0)
         if ie_commission_rate > 0:
+            # Commission calculated on BASE currency amount (the actual transaction currency)
+            # If base_amount exists, use it (actual INR amount), otherwise use amount
+            actual_tx_amount = entry_data.base_amount if entry_data.base_amount else entry_data.amount
+            actual_tx_currency = entry_data.base_currency if entry_data.base_currency else entry_data.currency
+            ie_commission_base_amount = round(actual_tx_amount * ie_commission_rate / 100, 2)
+            ie_commission_base_currency = actual_tx_currency
+            # USD commission (separate from base currency commission)
             ie_commission_amount = round(amount_usd * ie_commission_rate / 100, 2)
-            # Commission should be calculated on base_amount (payment currency like INR)
-            ie_base = entry_data.base_amount if entry_data.base_amount else entry_data.amount
-            ie_commission_base_amount = round(ie_base * ie_commission_rate / 100, 2)
 
     entry_doc = {
         "entry_id": entry_id,
@@ -6807,7 +6828,7 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
         "vendor_commission_rate": ie_commission_rate if ie_commission_rate > 0 else None,
         "vendor_commission_amount": ie_commission_amount if ie_commission_amount > 0 else None,
         "vendor_commission_base_amount": ie_commission_base_amount if ie_commission_base_amount > 0 else None,
-        "vendor_commission_base_currency": (entry_data.base_currency or entry_data.currency) if ie_commission_base_amount > 0 else None,
+        "vendor_commission_base_currency": ie_commission_base_currency if ie_commission_base_amount > 0 else None,
         "status": status,
         "converted_to_loan": False,
         "loan_id": None,
@@ -7133,9 +7154,11 @@ async def vendor_approve_ie(request: Request, entry_id: str, user: dict = Depend
             commission_rate = vendor.get("withdrawal_commission", 0) / 100
     
     amount = entry.get("amount", 0)
+    base_amount = entry.get("base_amount") or amount
+    base_currency = entry.get("base_currency") or entry.get("currency", "USD")
     amount_usd = entry.get("amount_usd") or convert_to_usd(amount, entry.get("currency", "USD"))
     commission_amount_usd = round(amount_usd * commission_rate, 2)
-    commission_amount_base = round(amount * commission_rate, 2)
+    commission_amount_base = round(base_amount * commission_rate, 2)
     
     # Update entry status with commission details
     await db.income_expenses.update_one(
@@ -7147,7 +7170,7 @@ async def vendor_approve_ie(request: Request, entry_id: str, user: dict = Depend
             "vendor_commission_rate": commission_rate * 100,
             "vendor_commission_amount": commission_amount_usd,
             "vendor_commission_base_amount": commission_amount_base,
-            "vendor_commission_base_currency": entry.get("currency", "USD"),
+            "vendor_commission_base_currency": base_currency,
             "amount_usd": amount_usd,
         }}
     )
@@ -7925,13 +7948,13 @@ async def create_loan(loan_data: LoanCreate, request: Request, user: dict = Depe
     
     if disburse_vendor:
         # Use withdrawal commission rate for disbursement (OUT)
-        vendor_commission_rate = disburse_vendor.get("withdrawal_commission_cash", disburse_vendor.get("withdrawal_commission", 0))
+        # Default to bank transfer commission rate
+        vendor_commission_rate = disburse_vendor.get("withdrawal_commission", 0)
         if vendor_commission_rate > 0:
-            # Calculate commission in base currency
-            vendor_commission_base_amount = round(loan_data.amount * vendor_commission_rate / 100, 2)
+            # Calculate commission in payment currency (loan_data.currency)
+            vendor_commission_amount = round(loan_data.amount * vendor_commission_rate / 100, 2)
+            vendor_commission_base_amount = vendor_commission_amount
             vendor_commission_base_currency = loan_data.currency
-            # Convert to USD
-            vendor_commission_amount = round(convert_to_usd(vendor_commission_base_amount, loan_data.currency), 2)
     
     # Record loan transaction - set pending_vendor status if disbursing from Exchanger
     tx_status = "pending_vendor" if loan_data.disburse_from_vendor_id else "completed"
@@ -8135,13 +8158,13 @@ async def record_loan_repayment(request: Request, loan_id: str, repayment: LoanR
     
     if credit_vendor:
         # Use deposit commission rate for repayment (IN)
-        vendor_commission_rate = credit_vendor.get("deposit_commission_cash", credit_vendor.get("deposit_commission", 0))
+        # Default to bank transfer commission rate
+        vendor_commission_rate = credit_vendor.get("deposit_commission", 0)
         if vendor_commission_rate > 0:
-            # Calculate commission in base currency
-            vendor_commission_base_amount = round(repayment.amount * vendor_commission_rate / 100, 2)
+            # Calculate commission in payment currency (repayment.currency)
+            vendor_commission_amount = round(repayment.amount * vendor_commission_rate / 100, 2)
+            vendor_commission_base_amount = vendor_commission_amount
             vendor_commission_base_currency = repayment.currency
-            # Convert to USD
-            vendor_commission_amount = round(convert_to_usd(vendor_commission_base_amount, repayment.currency), 2)
     
     # Record loan transaction - set pending_vendor status if crediting to Exchanger
     tx_status = "pending_vendor" if repayment.credit_to_vendor_id else "completed"
