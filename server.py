@@ -30,9 +30,19 @@ from cache import (
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
+# MongoDB connection with connection pooling and timeouts
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(
+    mongo_url,
+    maxPoolSize=50,
+    minPoolSize=10,
+    maxIdleTimeMS=30000,
+    serverSelectionTimeoutMS=5000,
+    connectTimeoutMS=10000,
+    socketTimeoutMS=30000,
+    retryWrites=True,
+    retryReads=True
+)
 db = client[os.environ['DB_NAME']]
 
 # JWT Configuration
@@ -1769,36 +1779,6 @@ async def delete_treasury_account(request: Request, account_id: str, user: dict 
     await log_activity(request, user, "delete", "treasury", "Deleted treasury account")
 
     return {"message": "Treasury account deleted"}
-
-@api_router.get("/treasury/transactions")
-async def get_all_treasury_transactions(
-    limit: int = 500,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW))
-):
-    """Get all treasury transactions across all accounts"""
-    query = {}
-    
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_date:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
-        else:
-            query["created_at"] = {"$lte": end_date}
-    
-    # Get all treasury transactions
-    treasury_txs = await db.treasury_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
-    
-    # Adjust amounts for display - outflows should be negative
-    outflow_types = ["debt_payment", "withdrawal", "transfer_out", "expense"]
-    for ttx in treasury_txs:
-        if ttx.get("transaction_type") in outflow_types:
-            ttx["amount"] = -abs(ttx.get("amount", 0))
-    
-    return {"transactions": treasury_txs, "total": len(treasury_txs)}
-
 
 # Inter-Treasury Transfer
 class TreasuryTransferRequest(BaseModel):
@@ -3802,16 +3782,16 @@ async def get_vendors(
     search: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW))
 ):
-    # Build query
-    query = {}
-    if search:
-        query["vendor_name"] = {"$regex": search, "$options": "i"}
-    
-    # Check cache for list
+    # Check cache first
     cache_key = get_cache_key("vendors:list", page=page, page_size=page_size, search=search)
     cached = get_cached(cache_key)
     if cached:
         return cached
+    
+    # Build query
+    query = {}
+    if search:
+        query["vendor_name"] = {"$regex": search, "$options": "i"}
     
     # Get paginated vendors
     skip = (page - 1) * page_size
@@ -6787,7 +6767,9 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
                 ie_commission_rate = vendor_info.get("withdrawal_commission", 0)
         if ie_commission_rate > 0:
             ie_commission_amount = round(amount_usd * ie_commission_rate / 100, 2)
-            ie_commission_base_amount = round(entry_data.amount * ie_commission_rate / 100, 2)
+            # Commission should be calculated on base_amount (payment currency like INR)
+            ie_base = entry_data.base_amount if entry_data.base_amount else entry_data.amount
+            ie_commission_base_amount = round(ie_base * ie_commission_rate / 100, 2)
 
     entry_doc = {
         "entry_id": entry_id,
@@ -6823,7 +6805,7 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
         "vendor_commission_rate": ie_commission_rate if ie_commission_rate > 0 else None,
         "vendor_commission_amount": ie_commission_amount if ie_commission_amount > 0 else None,
         "vendor_commission_base_amount": ie_commission_base_amount if ie_commission_base_amount > 0 else None,
-        "vendor_commission_base_currency": entry_data.currency if ie_commission_base_amount > 0 else None,
+        "vendor_commission_base_currency": (entry_data.base_currency or entry_data.currency) if ie_commission_base_amount > 0 else None,
         "status": status,
         "converted_to_loan": False,
         "loan_id": None,
@@ -7933,6 +7915,22 @@ async def create_loan(loan_data: LoanCreate, request: Request, user: dict = Depe
         # Disbursing from vendor - no I&E entry needed (loan tracking is separate from I&E)
         pass
     
+    # Calculate commission for vendor disbursement (OUT = withdrawal type)
+    vendor_commission_rate = 0.0
+    vendor_commission_amount = 0.0
+    vendor_commission_base_amount = 0.0
+    vendor_commission_base_currency = None
+    
+    if disburse_vendor:
+        # Use withdrawal commission rate for disbursement (OUT)
+        vendor_commission_rate = disburse_vendor.get("withdrawal_commission_cash", disburse_vendor.get("withdrawal_commission", 0))
+        if vendor_commission_rate > 0:
+            # Calculate commission in base currency
+            vendor_commission_base_amount = round(loan_data.amount * vendor_commission_rate / 100, 2)
+            vendor_commission_base_currency = loan_data.currency
+            # Convert to USD
+            vendor_commission_amount = round(convert_to_usd(vendor_commission_base_amount, loan_data.currency), 2)
+    
     # Record loan transaction - set pending_vendor status if disbursing from Exchanger
     tx_status = "pending_vendor" if loan_data.disburse_from_vendor_id else "completed"
     await db.loan_transactions.insert_one({
@@ -7948,6 +7946,10 @@ async def create_loan(loan_data: LoanCreate, request: Request, user: dict = Depe
         "borrower_name": loan_data.borrower_name,
         "status": tx_status,
         "description": f"Loan disbursement to {loan_data.borrower_name}",
+        "vendor_commission_rate": vendor_commission_rate if vendor_commission_rate > 0 else None,
+        "vendor_commission_amount": vendor_commission_amount if vendor_commission_amount > 0 else None,
+        "vendor_commission_base_amount": vendor_commission_base_amount if vendor_commission_base_amount > 0 else None,
+        "vendor_commission_base_currency": vendor_commission_base_currency,
         "created_at": now.isoformat(),
         "created_by": user["user_id"],
         "created_by_name": user["name"]
@@ -8123,6 +8125,22 @@ async def record_loan_repayment(request: Request, loan_id: str, repayment: LoanR
         # Crediting to vendor - no I&E entry needed (loan tracking is separate from I&E)
         pass
     
+    # Calculate commission for vendor repayment (IN = deposit type)
+    vendor_commission_rate = 0.0
+    vendor_commission_amount = 0.0
+    vendor_commission_base_amount = 0.0
+    vendor_commission_base_currency = None
+    
+    if credit_vendor:
+        # Use deposit commission rate for repayment (IN)
+        vendor_commission_rate = credit_vendor.get("deposit_commission_cash", credit_vendor.get("deposit_commission", 0))
+        if vendor_commission_rate > 0:
+            # Calculate commission in base currency
+            vendor_commission_base_amount = round(repayment.amount * vendor_commission_rate / 100, 2)
+            vendor_commission_base_currency = repayment.currency
+            # Convert to USD
+            vendor_commission_amount = round(convert_to_usd(vendor_commission_base_amount, repayment.currency), 2)
+    
     # Record loan transaction - set pending_vendor status if crediting to Exchanger
     tx_status = "pending_vendor" if repayment.credit_to_vendor_id else "completed"
     await db.loan_transactions.insert_one({
@@ -8137,6 +8155,10 @@ async def record_loan_repayment(request: Request, loan_id: str, repayment: LoanR
         "borrower_name": loan.get("borrower_name"),
         "status": tx_status,
         "description": f"Repayment from {loan['borrower_name']}",
+        "vendor_commission_rate": vendor_commission_rate if vendor_commission_rate > 0 else None,
+        "vendor_commission_amount": vendor_commission_amount if vendor_commission_amount > 0 else None,
+        "vendor_commission_base_amount": vendor_commission_base_amount if vendor_commission_base_amount > 0 else None,
+        "vendor_commission_base_currency": vendor_commission_base_currency,
         "created_at": now.isoformat(),
         "created_by": user["user_id"],
         "created_by_name": user["name"]
@@ -13461,7 +13483,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.on_event("startup")
 async def startup_db_indexes():
