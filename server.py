@@ -3786,7 +3786,6 @@ async def get_global_reserve_fund_summary(user: dict = Depends(require_permissio
         "total_released": round(total_released, 2),
         "due_for_release": round(due_for_release, 2),
     }
-
 # ============== VENDOR ROUTES ==============
 
 @api_router.get("/vendors")
@@ -3890,10 +3889,10 @@ async def get_vendors(
             currency = tx.get("base_currency") or tx.get("currency", "USD")
             ensure_currency(currency)
             
-            base_amount = tx.get("base_amount") or tx.get("amount", 0)
-            usd_amount = tx.get("amount", 0)
-            commission_base = tx.get("vendor_commission_base_amount", 0)
-            commission_usd = tx.get("vendor_commission_amount", 0)
+            base_amount = tx.get("base_amount") or tx.get("amount", 0) or 0
+            usd_amount = tx.get("amount", 0) or 0
+            commission_base = tx.get("vendor_commission_base_amount") or 0  # FIX: None -> 0
+            commission_usd = tx.get("vendor_commission_amount") or 0         # FIX: None -> 0
             
             if tx.get("transaction_type") == "deposit":
                 currency_breakdown[currency]["deposits_base"] += base_amount
@@ -3911,10 +3910,10 @@ async def get_vendors(
             currency = ie.get("base_currency") or ie.get("currency", "USD")
             ensure_currency(currency)
             
-            base_amount = ie.get("base_amount") or ie.get("amount", 0)
-            usd_amount = ie.get("amount_usd") or ie.get("amount", 0)
-            commission_base = ie.get("vendor_commission_base_amount", 0)
-            commission_usd = ie.get("vendor_commission_amount", 0)
+            base_amount = ie.get("base_amount") or ie.get("amount", 0) or 0
+            usd_amount = ie.get("amount_usd") or ie.get("amount", 0) or 0
+            commission_base = ie.get("vendor_commission_base_amount") or 0  # FIX: None -> 0
+            commission_usd = ie.get("vendor_commission_amount") or 0         # FIX: None -> 0
             
             if ie.get("entry_type") == "income":
                 currency_breakdown[currency]["deposits_base"] += base_amount
@@ -3932,9 +3931,9 @@ async def get_vendors(
             currency = ltx.get("currency", "USD")
             ensure_currency(currency)
             
-            amount = ltx.get("amount", 0)
-            commission_base = ltx.get("vendor_commission_base_amount", 0)
-            commission_amount = ltx.get("vendor_commission_amount", 0)
+            amount = ltx.get("amount", 0) or 0
+            commission_base = ltx.get("vendor_commission_base_amount") or 0  # FIX: None -> 0
+            commission_amount = ltx.get("vendor_commission_amount") or 0      # FIX: None -> 0
             
             if loan_entry["type"] == "in":  # Repayment TO vendor
                 currency_breakdown[currency]["deposits_base"] += amount
