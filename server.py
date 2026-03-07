@@ -1688,7 +1688,9 @@ async def get_treasury_history(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     transaction_type: Optional[str] = None,
-    limit: int = 100,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    limit: int = 5000,
     user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW))
 ):
     """Get transaction history for a treasury account"""
@@ -1771,7 +1773,19 @@ async def get_treasury_history(
     # Sort combined list by date
     treasury_txs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     
-    return treasury_txs[:limit]
+    # Paginate the combined result
+    total = len(treasury_txs)
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    skip = (page - 1) * page_size
+    paginated = treasury_txs[skip:skip + page_size]
+    
+    return {
+        "items": paginated,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages
+    }
 
 @api_router.delete("/treasury/{account_id}")
 async def delete_treasury_account(request: Request, account_id: str, user: dict = Depends(require_permission(Modules.TREASURY, Actions.DELETE))):
@@ -1984,17 +1998,14 @@ async def update_lp_account(request: Request, lp_id: str, lp_data: LPAccountUpda
     return await db.lp_accounts.find_one({"lp_id": lp_id}, {"_id": 0})
 
 @api_router.get("/lp/{lp_id}/transactions")
-async def get_lp_transactions(lp_id: str, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.VIEW)), limit: int = 100):
+async def get_lp_transactions(lp_id: str, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.VIEW)),
+                              page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200)):
     """Get transactions for a specific LP account"""
     account = await db.lp_accounts.find_one({"lp_id": lp_id}, {"_id": 0})
     if not account:
         raise HTTPException(status_code=404, detail="LP account not found")
     
-    transactions = await db.lp_transactions.find(
-        {"lp_id": lp_id}, {"_id": 0}
-    ).sort("created_at", -1).to_list(limit)
-    
-    return transactions
+    return await paginate_query(db.lp_transactions, {"lp_id": lp_id}, page, page_size)
 
 @api_router.post("/lp/{lp_id}/deposit")
 async def create_lp_deposit(request: Request, lp_id: str, tx_data: LPTransactionCreate, user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.CREATE))):
@@ -3832,7 +3843,8 @@ async def get_vendors(
             {"source_vendor_id": {"$in": vendor_ids}},
             {"credit_to_vendor_id": {"$in": vendor_ids}}
         ],
-        "status": "completed"
+        "status": "completed",
+        "settled": {"$ne": True}
     }, {"_id": 0}).to_list(10000)
     
     # Group transactions and IE entries by vendor_id
@@ -3878,10 +3890,10 @@ async def get_vendors(
             currency = tx.get("base_currency") or tx.get("currency", "USD")
             ensure_currency(currency)
             
-            base_amount = tx.get("base_amount") or tx.get("amount", 0) or 0
-            usd_amount = tx.get("amount", 0) or 0
-            commission_base = tx.get("vendor_commission_base_amount", 0) or 0
-            commission_usd = tx.get("vendor_commission_amount", 0) or 0
+            base_amount = tx.get("base_amount") or tx.get("amount", 0)
+            usd_amount = tx.get("amount", 0)
+            commission_base = tx.get("vendor_commission_base_amount", 0)
+            commission_usd = tx.get("vendor_commission_amount", 0)
             
             if tx.get("transaction_type") == "deposit":
                 currency_breakdown[currency]["deposits_base"] += base_amount
@@ -3899,10 +3911,10 @@ async def get_vendors(
             currency = ie.get("base_currency") or ie.get("currency", "USD")
             ensure_currency(currency)
             
-            base_amount = ie.get("base_amount") or ie.get("amount", 0) or 0
-            usd_amount = ie.get("amount_usd") or ie.get("amount", 0) or 0
-            commission_base = ie.get("vendor_commission_base_amount", 0) or 0
-            commission_usd = ie.get("vendor_commission_amount", 0) or 0
+            base_amount = ie.get("base_amount") or ie.get("amount", 0)
+            usd_amount = ie.get("amount_usd") or ie.get("amount", 0)
+            commission_base = ie.get("vendor_commission_base_amount", 0)
+            commission_usd = ie.get("vendor_commission_amount", 0)
             
             if ie.get("entry_type") == "income":
                 currency_breakdown[currency]["deposits_base"] += base_amount
@@ -3920,9 +3932,9 @@ async def get_vendors(
             currency = ltx.get("currency", "USD")
             ensure_currency(currency)
             
-            amount = ltx.get("amount", 0) or 0
-            commission_base = ltx.get("vendor_commission_base_amount", 0) or 0
-            commission_amount = ltx.get("vendor_commission_amount", 0) or 0
+            amount = ltx.get("amount", 0)
+            commission_base = ltx.get("vendor_commission_base_amount", 0)
+            commission_amount = ltx.get("vendor_commission_amount", 0)
             
             if loan_entry["type"] == "in":  # Repayment TO vendor
                 currency_breakdown[currency]["deposits_base"] += amount
@@ -3965,7 +3977,6 @@ async def get_vendors(
     set_cached(cache_key, response, CACHE_TTL['vendors_list'])
     
     return response
-
 
 @api_router.get("/vendors/{vendor_id}")
 async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW))):
@@ -4043,7 +4054,8 @@ async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Mod
                 {"source_vendor_id": vendor_id},  # Disbursements from this vendor
                 {"credit_to_vendor_id": vendor_id}  # Repayments to this vendor
             ],
-            "status": "completed"
+            "status": "completed",
+            "settled": {"$ne": True}
         }},
         {"$group": {
             "_id": "$currency",
@@ -4123,66 +4135,90 @@ async def get_vendor(vendor_id: str, user: dict = Depends(require_permission(Mod
     for item in settlement_by_currency:
         curr = item["_id"] or "USD"
         currency_data[curr] = {
-            "deposit_amount": item["deposit_amount"],
-            "withdrawal_amount": item["withdrawal_amount"],
-            "deposit_usd": item["deposit_usd"],
-            "withdrawal_usd": item["withdrawal_usd"],
-            "deposit_count": item["deposit_count"],
-            "withdrawal_count": item["withdrawal_count"],
-            "commission_usd": item["total_commission_usd"],
-            "commission_base": item["total_commission_base"],
+            "tx_deposit": item["deposit_amount"],
+            "tx_withdrawal": item["withdrawal_amount"],
+            "tx_deposit_usd": item["deposit_usd"],
+            "tx_withdrawal_usd": item["withdrawal_usd"],
+            "tx_deposit_count": item["deposit_count"],
+            "tx_withdrawal_count": item["withdrawal_count"],
+            "tx_commission_usd": item["total_commission_usd"],
+            "tx_commission_base": item["total_commission_base"],
+            "ie_in": 0, "ie_out": 0, "ie_in_usd": 0, "ie_out_usd": 0,
+            "ie_in_count": 0, "ie_out_count": 0,
+            "ie_commission_usd": 0, "ie_commission_base": 0,
+            "loan_in": 0, "loan_out": 0, "loan_in_usd": 0, "loan_out_usd": 0,
+            "loan_in_count": 0, "loan_out_count": 0,
+            "loan_commission_usd": 0, "loan_commission_base": 0,
         }
     
     for curr, ie_item in ie_map.items():
         if curr not in currency_data:
             currency_data[curr] = {
-                "deposit_amount": 0, "withdrawal_amount": 0,
-                "deposit_usd": 0, "withdrawal_usd": 0,
-                "deposit_count": 0, "withdrawal_count": 0,
-                "commission_usd": 0, "commission_base": 0,
+                "tx_deposit": 0, "tx_withdrawal": 0,
+                "tx_deposit_usd": 0, "tx_withdrawal_usd": 0,
+                "tx_deposit_count": 0, "tx_withdrawal_count": 0,
+                "tx_commission_usd": 0, "tx_commission_base": 0,
+                "ie_in": 0, "ie_out": 0, "ie_in_usd": 0, "ie_out_usd": 0,
+                "ie_in_count": 0, "ie_out_count": 0,
+                "ie_commission_usd": 0, "ie_commission_base": 0,
+                "loan_in": 0, "loan_out": 0, "loan_in_usd": 0, "loan_out_usd": 0,
+                "loan_in_count": 0, "loan_out_count": 0,
+                "loan_commission_usd": 0, "loan_commission_base": 0,
             }
-        # Income = Money In (like deposits), Expense = Money Out (like withdrawals)
-        currency_data[curr]["deposit_amount"] += ie_item["income_base"]
-        currency_data[curr]["deposit_usd"] += ie_item["income_usd"]
-        currency_data[curr]["deposit_count"] += ie_item["income_count"]
-        currency_data[curr]["withdrawal_amount"] += ie_item["expense_base"]
-        currency_data[curr]["withdrawal_usd"] += ie_item["expense_usd"]
-        currency_data[curr]["withdrawal_count"] += ie_item["expense_count"]
-        currency_data[curr]["commission_usd"] += ie_item["ie_commission_usd"]
-        currency_data[curr]["commission_base"] += ie_item["ie_commission_base"]
+        currency_data[curr]["ie_in"] += ie_item["income_base"]
+        currency_data[curr]["ie_in_usd"] += ie_item["income_usd"]
+        currency_data[curr]["ie_in_count"] += ie_item["income_count"]
+        currency_data[curr]["ie_out"] += ie_item["expense_base"]
+        currency_data[curr]["ie_out_usd"] += ie_item["expense_usd"]
+        currency_data[curr]["ie_out_count"] += ie_item["expense_count"]
+        currency_data[curr]["ie_commission_usd"] += ie_item["ie_commission_usd"]
+        currency_data[curr]["ie_commission_base"] += ie_item["ie_commission_base"]
     
-    # Add loan transactions to settlement
-    # Loan repayments TO vendor = Money IN (deposits), Loan disbursements FROM vendor = Money OUT (withdrawals)
     for curr, loan_item in loan_tx_map.items():
         if curr not in currency_data:
             currency_data[curr] = {
-                "deposit_amount": 0, "withdrawal_amount": 0,
-                "deposit_usd": 0, "withdrawal_usd": 0,
-                "deposit_count": 0, "withdrawal_count": 0,
-                "commission_usd": 0, "commission_base": 0,
+                "tx_deposit": 0, "tx_withdrawal": 0,
+                "tx_deposit_usd": 0, "tx_withdrawal_usd": 0,
+                "tx_deposit_count": 0, "tx_withdrawal_count": 0,
+                "tx_commission_usd": 0, "tx_commission_base": 0,
+                "ie_in": 0, "ie_out": 0, "ie_in_usd": 0, "ie_out_usd": 0,
+                "ie_in_count": 0, "ie_out_count": 0,
+                "ie_commission_usd": 0, "ie_commission_base": 0,
+                "loan_in": 0, "loan_out": 0, "loan_in_usd": 0, "loan_out_usd": 0,
+                "loan_in_count": 0, "loan_out_count": 0,
+                "loan_commission_usd": 0, "loan_commission_base": 0,
             }
-        currency_data[curr]["deposit_amount"] += loan_item["loan_in_amount"]
-        currency_data[curr]["deposit_usd"] += loan_item["loan_in_amount"]  # Assuming USD for loans
-        currency_data[curr]["deposit_count"] += loan_item["loan_in_count"]
-        currency_data[curr]["withdrawal_amount"] += loan_item["loan_out_amount"]
-        currency_data[curr]["withdrawal_usd"] += loan_item["loan_out_amount"]  # Assuming USD for loans
-        currency_data[curr]["withdrawal_count"] += loan_item["loan_out_count"]
-        # Add loan commission to total commission
-        currency_data[curr]["commission_usd"] += loan_item.get("loan_commission_amount", 0)
-        currency_data[curr]["commission_base"] += loan_item.get("loan_commission_base", 0)
+        currency_data[curr]["loan_in"] += loan_item["loan_in_amount"]
+        currency_data[curr]["loan_in_usd"] += loan_item["loan_in_amount"]
+        currency_data[curr]["loan_in_count"] += loan_item["loan_in_count"]
+        currency_data[curr]["loan_out"] += loan_item["loan_out_amount"]
+        currency_data[curr]["loan_out_usd"] += loan_item["loan_out_amount"]
+        currency_data[curr]["loan_out_count"] += loan_item["loan_out_count"]
+        currency_data[curr]["loan_commission_usd"] += loan_item.get("loan_commission_amount", 0)
+        currency_data[curr]["loan_commission_base"] += loan_item.get("loan_commission_base", 0)
     
     vendor["settlement_by_currency"] = [
         {
             "currency": curr,
-            "amount": (d["deposit_amount"] - d["withdrawal_amount"]) - d["commission_base"],
-            "usd_equivalent": (d["deposit_usd"] - d["withdrawal_usd"]) - d["commission_usd"],
-            "deposit_amount": d["deposit_amount"],
-            "withdrawal_amount": d["withdrawal_amount"],
-            "commission_earned_usd": d["commission_usd"],
-            "commission_earned_base": d["commission_base"],
-            "deposit_count": d["deposit_count"],
-            "withdrawal_count": d["withdrawal_count"],
-            "transaction_count": d["deposit_count"] + d["withdrawal_count"]
+            # Total calculations
+            "total_in": d["tx_deposit"] + d["ie_in"] + d["loan_in"],
+            "total_out": d["tx_withdrawal"] + d["ie_out"] + d["loan_out"],
+            "total_commission_base": d["tx_commission_base"] + d["ie_commission_base"] + d["loan_commission_base"],
+            "total_commission_usd": d["tx_commission_usd"] + d["ie_commission_usd"] + d["loan_commission_usd"],
+            "amount": (d["tx_deposit"] + d["ie_in"] + d["loan_in"]) - (d["tx_withdrawal"] + d["ie_out"] + d["loan_out"]) - (d["tx_commission_base"] + d["ie_commission_base"] + d["loan_commission_base"]),
+            "usd_equivalent": (d["tx_deposit_usd"] + d["ie_in_usd"] + d["loan_in_usd"]) - (d["tx_withdrawal_usd"] + d["ie_out_usd"] + d["loan_out_usd"]) - (d["tx_commission_usd"] + d["ie_commission_usd"] + d["loan_commission_usd"]),
+            # Breakdown
+            "deposit_amount": d["tx_deposit"], "withdrawal_amount": d["tx_withdrawal"],
+            "ie_in": d["ie_in"], "ie_out": d["ie_out"],
+            "loan_in": d["loan_in"], "loan_out": d["loan_out"],
+            "tx_commission_base": d["tx_commission_base"],
+            "ie_commission_base": d["ie_commission_base"],
+            "loan_commission_base": d["loan_commission_base"],
+            "commission_earned_usd": d["tx_commission_usd"] + d["ie_commission_usd"] + d["loan_commission_usd"],
+            "commission_earned_base": d["tx_commission_base"] + d["ie_commission_base"] + d["loan_commission_base"],
+            "deposit_count": d["tx_deposit_count"],
+            "withdrawal_count": d["tx_withdrawal_count"],
+            "transaction_count": d["tx_deposit_count"] + d["tx_withdrawal_count"] + d["ie_in_count"] + d["ie_out_count"] + d["loan_in_count"] + d["loan_out_count"]
         }
         for curr, d in currency_data.items()
     ]
@@ -4383,7 +4419,8 @@ async def get_my_vendor_info(user: dict = Depends(require_vendor)):
                 {"source_vendor_id": vendor["vendor_id"]},
                 {"credit_to_vendor_id": vendor["vendor_id"]}
             ],
-            "status": "completed"
+            "status": "completed",
+            "settled": {"$ne": True}
         }},
         {"$group": {
             "_id": "$currency",
@@ -4528,13 +4565,16 @@ async def get_my_vendor_info(user: dict = Depends(require_vendor)):
 
 
 @api_router.get("/vendor/settlements")
-async def get_vendor_my_settlements(user: dict = Depends(require_vendor)):
+async def get_vendor_my_settlements(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    user: dict = Depends(require_vendor)
+):
     """Get settlements for the logged-in vendor"""
     vendor = await db.vendors.find_one({"user_id": user["user_id"]}, {"_id": 0})
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
-    settlements = await db.vendor_settlements.find({"vendor_id": vendor["vendor_id"]}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return settlements
+    return await paginate_query(db.vendor_settlements, {"vendor_id": vendor["vendor_id"]}, page, page_size)
 
 
 
@@ -4545,6 +4585,8 @@ async def get_vendor_all_transactions(
     transaction_type: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     user: dict = Depends(require_vendor),
 ):
     vendor = await db.vendors.find_one({"user_id": user["user_id"]}, {"_id": 0})
@@ -4561,8 +4603,7 @@ async def get_vendor_all_transactions(
     if date_to:
         query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
 
-    transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(5000)
-    return transactions
+    return await paginate_query(db.transactions, query, page, page_size)
 
 
 # Vendor: Export transactions to Excel
@@ -4932,19 +4973,27 @@ async def vendor_complete_withdrawal(
 
 # Vendor Loan Transactions - Get pending loan transactions for exchanger
 @api_router.get("/vendor/loan-transactions")
-async def get_vendor_loan_transactions(request: Request, user: dict = Depends(require_vendor)):
+async def get_vendor_loan_transactions(request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    user: dict = Depends(require_vendor)
+):
     """Get loan transactions assigned to this vendor (disbursements from or repayments to)"""
     vendor = await db.vendors.find_one({"user_id": user["user_id"]}, {"_id": 0})
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
     
-    # Get transactions where this vendor is source (disbursement) or destination (repayment)
-    transactions = await db.loan_transactions.find({
+    query = {
         "$or": [
             {"source_vendor_id": vendor["vendor_id"]},
             {"credit_to_vendor_id": vendor["vendor_id"]}
         ]
-    }, {"_id": 0}).sort("created_at", -1).to_list(500)
+    }
+    skip = (page - 1) * page_size
+    total = await db.loan_transactions.count_documents(query)
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    
+    transactions = await db.loan_transactions.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
     
     # Enrich with loan details
     loan_ids = list(set([tx.get("loan_id") for tx in transactions if tx.get("loan_id")]))
@@ -4959,7 +5008,7 @@ async def get_vendor_loan_transactions(request: Request, user: dict = Depends(re
             tx["bank_details"] = loan.get("bank_details")
             tx["borrower_name"] = loan.get("borrower_name")
     
-    return transactions
+    return {"items": transactions, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 # Vendor approve loan transaction with proof upload
 @api_router.post("/vendor/loan-transactions/{transaction_id}/approve")
@@ -5115,7 +5164,17 @@ async def settle_vendor_balance(
         "converted_to_loan": {"$ne": True},
     }, {"_id": 0}).to_list(1000)
     
-    if not pending_txs and not pending_ie:
+    # Also get completed loan transactions for this vendor that haven't been settled
+    pending_loans = await db.loan_transactions.find({
+        "$or": [
+            {"source_vendor_id": vendor_id},
+            {"credit_to_vendor_id": vendor_id}
+        ],
+        "status": "completed",
+        "settled": {"$ne": True}
+    }, {"_id": 0}).to_list(1000)
+    
+    if not pending_txs and not pending_ie and not pending_loans:
         raise HTTPException(status_code=400, detail="No pending transactions to settle")
     
     # Calculate NET amounts - deposits minus withdrawals, using base_amount for source currency
@@ -5143,10 +5202,11 @@ async def settle_vendor_balance(
             gross_amount += tx_amount
     
     # Add IE entries to gross amount
-    # Income entries = vendor receives (like deposit), Expense entries = vendor pays (like withdrawal)
     ie_entry_ids = []
     for ie in pending_ie:
-        if ie.get("currency") == source_currency:
+        if ie.get("base_currency") == source_currency and ie.get("base_amount"):
+            ie_amount = ie["base_amount"]
+        elif ie.get("currency") == source_currency:
             ie_amount = ie["amount"]
         else:
             ie_amount = ie.get("amount_usd", ie["amount"])
@@ -5156,6 +5216,17 @@ async def settle_vendor_balance(
         else:  # expense
             gross_amount -= ie_amount
         ie_entry_ids.append(ie["entry_id"])
+    
+    # Add Loan transactions to gross amount
+    loan_tx_ids = []
+    for ltx in pending_loans:
+        ltx_amount = ltx.get("amount", 0)
+        # Loan repayments TO vendor = Money In, Disbursements FROM vendor = Money Out
+        if ltx.get("credit_to_vendor_id") == vendor_id:
+            gross_amount += ltx_amount  # Money IN
+        elif ltx.get("source_vendor_id") == vendor_id:
+            gross_amount -= ltx_amount  # Money OUT
+        loan_tx_ids.append(ltx["transaction_id"])
     
     # Manual commission and charges
     commission_amount = settlement_request.commission_amount
@@ -5194,9 +5265,10 @@ async def settle_vendor_balance(
         "exchange_rate": settlement_request.exchange_rate,
         "destination_currency": settlement_request.destination_currency,
         "settlement_amount": settlement_amount,
-        "transaction_count": len(pending_txs) + len(pending_ie),
+        "transaction_count": len(pending_txs) + len(pending_ie) + len(pending_loans),
         "transaction_ids": [tx["transaction_id"] for tx in pending_txs],
         "ie_entry_ids": ie_entry_ids,
+        "loan_tx_ids": loan_tx_ids,
         "settlement_destination_id": dest_account_id,
         "settlement_destination_name": dest["account_name"],
         "status": VendorSettlementStatus.PENDING,  # Settlements go to pending first
@@ -5222,6 +5294,13 @@ async def settle_vendor_balance(
     if ie_entry_ids:
         await db.income_expenses.update_many(
             {"entry_id": {"$in": ie_entry_ids}},
+            {"$set": {"settlement_id": settlement_id, "settlement_status": "pending_approval"}}
+        )
+    
+    # Mark Loan transactions as pending settlement
+    if loan_tx_ids:
+        await db.loan_transactions.update_many(
+            {"transaction_id": {"$in": loan_tx_ids}},
             {"$set": {"settlement_id": settlement_id, "settlement_status": "pending_approval"}}
         )
     
@@ -5276,6 +5355,14 @@ async def approve_settlement(request: Request, settlement_id: str, user: dict = 
     if ie_entry_ids:
         await db.income_expenses.update_many(
             {"entry_id": {"$in": ie_entry_ids}},
+            {"$set": {"settled": True, "settlement_status": "completed"}}
+        )
+    
+    # Mark Loan transactions as fully settled
+    loan_tx_ids = settlement.get("loan_tx_ids", [])
+    if loan_tx_ids:
+        await db.loan_transactions.update_many(
+            {"transaction_id": {"$in": loan_tx_ids}},
             {"$set": {"settled": True, "settlement_status": "completed"}}
         )
     
@@ -5348,6 +5435,22 @@ async def reject_settlement(request: Request, settlement_id: str, reason: str = 
         {"settlement_id": settlement_id},
         {"$set": {"settlement_id": None, "settlement_status": None}}
     )
+    
+    # Reset IE entries
+    ie_entry_ids = settlement.get("ie_entry_ids", [])
+    if ie_entry_ids:
+        await db.income_expenses.update_many(
+            {"entry_id": {"$in": ie_entry_ids}},
+            {"$set": {"settlement_id": None, "settlement_status": None}}
+        )
+    
+    # Reset Loan transactions
+    loan_tx_ids = settlement.get("loan_tx_ids", [])
+    if loan_tx_ids:
+        await db.loan_transactions.update_many(
+            {"transaction_id": {"$in": loan_tx_ids}},
+            {"$set": {"settlement_id": None, "settlement_status": None}}
+        )
     
     await log_activity(request, user, "reject", "exchangers", "Rejected settlement")
 
@@ -7290,17 +7393,17 @@ async def upload_ie_invoice(request: Request, entry_id: str, user: dict = Depend
     return {"message": "Invoice uploaded successfully", "filename": invoice_file.filename}
 
 @api_router.get("/vendor/income-expenses")
-async def get_vendor_ie_entries(user: dict = Depends(require_vendor)):
+async def get_vendor_ie_entries(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    user: dict = Depends(require_vendor)
+):
     """Get income/expense entries linked to this vendor"""
     vendor = await db.vendors.find_one({"user_id": user["user_id"]}, {"_id": 0})
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
     
-    entries = await db.income_expenses.find(
-        {"vendor_id": vendor["vendor_id"]},
-        {"_id": 0}
-    ).sort("created_at", -1).to_list(500)
-    return entries
+    return await paginate_query(db.income_expenses, {"vendor_id": vendor["vendor_id"]}, page, page_size)
 
 
 # ============== VENDOR SUPPLIERS (Service Suppliers) ROUTES ==============
@@ -7655,7 +7758,8 @@ async def get_loan_transactions(
     loan_id: Optional[str] = None,
     transaction_type: Optional[str] = None,
     vendor_id: Optional[str] = None,
-    limit: int = 100,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW))
 ):
     """Get loan transactions log"""
@@ -7665,13 +7769,16 @@ async def get_loan_transactions(
     if transaction_type:
         query["transaction_type"] = transaction_type
     if vendor_id:
-        # Filter by vendor involvement (either as source or credit destination)
         query["$or"] = [
             {"source_vendor_id": vendor_id},
             {"credit_to_vendor_id": vendor_id}
         ]
     
-    transactions = await db.loan_transactions.find(query, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    skip = (page - 1) * page_size
+    total = await db.loan_transactions.count_documents(query)
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    
+    transactions = await db.loan_transactions.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
     
     # Enrich with treasury/vendor names
     treasury_ids = list(set([tx.get("treasury_account_id") for tx in transactions if tx.get("treasury_account_id")]))
@@ -7718,7 +7825,7 @@ async def get_loan_transactions(
                     source_vendor = await db.vendors.find_one({"vendor_id": loan["source_vendor_id"]}, {"_id": 0})
                     tx["source_vendor_name"] = source_vendor.get("name") or source_vendor.get("vendor_name") if source_vendor else None
     
-    return transactions
+    return {"items": transactions, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 @api_router.get("/loans/vendors")
 async def get_vendor_borrowers(user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW))):
@@ -7770,7 +7877,8 @@ async def get_vendor_borrowers(user: dict = Depends(require_permission(Modules.L
 async def get_loans(
     status: Optional[str] = None,
     borrower: Optional[str] = None,
-    limit: int = 100,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW))
 ):
     """Get all loans with optional filters"""
@@ -7780,7 +7888,11 @@ async def get_loans(
     if borrower:
         query["borrower_name"] = {"$regex": borrower, "$options": "i"}
     
-    loans = await db.loans.find(query, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
+    skip = (page - 1) * page_size
+    total = await db.loans.count_documents(query)
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    
+    loans = await db.loans.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
     
     # Batch fetch treasury accounts to avoid N+1 queries
     treasury_ids = list(set(loan.get("source_treasury_id") for loan in loans if loan.get("source_treasury_id")))
@@ -7814,7 +7926,7 @@ async def get_loans(
                     # Invalid date format - skip overdue check
                     loan["is_overdue"] = False
     
-    return loans
+    return {"items": loans, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 @api_router.get("/loans/{loan_id}")
 async def get_loan(loan_id: str, user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW))):
