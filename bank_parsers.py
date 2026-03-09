@@ -6,6 +6,7 @@ Supports:
 """
 
 import re
+import io
 import logging
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
@@ -270,88 +271,95 @@ class BankStatementParser:
         return parser_method(text, fallback_date)
     
     def _parse_generic(self, text: str, fallback_date: str = None) -> List[Dict]:
-        """Generic parser using pattern matching"""
+        """Generic parser using flexible pattern matching — works even without dates"""
         entries = []
         entry_id = 0
         
         lines = text.split('\n')
         
-        # Date pattern: DD/MM/YYYY or similar
-        date_pattern = r'(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{4})'
+        # Date patterns: DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY, YYYY-MM-DD, Mon DD YYYY
+        date_patterns = [
+            r'(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})',
+            r'(\d{4}[/\-\.]\d{1,2}[/\-\.]\d{1,2})',
+            r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+\d{4})',
+        ]
         # Amount pattern: numbers with commas and decimals
         amount_pattern = r'([\d,]+\.\d{2})'
         
+        last_found_date = fallback_date
+        
         for line in lines:
-            # Skip empty lines
-            if not line.strip():
+            if not line.strip() or len(line.strip()) < 5:
                 continue
             
             # Look for date in line
-            date_match = re.search(date_pattern, line)
-            if not date_match:
-                continue
+            parsed_date = None
+            for dp in date_patterns:
+                date_match = re.search(dp, line, re.IGNORECASE)
+                if date_match:
+                    parsed_date = parse_date(date_match.group(1))
+                    if parsed_date:
+                        last_found_date = parsed_date
+                        break
             
             # Find amounts in line
             amounts = re.findall(amount_pattern, line)
             if not amounts:
                 continue
             
+            # Skip header/footer lines (common keywords)
+            line_lower = line.lower()
+            if any(x in line_lower for x in ['page ', 'statement of', 'account number', 'opening balance', 'closing balance', 'total', 'balance brought', 'balance carried', 'tax registration', 'registered details', 'tel:', 'po box', 'head office', 'licensed by', 'electronically generated', 'www.', 'confirmation of', 'notice of disagreement']):
+                if not any(x in line_lower for x in ['transfer', 'payment', 'deposit', 'withdrawal']):
+                    continue
+            
             entry_id += 1
+            use_date = parsed_date or last_found_date or fallback_date
             
-            # Parse date
-            parsed_date = parse_date(date_match.group(1)) or fallback_date
+            # Determine amount and type
+            first_amount = parse_amount(amounts[0])
+            amount = first_amount
             
-            # Determine amount and type (debit/credit)
-            # Usually: first amount is transaction, last might be balance
-            amount = 0.0
-            if amounts:
-                first_amount = parse_amount(amounts[0])
-                
-                # Check context for debit/credit
-                line_lower = line.lower()
-                
-                # Debit indicators
-                is_debit = any(x in line_lower for x in [
-                    'debit', 'dr', 'withdrawal', 'payment', 'purchase',
-                    'transfer out', 'atm', 'pos', 'card no'
-                ])
-                
-                # Credit indicators  
-                is_credit = any(x in line_lower for x in [
-                    'credit', 'cr', 'deposit', 'salary', 'transfer in',
-                    'refund', 'reversal', 'incoming'
-                ])
-                
-                # If line ends with "Cr" it's likely showing balance as credit
-                if re.search(r'\d+\.\d{2}\s*cr\s*$', line_lower):
-                    # Multiple amounts: first is transaction
-                    if len(amounts) >= 2:
-                        amount = first_amount
-                        # Determine sign based on context
-                        if is_debit and not is_credit:
-                            amount = -abs(first_amount)
-                        elif is_credit:
-                            amount = abs(first_amount)
-                    else:
-                        amount = first_amount
-                else:
-                    amount = first_amount
-                    if is_debit:
-                        amount = -abs(first_amount)
+            # Debit indicators
+            is_debit = any(x in line_lower for x in [
+                'debit', 'dr', 'withdrawal', 'payment', 'purchase', 'transfer out',
+                'atm', 'pos', 'card no', 'ddr', 'dds', 'loan'
+            ])
+            # Credit indicators  
+            is_credit = any(x in line_lower for x in [
+                'credit', 'cr', 'deposit', 'salary', 'transfer in',
+                'refund', 'reversal', 'incoming', 'rma'
+            ])
             
-            # Extract description (between date and first amount)
-            desc_start = line.find(date_match.group(1)) + len(date_match.group(1))
-            desc_end = line.find(amounts[0]) if amounts else len(line)
-            description = line[desc_start:desc_end].strip()
-            description = re.sub(r'\s+', ' ', description).strip()
+            # Check for Cr/Dr suffix after amount
+            after_amounts = line[line.rfind(amounts[-1]) + len(amounts[-1]):].strip().lower()
+            if after_amounts.startswith('cr'):
+                is_credit = True
+            elif after_amounts.startswith('dr'):
+                is_debit = True
             
-            # Clean up description
-            description = description[:200]  # Limit length
+            if is_debit and not is_credit:
+                amount = -abs(first_amount)
+            elif is_credit:
+                amount = abs(first_amount)
             
-            if description or amount != 0:
+            # If multiple amounts, first is likely the transaction, last is balance
+            # Use first amount for the entry
+            
+            # Extract description
+            desc_parts = line
+            if parsed_date and date_match:
+                desc_parts = desc_parts[desc_parts.find(date_match.group(1)) + len(date_match.group(1)):]
+            # Remove amounts from description
+            for a in amounts:
+                desc_parts = desc_parts.replace(a, '', 1)
+            description = re.sub(r'\s+', ' ', desc_parts).strip()
+            description = re.sub(r'[,\s]*$', '', description)[:200]
+            
+            if amount != 0:
                 entries.append({
                     "id": f"stmt_{entry_id}",
-                    "date": parsed_date,
+                    "date": use_date,
                     "description": description,
                     "reference": "",
                     "amount": amount,
@@ -361,59 +369,97 @@ class BankStatementParser:
         return entries
     
     def _parse_emirates_nbd(self, text: str, fallback_date: str = None) -> List[Dict]:
-        """Parser for Emirates NBD statements"""
+        """Parser for Emirates NBD statements — handles bilingual Arabic/English"""
         entries = []
         entry_id = 0
         
         lines = text.split('\n')
-        date_pattern = r'(\d{2}/\d{2}/\d{4})'
+        date_patterns = [
+            r'(\d{2}/\d{2}/\d{4})',
+            r'(\d{1,2}[/\-\.]\d{1,2}[/\-\.]\d{2,4})',
+        ]
         amount_pattern = r'([\d,]+\.\d{2})'
         
+        last_found_date = fallback_date
+        
         for line in lines:
-            date_match = re.search(date_pattern, line)
-            if not date_match:
+            if not line.strip() or len(line.strip()) < 5:
                 continue
+            
+            # Skip known header/footer lines
+            line_lower = line.lower()
+            if any(x in line_lower for x in ['page ', 'statement of account', 'head office', 'baniyas road', 'commercial registration', 'licensed by', 'electronically generated', 'www.emiratesnbd', 'tax registration', 'registered details', 'tel:', 'confirmation of', 'notice of disagreement', 'po box']):
+                continue
+            
+            # Look for date
+            parsed_date = None
+            date_match = None
+            for dp in date_patterns:
+                date_match = re.search(dp, line)
+                if date_match:
+                    parsed_date = parse_date(date_match.group(1))
+                    if parsed_date:
+                        last_found_date = parsed_date
+                        break
             
             amounts = re.findall(amount_pattern, line)
             if not amounts:
                 continue
             
+            # Skip balance-only lines (single amount with Cr at end and no transaction context)
+            if len(amounts) == 1 and re.search(r'\d+\.\d{2}\s*cr\s*$', line_lower) and not any(x in line_lower for x in ['transfer', 'payment', 'salary', 'deposit', 'pos', 'atm']):
+                continue
+            
             entry_id += 1
-            parsed_date = parse_date(date_match.group(1)) or fallback_date
+            use_date = parsed_date or last_found_date or fallback_date
             
-            # Emirates NBD format: Date | Description | Debit | Credit | Balance
-            # Usually 3 amounts: debit, credit, balance (or just 2 if one is blank)
-            amount = 0.0
             first_amount = parse_amount(amounts[0])
+            amount = first_amount
             
-            # Check if line indicates debit or credit
-            line_lower = line.lower()
-            
-            # Debit keywords for Emirates NBD
+            # Emirates NBD debit keywords
             is_debit = any(x in line_lower for x in [
-                'ddr', 'pos', 'atm', 'transfer', 'payment', 'loan', 'dds'
+                'ddr', 'pos', 'atm', 'transfer', 'payment', 'loan', 'dds',
+                'purchase', 'fee', 'charge', 'debit'
             ])
-            
-            # Credit keywords
             is_credit = any(x in line_lower for x in [
-                'salary', 'rma', 'incoming', 'refund', 'credit', 'deposit'
+                'salary', 'rma', 'incoming', 'refund', 'credit', 'deposit', 'cr'
             ])
             
-            if is_debit and not is_credit:
+            # Check for Cr suffix after last amount
+            after_last = line[line.rfind(amounts[-1]) + len(amounts[-1]):].strip().lower()
+            if after_last.startswith('cr'):
+                is_credit = True
+            elif after_last.startswith('dr'):
+                is_debit = True
+            
+            # If multiple amounts: first is debit, second is credit, last is balance
+            if len(amounts) >= 3:
+                debit_amt = parse_amount(amounts[0])
+                credit_amt = parse_amount(amounts[1])
+                if debit_amt > 0 and credit_amt == 0:
+                    amount = -abs(debit_amt)
+                elif credit_amt > 0:
+                    amount = abs(credit_amt)
+                else:
+                    amount = first_amount
+            elif is_debit and not is_credit:
                 amount = -abs(first_amount)
-            else:
+            elif is_credit:
                 amount = abs(first_amount)
             
             # Extract description
-            desc_start = line.find(date_match.group(1)) + len(date_match.group(1))
-            desc_end = line.find(amounts[0]) if amounts else len(line)
-            description = line[desc_start:desc_end].strip()
-            description = re.sub(r'\s+', ' ', description)[:200]
+            desc = line
+            if date_match:
+                desc = desc[desc.find(date_match.group(1)) + len(date_match.group(1)):]
+            for a in amounts:
+                desc = desc.replace(a, '', 1)
+            desc = re.sub(r'[^\x20-\x7E]', ' ', desc)  # Remove non-ASCII (Arabic)
+            description = re.sub(r'\s+', ' ', desc).strip()[:200]
             
-            if description or amount != 0:
+            if amount != 0:
                 entries.append({
                     "id": f"stmt_{entry_id}",
-                    "date": parsed_date,
+                    "date": use_date,
                     "description": description,
                     "reference": "",
                     "amount": amount,
@@ -497,30 +543,66 @@ class BankStatementParser:
 
 def parse_bank_statement_pdf(content: bytes, filename: str, fallback_date: str) -> Tuple[List[Dict], str]:
     """
-    Parse a bank statement PDF using OCR and bank-specific rules.
-    
-    Returns:
-        Tuple of (entries list, detected bank name)
+    Parse a bank statement PDF. Tries pdfplumber first, then OCR.
     """
+    entries = []
+    bank_name = "unknown"
+    
+    # --- Step 1: Try pdfplumber text extraction ---
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            all_text = ""
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    all_text += text + "\n"
+            
+            if all_text.strip() and len(all_text.strip()) > 50:
+                bank_name = detect_bank(all_text, filename)
+                parser = BankStatementParser(bank_name)
+                entries = parser.parse_ocr_text(all_text, fallback_date)
+                if entries:
+                    logger.info(f"Parsed {len(entries)} entries from {bank_name} (pdfplumber text)")
+                    return entries, bank_name
+            
+            # Try table extraction
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                if tables:
+                    for table in tables:
+                        for row in table:
+                            if row and any(row):
+                                all_text += " ".join([str(c) for c in row if c]) + "\n"
+            
+            if all_text.strip() and len(all_text.strip()) > 50:
+                bank_name = detect_bank(all_text, filename)
+                parser = BankStatementParser(bank_name)
+                entries = parser.parse_ocr_text(all_text, fallback_date)
+                if entries:
+                    logger.info(f"Parsed {len(entries)} entries from {bank_name} (pdfplumber tables)")
+                    return entries, bank_name
+    except Exception as e:
+        logger.warning(f"pdfplumber extraction failed: {e}")
+    
+    # --- Step 2: OCR fallback with higher DPI ---
     try:
         from pdf2image import convert_from_bytes
         import pytesseract
     except ImportError:
         logger.error("OCR libraries not available")
-        return [], "unknown"
+        return [], bank_name
     
-    # Convert PDF to images
     try:
-        images = convert_from_bytes(content, dpi=200)
+        images = convert_from_bytes(content, dpi=300)
     except Exception as e:
         logger.error(f"Failed to convert PDF to images: {e}")
-        return [], "unknown"
+        return [], bank_name
     
-    # OCR all pages
     all_text = ""
     for img in images:
         try:
-            text = pytesseract.image_to_string(img)
+            text = pytesseract.image_to_string(img, lang='eng')
             all_text += text + "\n"
         except Exception as e:
             logger.warning(f"OCR failed for page: {e}")
@@ -529,15 +611,11 @@ def parse_bank_statement_pdf(content: bytes, filename: str, fallback_date: str) 
         logger.warning("No text extracted from PDF")
         return [], "unknown"
     
-    # Detect bank
     bank_name = detect_bank(all_text, filename)
-    
-    # Parse using appropriate parser
     parser = BankStatementParser(bank_name)
     entries = parser.parse_ocr_text(all_text, fallback_date)
     
-    logger.info(f"Parsed {len(entries)} entries from {bank_name} statement")
-    
+    logger.info(f"Parsed {len(entries)} entries from {bank_name} (OCR)")
     return entries, bank_name
 
 
