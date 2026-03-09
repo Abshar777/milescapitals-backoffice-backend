@@ -24,6 +24,7 @@ COLLECTIONS_TO_CLEAR = [
     "loans",
     "transactions",
     "treasury_transactions",
+
 ]
 
 
@@ -56,4 +57,40 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    clear_all_collections()
+
+
+
+
+
+# write a function to clear all collections
+
+def clear_all_collections():
+    client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
+    db = client[DB_NAME]
+
+    print(f"\nConnected to database: {DB_NAME}")
+    print("\nCollections to be cleared:")
+    for col in COLLECTIONS_TO_CLEAR:
+        count = db[col].count_documents({})
+        print(f"  - {col}: {count} documents")
+
+    print(
+        "\n⚠️  WARNING: This will permanently delete all documents in the above collections!"
+    )
+    confirm = input("\nType 'YES' to confirm and proceed: ").strip()
+
+    if confirm != "YES":
+        print("Aborted. No collections were cleared.")
+        return
+
+    print("\nClearing collections...")
+    for col in COLLECTIONS_TO_CLEAR:
+        result = db[col].delete_many({})
+        print(f"  ✓ {col}: deleted {result.deleted_count} documents")
+
+    print("\nDone! All specified collections have been cleared.")
+    client.close()
+
+
