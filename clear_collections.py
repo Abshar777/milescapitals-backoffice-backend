@@ -56,15 +56,15 @@ def main():
     client.close()
 
 
-if __name__ == "__main__":
-    # main()
-    clear_all_collections()
+# if __name__ == "__main__":
+#     main()
+#     # clear_all_collections()
 
 
 
 
 
-# write a function to clear all collections
+# write a function to clear all collections in the database
 
 def clear_all_collections():
     client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
@@ -72,7 +72,7 @@ def clear_all_collections():
 
     print(f"\nConnected to database: {DB_NAME}")
     print("\nCollections to be cleared:")
-    for col in COLLECTIONS_TO_CLEAR:
+    for col in db.list_collection_names():
         count = db[col].count_documents({})
         print(f"  - {col}: {count} documents")
 
@@ -86,7 +86,7 @@ def clear_all_collections():
         return
 
     print("\nClearing collections...")
-    for col in COLLECTIONS_TO_CLEAR:
+    for col in db.list_collection_names():
         result = db[col].delete_many({})
         print(f"  ✓ {col}: deleted {result.deleted_count} documents")
 
@@ -94,3 +94,4 @@ def clear_all_collections():
     client.close()
 
 
+clear_all_collections()
