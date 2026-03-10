@@ -48,7 +48,7 @@ db = client[os.environ['DB_NAME']]
 # JWT Configuration
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 24
+JWT_EXPIRATION_HOURS = 2
 
 # Create the main app
 app = FastAPI(title="FX Broker Back-Office API")
@@ -1121,7 +1121,7 @@ async def register(user_data: UserCreate):
         }
     )
 
-@api_router.post("/auth/login", response_model=TokenResponse)
+@api_router.post("/auth/login")
 async def login(credentials: UserLogin, request: Request):
     user = await db.users.find_one({"email": credentials.email}, {"_id": 0})
     ip_address = request.client.host if request.client else None
@@ -1160,6 +1160,51 @@ async def login(credentials: UserLogin, request: Request):
     if not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Account is disabled")
     
+    # Check if 2FA is enabled
+    security_settings = await db.app_settings.find_one({"setting_type": "security"}, {"_id": 0})
+    twofa_enabled = security_settings.get("twofa_enabled", False) if security_settings else False
+    
+    if twofa_enabled:
+        import random
+        otp_code = str(random.randint(100000, 999999))
+        now_otp = datetime.now(timezone.utc)
+        await db.otp_codes.delete_many({"user_id": user["user_id"]})
+        await db.otp_codes.insert_one({
+            "user_id": user["user_id"], "email": user["email"],
+            "code": otp_code, "attempts": 0,
+            "created_at": now_otp.isoformat(),
+            "expires_at": (now_otp + timedelta(minutes=5)).isoformat()
+        })
+        smtp_settings = await db.app_settings.find_one({"setting_type": "email"}, {"_id": 0})
+        # Fallback to .env SMTP if DB settings not configured
+        smtp_host = (smtp_settings or {}).get("smtp_host") or os.environ.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = (smtp_settings or {}).get("smtp_port") or int(os.environ.get("SMTP_PORT", "587"))
+        smtp_email = (smtp_settings or {}).get("smtp_email") or os.environ.get("SMTP_USER", "")
+        smtp_password = (smtp_settings or {}).get("smtp_password") or os.environ.get("SMTP_PASSWORD", "")
+        smtp_from = (smtp_settings or {}).get("smtp_from_email") or os.environ.get("SMTP_FROM_EMAIL", smtp_email)
+        
+        if smtp_email and smtp_password:
+            try:
+                otp_html = f"""<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
+                    <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+                    <p style="color:#C5C6C7;text-align:center;">Your login verification code:</p>
+                    <div style="background:#1F2833;padding:20px;border-radius:8px;text-align:center;margin:20px 0;">
+                        <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#66FCF1;">{otp_code}</span>
+                    </div>
+                    <p style="color:#C5C6C7;text-align:center;font-size:12px;">This code expires in 5 minutes. Do not share it.</p></div>"""
+                await send_email(
+                    to_emails=[user["email"]], subject="Miles Capitals - Login Verification Code",
+                    html_content=otp_html, smtp_host=smtp_host,
+                    smtp_port=smtp_port, smtp_email=smtp_email,
+                    smtp_password=smtp_password,
+                    smtp_from_email=smtp_from
+                )
+                return {"access_token": "", "token_type": "bearer", "requires_2fa": True,
+                    "message": f"Verification code sent to {user['email']}",
+                    "user": {"user_id": user["user_id"], "email": user["email"], "name": user["name"], "role": user.get("role", "viewer")}}
+            except Exception as e:
+                logger.error(f"Failed to send OTP email: {e}")
+    
     token = create_jwt_token(user["user_id"], user["email"], user["role"])
     
     # Log successful login
@@ -1186,6 +1231,229 @@ async def login(credentials: UserLogin, request: Request):
             "role": user["role"]
         }
     )
+
+
+@api_router.post("/auth/verify-otp")
+async def verify_otp(request: Request, data: dict = Body(...)):
+    """Verify 2FA OTP and issue JWT token"""
+    email = data.get("email")
+    otp_code = data.get("otp_code")
+    if not email or not otp_code:
+        raise HTTPException(status_code=400, detail="Email and OTP code are required")
+    
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    otp_record = await db.otp_codes.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not otp_record:
+        raise HTTPException(status_code=401, detail="No verification code found. Please login again.")
+    
+    expires_at = datetime.fromisoformat(otp_record["expires_at"].replace("Z", "+00:00"))
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        await db.otp_codes.delete_many({"user_id": user["user_id"]})
+        raise HTTPException(status_code=401, detail="Verification code expired. Please login again.")
+    
+    if otp_record.get("attempts", 0) >= 3:
+        await db.otp_codes.delete_many({"user_id": user["user_id"]})
+        raise HTTPException(status_code=401, detail="Too many attempts. Please login again.")
+    
+    if otp_record["code"] != otp_code:
+        await db.otp_codes.update_one({"user_id": user["user_id"]}, {"$inc": {"attempts": 1}})
+        remaining = 3 - otp_record.get("attempts", 0) - 1
+        raise HTTPException(status_code=401, detail=f"Invalid code. {remaining} attempts remaining.")
+    
+    await db.otp_codes.delete_many({"user_id": user["user_id"]})
+    token = create_jwt_token(user["user_id"], user["email"], user["role"])
+    
+    ip_address = request.client.host if request.client else None
+    await create_log(log_type="auth", action="login", module="authentication",
+        user_id=user["user_id"], user_email=user["email"], user_name=user["name"],
+        user_role=user["role"], description="User logged in with 2FA verification",
+        ip_address=ip_address, user_agent=request.headers.get("user-agent", ""), status="success")
+    
+    return {"access_token": token, "token_type": "bearer",
+        "user": {"user_id": user["user_id"], "email": user["email"], "name": user["name"], "role": user.get("role", "viewer")}}
+
+
+@api_router.post("/auth/change-password")
+async def change_password(request: Request, data: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Change own password"""
+    current_password = data.get("current_password")
+    new_password = data.get("new_password")
+    if not current_password or not new_password:
+        raise HTTPException(status_code=400, detail="Current and new passwords are required")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    
+    user_doc = await db.users.find_one({"user_id": user["user_id"]})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if not verify_password(current_password, user_doc.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    
+    new_hash = hash_password(new_password)
+    await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"password_hash": new_hash, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    
+    await log_activity(request, user, "edit", "users", "Changed own password")
+    return {"message": "Password changed successfully"}
+
+
+@api_router.get("/auth/security-status")
+async def get_user_security_status(user: dict = Depends(get_current_user)):
+    """Get 2FA status for any logged-in user (no admin needed)"""
+    settings = await db.app_settings.find_one({"setting_type": "security"}, {"_id": 0})
+    return {
+        "twofa_enabled": settings.get("twofa_enabled", False) if settings else False,
+        "session_timeout_hours": settings.get("session_timeout_hours", 2) if settings else 2,
+    }
+
+
+@api_router.get("/auth/notification-preferences")
+async def get_notification_preferences(user: dict = Depends(get_current_user)):
+    """Get current user's notification preferences"""
+    prefs = await db.user_preferences.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    return {
+        "approval_notifications": prefs.get("approval_notifications", True) if prefs else True,
+    }
+
+@api_router.put("/auth/notification-preferences")
+async def update_notification_preferences(data: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Update current user's notification preferences"""
+    now = datetime.now(timezone.utc)
+    updates = {"user_id": user["user_id"], "updated_at": now.isoformat()}
+    if "approval_notifications" in data:
+        updates["approval_notifications"] = bool(data["approval_notifications"])
+    
+    await db.user_preferences.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": updates},
+        upsert=True
+    )
+    return {"message": "Preferences updated"}
+
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(data: dict = Body(...)):
+    """Send password reset OTP to user's email"""
+    email = data.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user:
+        # Don't reveal if user exists
+        return {"message": "If an account exists with this email, a reset code has been sent."}
+    
+    import random
+    otp_code = str(random.randint(100000, 999999))
+    now = datetime.now(timezone.utc)
+    
+    await db.password_resets.delete_many({"email": email})
+    await db.password_resets.insert_one({
+        "email": email, "user_id": user["user_id"],
+        "code": otp_code, "attempts": 0,
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=10)).isoformat()
+    })
+    
+    # Send reset email
+    smtp_settings = await db.app_settings.find_one({"setting_type": "email"}, {"_id": 0})
+    smtp_host = (smtp_settings or {}).get("smtp_host") or os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = (smtp_settings or {}).get("smtp_port") or int(os.environ.get("SMTP_PORT", "587"))
+    smtp_email = (smtp_settings or {}).get("smtp_email") or os.environ.get("SMTP_USER", "")
+    smtp_password = (smtp_settings or {}).get("smtp_password") or os.environ.get("SMTP_PASSWORD", "")
+    smtp_from = (smtp_settings or {}).get("smtp_from_email") or os.environ.get("SMTP_FROM_EMAIL", smtp_email)
+    
+    if smtp_email and smtp_password:
+        try:
+            reset_html = f"""<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
+                <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+                <p style="color:#C5C6C7;text-align:center;">Password Reset Code</p>
+                <div style="background:#1F2833;padding:20px;border-radius:8px;text-align:center;margin:20px 0;">
+                    <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#66FCF1;">{otp_code}</span>
+                </div>
+                <p style="color:#C5C6C7;text-align:center;font-size:12px;">This code expires in 10 minutes. If you didn't request this, ignore this email.</p></div>"""
+            await send_email(
+                to_emails=[email], subject="Miles Capitals - Password Reset Code",
+                html_content=reset_html, smtp_host=smtp_host, smtp_port=smtp_port,
+                smtp_email=smtp_email, smtp_password=smtp_password, smtp_from_email=smtp_from
+            )
+        except Exception as e:
+            logger.error(f"Failed to send reset email: {e}")
+    
+    return {"message": "If an account exists with this email, a reset code has been sent."}
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(data: dict = Body(...)):
+    """Verify reset OTP and set new password"""
+    email = data.get("email")
+    otp_code = data.get("otp_code")
+    new_password = data.get("new_password")
+    
+    if not email or not otp_code or not new_password:
+        raise HTTPException(status_code=400, detail="Email, code, and new password are required")
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    
+    reset_record = await db.password_resets.find_one({"email": email}, {"_id": 0})
+    if not reset_record:
+        raise HTTPException(status_code=401, detail="No reset code found. Please request again.")
+    
+    expires_at = datetime.fromisoformat(reset_record["expires_at"].replace("Z", "+00:00"))
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        await db.password_resets.delete_many({"email": email})
+        raise HTTPException(status_code=401, detail="Reset code expired. Please request again.")
+    
+    if reset_record.get("attempts", 0) >= 5:
+        await db.password_resets.delete_many({"email": email})
+        raise HTTPException(status_code=401, detail="Too many attempts. Please request again.")
+    
+    if reset_record["code"] != otp_code:
+        await db.password_resets.update_one({"email": email}, {"$inc": {"attempts": 1}})
+        remaining = 5 - reset_record.get("attempts", 0) - 1
+        raise HTTPException(status_code=401, detail=f"Invalid code. {remaining} attempts remaining.")
+    
+    # Reset password
+    new_hash = hash_password(new_password)
+    await db.users.update_one({"user_id": reset_record["user_id"]}, {"$set": {"password_hash": new_hash, "updated_at": datetime.now(timezone.utc).isoformat()}})
+    await db.password_resets.delete_many({"email": email})
+    
+    return {"message": "Password reset successfully. You can now login."}
+
+
+
+
+@api_router.get("/settings/security")
+async def get_security_settings(user: dict = Depends(require_permission(Modules.SETTINGS, Actions.VIEW))):
+    """Get 2FA and session settings"""
+    settings = await db.app_settings.find_one({"setting_type": "security"}, {"_id": 0})
+    return {
+        "twofa_enabled": settings.get("twofa_enabled", False) if settings else False,
+        "session_timeout_hours": settings.get("session_timeout_hours", 2) if settings else 2,
+    }
+
+@api_router.put("/settings/security")
+async def update_security_settings(request: Request, data: dict = Body(...), user: dict = Depends(require_permission(Modules.SETTINGS, Actions.EDIT))):
+    """Update 2FA and session settings"""
+    now = datetime.now(timezone.utc)
+    updates = {"setting_type": "security", "updated_at": now.isoformat(), "updated_by": user["user_id"]}
+    if "twofa_enabled" in data:
+        updates["twofa_enabled"] = bool(data["twofa_enabled"])
+    if "session_timeout_hours" in data:
+        updates["session_timeout_hours"] = int(data["session_timeout_hours"])
+    
+    await db.app_settings.update_one({"setting_type": "security"}, {"$set": updates}, upsert=True)
+    await log_activity(request, user, "edit", "settings", "Updated security settings")
+    return {"message": "Security settings updated"}
+
 
 @api_router.post("/auth/session")
 async def process_session(request: Request, response: Response):
@@ -5347,6 +5615,27 @@ async def settle_vendor_balance(
     
     await log_activity(request, user, "create", "exchangers", "Created vendor settlement")
 
+    # Send settlement approval notification email (fire and forget)
+    import asyncio
+    asyncio.create_task(send_approval_notification("settlement", {
+        "settlement_id": settlement_id,
+        "vendor_name": vendor["vendor_name"],
+        "gross_amount": gross_amount,
+        "currency": settlement_request.source_currency,
+        "net_amount": settlement_amount,
+        "dest_currency": settlement_request.destination_currency,
+        "tx_count": len(pending_txs) + len(pending_ie) + len(pending_loans),
+        "created_by": user["name"]
+    }))
+
+    # Notify the exchanger about settlement
+    asyncio.create_task(send_exchanger_notification("settlement", vendor_id, {
+        "settlement_id": settlement_id,
+        "gross_display": f"{gross_amount:,.2f} {settlement_request.source_currency}",
+        "net_display": f"{settlement_amount:,.2f} {settlement_request.destination_currency}",
+        "tx_count": len(pending_txs) + len(pending_ie) + len(pending_loans),
+    }))
+
     return await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
 
 # Get all pending settlements (for approval page)
@@ -5624,6 +5913,7 @@ async def create_transaction(
     transaction_mode: Optional[str] = Form("bank"),
     collecting_person_name: Optional[str] = Form(None),
     collecting_person_number: Optional[str] = Form(None),
+    crm_reference: Optional[str] = Form(None),
     proof_image: Optional[UploadFile] = File(None),
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.CREATE))
 ):
@@ -5637,6 +5927,15 @@ async def create_transaction(
             raise HTTPException(
                 status_code=400, 
                 detail=f"Duplicate transaction: Reference '{reference}' already exists (Transaction ID: {existing_by_ref['transaction_id']})"
+            )
+    
+    # Check CRM reference uniqueness
+    if crm_reference and crm_reference.strip():
+        existing_crm = await db.transactions.find_one({"crm_reference": crm_reference.strip()}, {"_id": 0})
+        if existing_crm:
+            raise HTTPException(
+                status_code=400,
+                detail=f"CRM Reference '{crm_reference}' already exists (Transaction ID: {existing_crm['transaction_id']})"
             )
     
     # Check 2: Same client, type, amount within 5 minutes (prevents accidental double-submit)
@@ -5851,6 +6150,7 @@ async def create_transaction(
         "status": TransactionStatus.PENDING,
         "description": description,
         "reference": reference or f"REF{uuid.uuid4().hex[:8].upper()}",
+        "crm_reference": crm_reference.strip() if crm_reference else None,
         "proof_image": proof_image_data,
         "created_by": user["user_id"],
         "created_by_name": user["name"],
@@ -5889,6 +6189,30 @@ async def create_transaction(
     
     result = await db.transactions.find_one({"transaction_id": tx_id}, {"_id": 0})
     await log_activity(request, user, "create", "transactions", "Created transaction")
+
+    # Send notifications (fire and forget)
+    import asyncio
+    if destination_type == "vendor" and vendor_id:
+        # Vendor transaction → only notify the exchanger, NOT approvers
+        amt_display = f"{base_amount:,.2f} {base_currency}" if base_currency and base_currency != "USD" and base_amount else f"${usd_amount:,.2f} USD"
+        asyncio.create_task(send_exchanger_notification("transaction", vendor_id, {
+            "reference": result.get("reference", tx_id),
+            "type": transaction_type,
+            "client": result.get("client_name", "Unknown"),
+            "amount_display": amt_display,
+        }))
+    else:
+        # Non-vendor transaction → notify approvers
+        asyncio.create_task(send_approval_notification("transaction", {
+            "reference": result.get("reference", tx_id),
+            "type": transaction_type,
+            "client": result.get("client_name", "Unknown"),
+            "amount": usd_amount,
+            "base_amount": base_amount,
+            "base_currency": base_currency,
+            "destination": result.get("destination_account_name") or result.get("psp_name") or destination_type,
+            "created_by": user["name"]
+        }))
 
     return result
 
@@ -7095,6 +7419,16 @@ async def create_income_expense(entry_data: IncomeExpenseCreate, request: Reques
     # Log activity
     await log_activity(request, user, "create", "income_expenses", f"Created {entry_data.entry_type}: {entry_data.description or entry_data.category}", reference_id=entry_id)
     
+    # Notify exchanger if assigned
+    if vendor_info and entry_data.vendor_id:
+        import asyncio
+        amt_display = f"{entry_data.base_amount:,.2f} {entry_data.base_currency}" if entry_data.base_currency and entry_data.base_amount else f"{entry_data.amount:,.2f} {entry_data.currency}"
+        asyncio.create_task(send_exchanger_notification("ie", entry_data.vendor_id, {
+            "entry_type": entry_data.entry_type,
+            "category": (entry_data.category or "").replace("_", " "),
+            "amount_display": amt_display,
+        }))
+    
     return entry_doc
 
 @api_router.put("/income-expenses/{entry_id}")
@@ -8167,6 +8501,15 @@ async def create_loan(loan_data: LoanCreate, request: Request, user: dict = Depe
     # Log activity
     await log_activity(request, user, "create", "loans", f"Created loan to {loan_data.borrower_name}: {loan_data.amount} {loan_data.currency}", reference_id=loan_id)
     
+    # Notify exchanger if disbursing from vendor
+    if loan_data.disburse_from_vendor_id:
+        import asyncio
+        asyncio.create_task(send_exchanger_notification("loan", loan_data.disburse_from_vendor_id, {
+            "loan_type": "disbursement",
+            "borrower": loan_data.borrower_name,
+            "amount_display": f"{loan_data.amount:,.2f} {loan_data.currency}",
+        }))
+    
     return loan_doc
 
 @api_router.put("/loans/{loan_id}")
@@ -8374,6 +8717,15 @@ async def record_loan_repayment(request: Request, loan_id: str, repayment: LoanR
     repayment_doc["new_outstanding"] = max(0, outstanding)
     repayment_doc["loan_status"] = new_status
     await log_activity(request, user, "create", "loans", "Recorded loan repayment")
+
+    # Notify exchanger if crediting to vendor
+    if repayment.credit_to_vendor_id:
+        import asyncio
+        asyncio.create_task(send_exchanger_notification("loan", repayment.credit_to_vendor_id, {
+            "loan_type": "repayment",
+            "borrower": loan.get("borrower_name", "-"),
+            "amount_display": f"{repayment.amount:,.2f} {repayment.currency}",
+        }))
 
     return repayment_doc
 
@@ -12231,6 +12583,178 @@ async def set_user_permission_overrides(
     await log_activity(request, user, "edit", "users", "Updated user permissions")
 
     return {"message": "Permission overrides updated successfully"}
+
+
+# ============== APPROVAL EMAIL NOTIFICATIONS ==============
+
+async def send_approval_notification(notification_type: str, details: dict):
+    """Send email notification for pending approvals to users with approve permission"""
+    try:
+        # Get SMTP config
+        smtp_settings = await db.app_settings.find_one({"setting_type": "email"}, {"_id": 0})
+        smtp_host = (smtp_settings or {}).get("smtp_host") or os.environ.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = (smtp_settings or {}).get("smtp_port") or int(os.environ.get("SMTP_PORT", "587"))
+        smtp_email = (smtp_settings or {}).get("smtp_email") or os.environ.get("SMTP_USER", "")
+        smtp_password = (smtp_settings or {}).get("smtp_password") or os.environ.get("SMTP_PASSWORD", "")
+        smtp_from = (smtp_settings or {}).get("smtp_from_email") or os.environ.get("SMTP_FROM_EMAIL", smtp_email)
+        
+        if not smtp_email or not smtp_password:
+            return
+        
+        # Get users with approvals permission
+        roles_with_approve = await db.roles.find({"permissions.approvals": {"$exists": True}}, {"_id": 0, "role_id": 1, "name": 1}).to_list(20)
+        role_ids = [r.get("role_id") or r.get("name") for r in roles_with_approve]
+        
+        approvers = await db.users.find(
+            {"$or": [{"role": {"$in": role_ids}}, {"role_id": {"$in": role_ids}}], "is_active": {"$ne": False}},
+            {"_id": 0, "user_id": 1, "email": 1, "name": 1}
+        ).to_list(50)
+        
+        if not approvers:
+            return
+        
+        # Filter by notification preference (default: ON)
+        approver_ids = [u["user_id"] for u in approvers]
+        prefs = await db.user_preferences.find(
+            {"user_id": {"$in": approver_ids}, "approval_notifications": False},
+            {"_id": 0, "user_id": 1}
+        ).to_list(50)
+        opted_out = set(p["user_id"] for p in prefs)
+        
+        to_emails = [u["email"] for u in approvers if u.get("email") and u["user_id"] not in opted_out]
+        if not to_emails:
+            return
+        
+        if notification_type == "transaction":
+            subject = f"Miles Capitals - New Transaction Pending Approval"
+            html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
+                <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+                <div style="background:#1F2833;padding:20px;border-radius:8px;margin:15px 0;">
+                    <h3 style="color:#fbbf24;margin:0 0 15px;">New Transaction Pending Approval</h3>
+                    <table style="width:100%;font-size:13px;color:#C5C6C7;">
+                        <tr><td style="padding:4px 0;color:#888;">Reference</td><td style="padding:4px 0;font-family:monospace;">{details.get('reference', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Type</td><td style="padding:4px 0;text-transform:capitalize;color:{'#4ade80' if details.get('type') == 'deposit' else '#f87171'}">{details.get('type', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Client</td><td style="padding:4px 0;">{details.get('client', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">${details.get('amount', 0):,.2f} USD</td></tr>
+                        {f'<tr><td style="padding:4px 0;color:#888;">Base Amount</td><td style="padding:4px 0;">{details.get("base_amount", 0):,.2f} {details.get("base_currency", "")}</td></tr>' if details.get('base_currency') and details.get('base_currency') != 'USD' else ''}
+                        <tr><td style="padding:4px 0;color:#888;">Destination</td><td style="padding:4px 0;">{details.get('destination', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Created By</td><td style="padding:4px 0;">{details.get('created_by', '-')}</td></tr>
+                    </table>
+                </div>
+                <p style="color:#C5C6C7;text-align:center;font-size:12px;">Please review and approve/reject this transaction in the Back Office.</p></div>"""
+        
+        elif notification_type == "settlement":
+            html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
+                <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+                <div style="background:#1F2833;padding:20px;border-radius:8px;margin:15px 0;">
+                    <h3 style="color:#fbbf24;margin:0 0 15px;">New Settlement Pending Approval</h3>
+                    <table style="width:100%;font-size:13px;color:#C5C6C7;">
+                        <tr><td style="padding:4px 0;color:#888;">Settlement ID</td><td style="padding:4px 0;font-family:monospace;">{details.get('settlement_id', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Exchanger</td><td style="padding:4px 0;">{details.get('vendor_name', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Gross Amount</td><td style="padding:4px 0;font-weight:bold;">{details.get('gross_amount', 0):,.2f} {details.get('currency', 'USD')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Net Settlement</td><td style="padding:4px 0;font-weight:bold;font-size:16px;color:#66FCF1;">{details.get('net_amount', 0):,.2f} {details.get('dest_currency', 'USD')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Transactions</td><td style="padding:4px 0;">{details.get('tx_count', 0)} entries</td></tr>
+                        <tr><td style="padding:4px 0;color:#888;">Created By</td><td style="padding:4px 0;">{details.get('created_by', '-')}</td></tr>
+                    </table>
+                </div>
+                <p style="color:#C5C6C7;text-align:center;font-size:12px;">Please review and approve/reject this settlement in the Back Office.</p></div>"""
+            subject = f"Miles Capitals - Settlement Pending Approval ({details.get('vendor_name', '')})"
+        else:
+            return
+        
+        await send_email(
+            to_emails=to_emails, subject=subject, html_content=html,
+            smtp_host=smtp_host, smtp_port=smtp_port,
+            smtp_email=smtp_email, smtp_password=smtp_password, smtp_from_email=smtp_from
+        )
+        logger.info(f"Approval notification sent to {len(to_emails)} approvers for {notification_type}")
+    except Exception as e:
+        logger.error(f"Failed to send approval notification: {e}")
+
+
+
+async def send_exchanger_notification(notification_type: str, vendor_id: str, details: dict):
+    """Send email notification to a specific exchanger"""
+    try:
+        vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0, "user_id": 1, "vendor_name": 1})
+        if not vendor or not vendor.get("user_id"):
+            return
+        
+        user_doc = await db.users.find_one({"user_id": vendor["user_id"]}, {"_id": 0, "email": 1, "user_id": 1})
+        if not user_doc or not user_doc.get("email"):
+            return
+        
+        # Check notification preference
+        prefs = await db.user_preferences.find_one({"user_id": user_doc["user_id"]}, {"_id": 0})
+        if prefs and prefs.get("approval_notifications") is False:
+            return
+        
+        smtp_settings = await db.app_settings.find_one({"setting_type": "email"}, {"_id": 0})
+        smtp_host = (smtp_settings or {}).get("smtp_host") or os.environ.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = (smtp_settings or {}).get("smtp_port") or int(os.environ.get("SMTP_PORT", "587"))
+        smtp_email = (smtp_settings or {}).get("smtp_email") or os.environ.get("SMTP_USER", "")
+        smtp_password = (smtp_settings or {}).get("smtp_password") or os.environ.get("SMTP_PASSWORD", "")
+        smtp_from = (smtp_settings or {}).get("smtp_from_email") or os.environ.get("SMTP_FROM_EMAIL", smtp_email)
+        
+        if not smtp_email or not smtp_password:
+            return
+        
+        vendor_name = vendor.get("vendor_name", "Exchanger")
+        
+        if notification_type == "transaction":
+            subject = f"Miles Capitals - New Transaction Assigned"
+            title = "New Transaction Assigned to You"
+            color = "#4ade80" if details.get("type") == "deposit" else "#f87171"
+            rows = f"""<tr><td style="padding:4px 0;color:#888;">Reference</td><td style="padding:4px 0;font-family:monospace;">{details.get('reference', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Type</td><td style="padding:4px 0;color:{color};text-transform:capitalize;">{details.get('type', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Client</td><td style="padding:4px 0;">{details.get('client', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
+        elif notification_type == "ie":
+            subject = f"Miles Capitals - New I&E Entry Assigned"
+            title = "New Income/Expense Entry Assigned"
+            is_income = details.get("entry_type") == "income"
+            color = "#4ade80" if is_income else "#f87171"
+            rows = f"""<tr><td style="padding:4px 0;color:#888;">Type</td><td style="padding:4px 0;color:{color};">{'Income (IN)' if is_income else 'Expense (OUT)'}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Category</td><td style="padding:4px 0;">{details.get('category', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
+        elif notification_type == "loan":
+            subject = f"Miles Capitals - Loan Transaction Assigned"
+            title = "New Loan Transaction Assigned"
+            is_in = details.get("loan_type") == "repayment"
+            color = "#4ade80" if is_in else "#f87171"
+            rows = f"""<tr><td style="padding:4px 0;color:#888;">Type</td><td style="padding:4px 0;color:{color};">{'Loan Repayment (IN)' if is_in else 'Loan Disbursement (OUT)'}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Borrower</td><td style="padding:4px 0;">{details.get('borrower', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
+        elif notification_type == "settlement":
+            subject = f"Miles Capitals - Settlement Initiated"
+            title = "Settlement Initiated for Your Account"
+            rows = f"""<tr><td style="padding:4px 0;color:#888;">Settlement ID</td><td style="padding:4px 0;font-family:monospace;">{details.get('settlement_id', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Gross Amount</td><td style="padding:4px 0;font-weight:bold;">{details.get('gross_display', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Net Settlement</td><td style="padding:4px 0;font-weight:bold;font-size:16px;color:#66FCF1;">{details.get('net_display', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#888;">Entries</td><td style="padding:4px 0;">{details.get('tx_count', 0)}</td></tr>"""
+        else:
+            return
+        
+        html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
+            <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+            <div style="background:#1F2833;padding:20px;border-radius:8px;margin:15px 0;">
+                <h3 style="color:#fbbf24;margin:0 0 15px;">{title}</h3>
+                <table style="width:100%;font-size:13px;color:#C5C6C7;">{rows}
+                    <tr><td style="padding:4px 0;color:#888;">Exchanger</td><td style="padding:4px 0;">{vendor_name}</td></tr>
+                </table>
+            </div>
+            <p style="color:#C5C6C7;text-align:center;font-size:12px;">Please review in your Exchanger Portal.</p></div>"""
+        
+        await send_email(
+            to_emails=[user_doc["email"]], subject=subject, html_content=html,
+            smtp_host=smtp_host, smtp_port=smtp_port,
+            smtp_email=smtp_email, smtp_password=smtp_password, smtp_from_email=smtp_from
+        )
+        logger.info(f"Exchanger notification sent to {vendor_name} for {notification_type}")
+    except Exception as e:
+        logger.error(f"Failed to send exchanger notification: {e}")
+
+
 
 # ============== EMAIL SETTINGS & DAILY REPORTS ==============
 
