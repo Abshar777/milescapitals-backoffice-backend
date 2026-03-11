@@ -1913,10 +1913,26 @@ async def delete_client_bank_account(request: Request, client_id: str, bank_acco
 # ============== TREASURY/BANK ACCOUNTS ROUTES ==============
 
 @api_router.get("/treasury")
-async def get_treasury_accounts(user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW))):
-    accounts = await db.treasury_accounts.find({}, {"_id": 0}).to_list(1000)
+async def get_treasury_accounts(
+    user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW)),
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    query = {}
+    if search:
+        query["$or"] = [
+            {"account_name": {"$regex": search, "$options": "i"}},
+            {"bank_name": {"$regex": search, "$options": "i"}},
+            {"currency": {"$regex": search, "$options": "i"}},
+        ]
     
-    # Get manual FX rates from settings
+    total = await db.treasury_accounts.count_documents(query)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    skip = (page - 1) * page_size
+    
+    accounts = await db.treasury_accounts.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+    
     fx_settings = await db.app_settings.find_one({"setting_type": "manual_fx_rates"}, {"_id": 0})
     manual_rates = fx_settings.get("rates", {}) if fx_settings else {}
     
@@ -1928,9 +1944,9 @@ async def get_treasury_accounts(user: dict = Depends(require_permission(Modules.
         elif currency in manual_rates and manual_rates[currency] > 0:
             acc["balance_usd"] = round(balance * manual_rates[currency], 2)
         else:
-            acc["balance_usd"] = None  # No conversion available
+            acc["balance_usd"] = None
     
-    return accounts
+    return {"items": accounts, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 @api_router.get("/treasury/{account_id}")
 async def get_treasury_account(account_id: str, user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW))):
@@ -2206,10 +2222,27 @@ async def inter_treasury_transfer(request: Request, transfer: TreasuryTransferRe
 # ============== LP (LIQUIDITY PROVIDER) ROUTES ==============
 
 @api_router.get("/lp")
-async def get_lp_accounts(user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.VIEW))):
-    """Get all LP accounts"""
-    accounts = await db.lp_accounts.find({}, {"_id": 0}).to_list(1000)
-    return accounts
+async def get_lp_accounts(
+    user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.VIEW)),
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """Get LP accounts with pagination"""
+    query = {}
+    if status:
+        query["status"] = status
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"provider": {"$regex": search, "$options": "i"}},
+        ]
+    total = await db.lp_accounts.count_documents(query)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    skip = (page - 1) * page_size
+    accounts = await db.lp_accounts.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+    return {"items": accounts, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 @api_router.get("/lp/dashboard")
 async def get_lp_dashboard(user: dict = Depends(require_permission(Modules.LP_MANAGEMENT, Actions.VIEW))):
@@ -15341,10 +15374,10 @@ async def get_all_logs(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     search: Optional[str] = None,
-    limit: int = 100,
-    skip: int = 0
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
 ):
-    """Get all logs with filtering"""
+    """Get all logs with filtering and pagination"""
     query = {}
     
     if log_type:
@@ -15371,14 +15404,18 @@ async def get_all_logs(
             {"module": {"$regex": search, "$options": "i"}},
         ]
     
-    logs = await db.system_logs.find(query, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(length=limit)
     total = await db.system_logs.count_documents(query)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    skip_n = (page - 1) * page_size
+    
+    logs = await db.system_logs.find(query, {"_id": 0}).sort("timestamp", -1).skip(skip_n).limit(page_size).to_list(page_size)
     
     return {
-        "logs": logs,
+        "items": logs,
         "total": total,
-        "limit": limit,
-        "skip": skip
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages
     }
 
 @api_router.get("/logs/stats")
