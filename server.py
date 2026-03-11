@@ -2707,7 +2707,25 @@ async def get_treasury_history(
 
     # Sort combined list by date
     treasury_txs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-
+    current_balance = account.get("balance", 0)
+    running = current_balance
+    for tx in treasury_txs:
+        tx["running_balance"] = round(running, 2)
+        running -= (tx.get("amount", 0))
+    
+    # Paginate the combined result
+    total = len(treasury_txs)
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    skip = (page - 1) * page_size
+    paginated = treasury_txs[skip:skip + page_size]
+    
+    return {
+        "items": paginated,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages
+    }
     # Paginate the combined result
     total = len(treasury_txs)
     total_pages = (total + page_size - 1) // page_size if total > 0 else 1
