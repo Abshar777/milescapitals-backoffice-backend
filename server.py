@@ -1800,6 +1800,120 @@ async def delete_client(request: Request, client_id: str, user: dict = Depends(r
 
     return {"message": "Client deleted"}
 
+@api_router.post("/clients/bulk-upload")
+async def bulk_upload_clients(
+    request: Request,
+    file: UploadFile = File(...),
+    user: dict = Depends(require_permission(Modules.CLIENTS, Actions.CREATE))
+):
+    """Bulk upload clients from Excel file"""
+    import openpyxl
+    import io
+    
+    content = await file.read()
+    wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
+    ws = wb.active
+    
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        raise HTTPException(status_code=400, detail="Empty file")
+    
+    headers = [str(h).strip().lower() if h else '' for h in rows[0]]
+    data_rows = rows[1:]
+    
+    # Map columns
+    col_map = {}
+    for i, h in enumerate(headers):
+        if 'crm' in h and 'id' in h:
+            col_map['crm_id'] = i
+        elif h in ('name', 'full name', 'client name'):
+            col_map['name'] = i
+        elif 'first' in h and 'name' in h:
+            col_map['first_name'] = i
+        elif 'last' in h and 'name' in h:
+            col_map['last_name'] = i
+        elif 'email' in h:
+            col_map['email'] = i
+        elif 'phone' in h or 'mobile' in h:
+            col_map['phone'] = i
+        elif 'country' in h:
+            col_map['country'] = i
+    
+    now = datetime.now(timezone.utc).isoformat()
+    created = 0
+    skipped = 0
+    errors = []
+    
+    # Get existing emails for duplicate check
+    existing_emails = set()
+    async for doc in db.clients.find({}, {"email": 1, "_id": 0}):
+        if doc.get("email"):
+            existing_emails.add(doc["email"].lower().strip())
+    
+    bulk_docs = []
+    for idx, row in enumerate(data_rows):
+        try:
+            # Parse name
+            first_name = ''
+            last_name = ''
+            if 'name' in col_map:
+                full_name = str(row[col_map['name']] or '').strip()
+                parts = full_name.split(' ', 1)
+                first_name = parts[0] if parts else ''
+                last_name = parts[1] if len(parts) > 1 else ''
+            if 'first_name' in col_map:
+                first_name = str(row[col_map['first_name']] or '').strip()
+            if 'last_name' in col_map:
+                last_name = str(row[col_map['last_name']] or '').strip()
+            
+            email = str(row[col_map.get('email', -1)] or '').strip().lower() if 'email' in col_map else ''
+            phone = str(row[col_map.get('phone', -1)] or '').strip() if 'phone' in col_map else ''
+            country = str(row[col_map.get('country', -1)] or '').strip() if 'country' in col_map else ''
+            crm_id = str(row[col_map.get('crm_id', -1)] or '').strip() if 'crm_id' in col_map else ''
+            
+            if not first_name or not email:
+                skipped += 1
+                continue
+            
+            if email in existing_emails:
+                skipped += 1
+                continue
+            
+            existing_emails.add(email)
+            client_id = f"client_{uuid.uuid4().hex[:12]}"
+            
+            bulk_docs.append({
+                "client_id": client_id,
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": email,
+                "phone": phone,
+                "country": country,
+                "crm_customer_id": crm_id,
+                "mt5_number": None,
+                "notes": None,
+                "kyc_status": "pending",
+                "kyc_documents": [],
+                "created_at": now,
+                "updated_at": now,
+            })
+            created += 1
+        except Exception as e:
+            errors.append(f"Row {idx + 2}: {str(e)}")
+            skipped += 1
+    
+    if bulk_docs:
+        await db.clients.insert_many(bulk_docs)
+    
+    await log_activity(request, user, "create", "clients", f"Bulk uploaded {created} clients")
+    
+    return {
+        "created": created,
+        "skipped": skipped,
+        "errors": errors[:10],
+        "total_rows": len(data_rows),
+    }
+
 # ============== CLIENT BANK ACCOUNTS ROUTES ==============
 
 @api_router.get("/clients/{client_id}/bank-accounts")
