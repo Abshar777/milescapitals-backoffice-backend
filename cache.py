@@ -11,7 +11,7 @@ import hashlib
 # Redis connection
 REDIS_URL = os.environ.get(
     'REDIS_URL',
-    'redis://:YOUR_STRONG_PASSWORD@localhost:6379/0'
+    'redis://:YOUR_STRONG_PASSWORD@localhost:6379/1'
 )
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
