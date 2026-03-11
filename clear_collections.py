@@ -87,4 +87,4 @@ def clear_all_collections():
     client.close()
 
 
-clear_all_collections()
+main()
