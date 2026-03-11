@@ -1800,6 +1800,9 @@ async def delete_client(request: Request, client_id: str, user: dict = Depends(r
 
     return {"message": "Client deleted"}
 
+
+
+
 @api_router.post("/clients/bulk-upload")
 async def bulk_upload_clients(
     request: Request,
