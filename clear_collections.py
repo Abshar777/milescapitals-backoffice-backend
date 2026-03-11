@@ -16,14 +16,7 @@ MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 
 COLLECTIONS_TO_CLEAR = [
-    "income_expense_entries",
-    "income_expenses",
-    "loan_repayments",
-    "loan_transactions",
-    "psp_settlements",
-    "loans",
     "transactions",
-    "treasury_transactions",
 
 ]
 
