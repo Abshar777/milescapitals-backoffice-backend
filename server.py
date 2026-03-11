@@ -1646,7 +1646,9 @@ async def delete_user(request: Request, user_id: str, user: dict = Depends(requi
 async def get_clients(
     user: dict = Depends(require_permission(Modules.CLIENTS, Actions.VIEW)),
     status: Optional[str] = None,
-    search: Optional[str] = None
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
 ):
     query = {}
     if status:
@@ -1658,20 +1660,29 @@ async def get_clients(
             {"email": {"$regex": search, "$options": "i"}}
         ]
     
-    clients = await db.clients.find(query, {"_id": 0}).to_list(1000)
+    total = await db.clients.count_documents(query)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    skip = (page - 1) * page_size
     
-    # Get transaction summaries for all clients
-    tx_pipeline = [
-        {"$group": {
-            "_id": {
-                "client_id": "$client_id",
-                "type": "$transaction_type"
-            },
-            "total_amount": {"$sum": "$amount"},
-            "count": {"$sum": 1}
-        }}
-    ]
-    tx_summaries = await db.transactions.aggregate(tx_pipeline).to_list(10000)
+    clients = await db.clients.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+    
+    # Get transaction summaries for fetched clients only
+    client_ids = [c["client_id"] for c in clients]
+    if client_ids:
+        tx_pipeline = [
+            {"$match": {"client_id": {"$in": client_ids}}},
+            {"$group": {
+                "_id": {
+                    "client_id": "$client_id",
+                    "type": "$transaction_type"
+                },
+                "total_amount": {"$sum": "$amount"},
+                "count": {"$sum": 1}
+            }}
+        ]
+        tx_summaries = await db.transactions.aggregate(tx_pipeline).to_list(10000)
+    else:
+        tx_summaries = []
     
     # Build lookup dict
     client_tx_map = {}
@@ -1697,7 +1708,7 @@ async def get_clients(
         client["net_balance"] = client["total_deposits"] - client["total_withdrawals"]
         client["transaction_count"] = client["deposit_count"] + client["withdrawal_count"]
     
-    return clients
+    return {"items": clients, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages}
 
 @api_router.get("/clients/{client_id}")
 async def get_client(client_id: str, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.VIEW))):
@@ -4216,9 +4227,9 @@ async def get_vendors(
             currency = ltx.get("currency", "USD")
             ensure_currency(currency)
             
-            amount = ltx.get("amount", 0) or 0
-            commission_base = ltx.get("vendor_commission_base_amount") or 0  # FIX: None -> 0
-            commission_amount = ltx.get("vendor_commission_amount") or 0      # FIX: None -> 0
+            amount = ltx.get("amount", 0)
+            commission_base = ltx.get("vendor_commission_base_amount", 0)
+            commission_amount = ltx.get("vendor_commission_amount", 0)
             
             if loan_entry["type"] == "in":  # Repayment TO vendor
                 currency_breakdown[currency]["deposits_base"] += amount
