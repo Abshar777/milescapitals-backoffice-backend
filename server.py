@@ -2603,25 +2603,23 @@ async def update_treasury_account(
 # Treasury Transaction History
 @api_router.get("/treasury/{account_id}/history")
 async def get_treasury_history(
-    account_id: str,
+    account_id: str, 
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     transaction_type: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     limit: int = 5000,
-    user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW)),
+    user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW))
 ):
     """Get transaction history for a treasury account"""
-    account = await db.treasury_accounts.find_one(
-        {"account_id": account_id}, {"_id": 0}
-    )
+    account = await db.treasury_accounts.find_one({"account_id": account_id}, {"_id": 0})
     if not account:
         raise HTTPException(status_code=404, detail="Treasury account not found")
-
+    
     # Build query for treasury transactions
     query = {"account_id": account_id}
-
+    
     if start_date:
         query["created_at"] = {"$gte": start_date}
     if end_date:
@@ -2631,31 +2629,27 @@ async def get_treasury_history(
             query["created_at"] = {"$lte": end_date}
     if transaction_type:
         query["transaction_type"] = transaction_type
-
+    
     # Get treasury-specific transactions (these are the canonical records with proper currency conversion)
-    treasury_txs = (
-        await db.treasury_transactions.find(query, {"_id": 0})
-        .sort("created_at", -1)
-        .to_list(limit)
-    )
-
+    treasury_txs = await db.treasury_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    
     # Adjust amounts for display - outflows should be negative
     outflow_types = ["debt_payment", "withdrawal", "transfer_out", "expense"]
     for ttx in treasury_txs:
         if ttx.get("transaction_type") in outflow_types:
             ttx["amount"] = -abs(ttx.get("amount", 0))
-
+    
     # Get transaction IDs that already have treasury transaction records
     existing_tx_ids = set()
     for ttx in treasury_txs:
         if ttx.get("transaction_id"):
             existing_tx_ids.add(ttx.get("transaction_id"))
-
+    
     # Only get regular transactions that DON'T have treasury transaction records yet
     # (for backwards compatibility with old data that might not have treasury_transactions)
     tx_query = {
         "destination_account_id": account_id,
-        "status": {"$in": ["approved", "completed"]},
+        "status": {"$in": ["approved", "completed"]}
     }
     if start_date:
         tx_query["created_at"] = {"$gte": start_date}
@@ -2664,13 +2658,9 @@ async def get_treasury_history(
             tx_query["created_at"]["$lte"] = end_date
         else:
             tx_query["created_at"] = {"$lte": end_date}
-
-    regular_txs = (
-        await db.transactions.find(tx_query, {"_id": 0})
-        .sort("created_at", -1)
-        .to_list(limit)
-    )
-
+    
+    regular_txs = await db.transactions.find(tx_query, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    
     # Convert regular transactions to history format ONLY if they don't already have a treasury_transaction
     account_currency = account.get("currency", "USD")
     for tx in regular_txs:
@@ -2679,34 +2669,28 @@ async def get_treasury_history(
             display_amount = tx.get("amount", 0)
             if account_currency != "USD":
                 # If the transaction has base_amount in the same currency as the account, use it
-                if tx.get("base_currency") == account_currency and tx.get(
-                    "base_amount"
-                ):
+                if tx.get("base_currency") == account_currency and tx.get("base_amount"):
                     display_amount = tx.get("base_amount")
                 # Otherwise keep USD amount (no live FX conversion)
-
-            treasury_txs.append(
-                {
-                    "treasury_transaction_id": tx.get("transaction_id"),
-                    "account_id": account_id,
-                    "transaction_type": tx.get("transaction_type"),
-                    "amount": (
-                        display_amount
-                        if tx.get("transaction_type") == "deposit"
-                        else -display_amount
-                    ),
-                    "currency": account_currency,
-                    "reference": f"{tx.get('transaction_type', '').capitalize()}: {tx.get('client_name', 'Unknown')} - {tx.get('reference', '')}",
-                    "client_id": tx.get("client_id"),
-                    "client_name": tx.get("client_name"),
-                    "created_at": tx.get("processed_at") or tx.get("created_at"),
-                    "created_by": tx.get("processed_by"),
-                    "created_by_name": tx.get("processed_by_name"),
-                }
-            )
-
-    # Sort combined list by date
+            
+            treasury_txs.append({
+                "treasury_transaction_id": tx.get("transaction_id"),
+                "account_id": account_id,
+                "transaction_type": tx.get("transaction_type"),
+                "amount": display_amount if tx.get("transaction_type") == "deposit" else -display_amount,
+                "currency": account_currency,
+                "reference": f"{tx.get('transaction_type', '').capitalize()}: {tx.get('client_name', 'Unknown')} - {tx.get('reference', '')}",
+                "client_id": tx.get("client_id"),
+                "client_name": tx.get("client_name"),
+                "created_at": tx.get("processed_at") or tx.get("created_at"),
+                "created_by": tx.get("processed_by"),
+                "created_by_name": tx.get("processed_by_name")
+            })
+    
+    # Sort combined list by date (newest first)
     treasury_txs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    
+    # Calculate running balance (start from current balance, work backwards)
     current_balance = account.get("balance", 0)
     running = current_balance
     for tx in treasury_txs:
@@ -2725,19 +2709,6 @@ async def get_treasury_history(
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages
-    }
-    # Paginate the combined result
-    total = len(treasury_txs)
-    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
-    skip = (page - 1) * page_size
-    paginated = treasury_txs[skip : skip + page_size]
-
-    return {
-        "items": paginated,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": total_pages,
     }
 
 
