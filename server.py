@@ -15,6 +15,7 @@ from fastapi import (
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer
 from dotenv import load_dotenv
+import asyncio
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
@@ -2603,23 +2604,25 @@ async def update_treasury_account(
 # Treasury Transaction History
 @api_router.get("/treasury/{account_id}/history")
 async def get_treasury_history(
-    account_id: str, 
+    account_id: str,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     transaction_type: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     limit: int = 5000,
-    user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW))
+    user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW)),
 ):
     """Get transaction history for a treasury account"""
-    account = await db.treasury_accounts.find_one({"account_id": account_id}, {"_id": 0})
+    account = await db.treasury_accounts.find_one(
+        {"account_id": account_id}, {"_id": 0}
+    )
     if not account:
         raise HTTPException(status_code=404, detail="Treasury account not found")
-    
+
     # Build query for treasury transactions
     query = {"account_id": account_id}
-    
+
     if start_date:
         query["created_at"] = {"$gte": start_date}
     if end_date:
@@ -2629,27 +2632,31 @@ async def get_treasury_history(
             query["created_at"] = {"$lte": end_date}
     if transaction_type:
         query["transaction_type"] = transaction_type
-    
+
     # Get treasury-specific transactions (these are the canonical records with proper currency conversion)
-    treasury_txs = await db.treasury_transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
-    
+    treasury_txs = (
+        await db.treasury_transactions.find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .to_list(limit)
+    )
+
     # Adjust amounts for display - outflows should be negative
     outflow_types = ["debt_payment", "withdrawal", "transfer_out", "expense"]
     for ttx in treasury_txs:
         if ttx.get("transaction_type") in outflow_types:
             ttx["amount"] = -abs(ttx.get("amount", 0))
-    
+
     # Get transaction IDs that already have treasury transaction records
     existing_tx_ids = set()
     for ttx in treasury_txs:
         if ttx.get("transaction_id"):
             existing_tx_ids.add(ttx.get("transaction_id"))
-    
+
     # Only get regular transactions that DON'T have treasury transaction records yet
     # (for backwards compatibility with old data that might not have treasury_transactions)
     tx_query = {
         "destination_account_id": account_id,
-        "status": {"$in": ["approved", "completed"]}
+        "status": {"$in": ["approved", "completed"]},
     }
     if start_date:
         tx_query["created_at"] = {"$gte": start_date}
@@ -2658,9 +2665,13 @@ async def get_treasury_history(
             tx_query["created_at"]["$lte"] = end_date
         else:
             tx_query["created_at"] = {"$lte": end_date}
-    
-    regular_txs = await db.transactions.find(tx_query, {"_id": 0}).sort("created_at", -1).to_list(limit)
-    
+
+    regular_txs = (
+        await db.transactions.find(tx_query, {"_id": 0})
+        .sort("created_at", -1)
+        .to_list(limit)
+    )
+
     # Convert regular transactions to history format ONLY if they don't already have a treasury_transaction
     account_currency = account.get("currency", "USD")
     for tx in regular_txs:
@@ -2669,46 +2680,54 @@ async def get_treasury_history(
             display_amount = tx.get("amount", 0)
             if account_currency != "USD":
                 # If the transaction has base_amount in the same currency as the account, use it
-                if tx.get("base_currency") == account_currency and tx.get("base_amount"):
+                if tx.get("base_currency") == account_currency and tx.get(
+                    "base_amount"
+                ):
                     display_amount = tx.get("base_amount")
                 # Otherwise keep USD amount (no live FX conversion)
-            
-            treasury_txs.append({
-                "treasury_transaction_id": tx.get("transaction_id"),
-                "account_id": account_id,
-                "transaction_type": tx.get("transaction_type"),
-                "amount": display_amount if tx.get("transaction_type") == "deposit" else -display_amount,
-                "currency": account_currency,
-                "reference": f"{tx.get('transaction_type', '').capitalize()}: {tx.get('client_name', 'Unknown')} - {tx.get('reference', '')}",
-                "client_id": tx.get("client_id"),
-                "client_name": tx.get("client_name"),
-                "created_at": tx.get("processed_at") or tx.get("created_at"),
-                "created_by": tx.get("processed_by"),
-                "created_by_name": tx.get("processed_by_name")
-            })
-    
+
+            treasury_txs.append(
+                {
+                    "treasury_transaction_id": tx.get("transaction_id"),
+                    "account_id": account_id,
+                    "transaction_type": tx.get("transaction_type"),
+                    "amount": (
+                        display_amount
+                        if tx.get("transaction_type") == "deposit"
+                        else -display_amount
+                    ),
+                    "currency": account_currency,
+                    "reference": f"{tx.get('transaction_type', '').capitalize()}: {tx.get('client_name', 'Unknown')} - {tx.get('reference', '')}",
+                    "client_id": tx.get("client_id"),
+                    "client_name": tx.get("client_name"),
+                    "created_at": tx.get("processed_at") or tx.get("created_at"),
+                    "created_by": tx.get("processed_by"),
+                    "created_by_name": tx.get("processed_by_name"),
+                }
+            )
+
     # Sort combined list by date (newest first)
     treasury_txs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-    
+
     # Calculate running balance (start from current balance, work backwards)
     current_balance = account.get("balance", 0)
     running = current_balance
     for tx in treasury_txs:
         tx["running_balance"] = round(running, 2)
-        running -= (tx.get("amount", 0))
-    
+        running -= tx.get("amount", 0)
+
     # Paginate the combined result
     total = len(treasury_txs)
     total_pages = (total + page_size - 1) // page_size if total > 0 else 1
     skip = (page - 1) * page_size
-    paginated = treasury_txs[skip:skip + page_size]
-    
+    paginated = treasury_txs[skip : skip + page_size]
+
     return {
         "items": paginated,
         "total": total,
         "page": page,
         "page_size": page_size,
-        "total_pages": total_pages
+        "total_pages": total_pages,
     }
 
 
@@ -7703,6 +7722,69 @@ async def get_pending_transactions(
         .to_list(1000)
     )
     return transactions
+
+
+@api_router.get("/transactions/form-data")
+async def get_transaction_form_data(
+    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.VIEW))
+):
+    """Return all dropdown data needed for the Create Transaction form.
+    Only requires Transactions permission, so any role that can view/create transactions
+    can also see PSPs, treasury accounts, vendors, and clients in the form dropdowns."""
+    clients_cursor = (
+        db.clients.find(
+            {}, {"_id": 0, "client_id": 1, "first_name": 1, "last_name": 1, "email": 1}
+        )
+        .sort("created_at", -1)
+        .limit(200)
+    )
+    treasury_cursor = db.treasury_accounts.find(
+        {"status": "active"},
+        {
+            "_id": 0,
+            "account_id": 1,
+            "account_name": 1,
+            "bank_name": 1,
+            "currency": 1,
+            "account_type": 1,
+            "balance": 1,
+        },
+    ).sort("account_name", 1)
+    psp_cursor = db.psps.find(
+        {},
+        {
+            "_id": 0,
+            "status": 1,
+            "psp_id": 1,
+            "psp_name": 1,
+            "commission_rate": 1,
+            "settlement_days": 1,
+        },
+    ).sort("psp_name", 1)
+    vendors_cursor = db.vendors.find(
+        {"status": "active"},
+        {
+            "_id": 0,
+            "vendor_id": 1,
+            "vendor_name": 1,
+            "deposit_commission": 1,
+            "withdrawal_commission": 1,
+            "status": 1,
+        },
+    ).sort("vendor_name", 1)
+
+    clients, treasury, psps, vendors = await asyncio.gather(
+        clients_cursor.to_list(200),
+        treasury_cursor.to_list(100),
+        psp_cursor.to_list(100),
+        vendors_cursor.to_list(100),
+    )
+    return {
+        "clients": clients,
+        "treasury_accounts": treasury,
+        "psps": psps,
+        "vendors": vendors,
+    }
 
 
 @api_router.get("/transactions/{transaction_id}")
