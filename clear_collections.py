@@ -87,4 +87,51 @@ def clear_all_collections():
     client.close()
 
 
-main()
+def delete_by_crm_reference_id(crm_reference_id, collection_name="transaction_requests"):
+    """
+    Delete transaction(s) from a collection by crm_reference_id.
+    
+    Args:
+        crm_reference_id: The CRM reference ID to search for (e.g. 5809117)
+        collection_name: The collection to delete from (default: transaction_requests)
+    """
+    client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
+    db = client[DB_NAME]
+    collection = db[collection_name]
+
+    # Try both int and string versions to be safe
+    query = {
+        "$or": [
+            {"crm_reference_id": crm_reference_id},
+            {"crm_reference_id": str(crm_reference_id)}
+        ]
+    }
+
+    # First, preview matching documents
+    matches = list(collection.find(query))
+
+    if not matches:
+        print(f"\n❌ No documents found with crm_reference_id = {crm_reference_id}")
+        client.close()
+        return
+
+    print(f"\nFound {len(matches)} document(s) with crm_reference_id = {crm_reference_id}:")
+    for doc in matches:
+        print(f"  - _id: {doc['_id']} | crm_reference_id: {doc.get('crm_reference_id')}")
+
+    print("\n⚠️  WARNING: This will permanently delete the above document(s)!")
+    confirm = input("\nType 'YES' to confirm and proceed: ").strip()
+
+    if confirm != "YES":
+        print("Aborted. No documents were deleted.")
+        client.close()
+        return
+
+    result = collection.delete_many(query)
+    print(f"\n✓ Deleted {result.deleted_count} document(s) with crm_reference_id = {crm_reference_id}")
+
+    client.close()
+
+
+# ── Entry point ─────────────────────────────────────────────────────────────
+delete_by_crm_reference_id(5809117)
