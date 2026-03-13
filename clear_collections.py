@@ -130,8 +130,8 @@ def main():
 client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
 db = client[DB_NAME]
 # collection = db["transactions"]
-result = db.transactions.find_one({"reference": "CAD3A4EAEC32"})
+result = db.transactions.find_one({"reference": "CAD3A4EAEC32"},{"proof_image": 0})
 print(result)
 
 # ── Entry point ─────────────────────────────────────────────────────────────
-# delete_by_crm_reference_id(5809117)
+
