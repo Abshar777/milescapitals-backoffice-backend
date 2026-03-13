@@ -46,8 +46,8 @@ def main():
     client.close()
 
 
-# if __name__ == "__main__":
-#     # main()
+if __name__ == "__main__":
+    main()
 # clear_all_collections()
 
 
@@ -130,7 +130,9 @@ def main():
 client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
 db = client[DB_NAME]
 # collection = db["transactions"]
-result = db.transactions.find_one({"reference": "CAD3A4EAEC32"},{"proof_image": 0,"accountant_proof_image":0})
+result= db.treasury_accounts.update_one(
+        {"account_id": "treasury_dff9b532e16e"}, {"$set": {"balance": 344667.32}}
+    )
 print(result)
 
 # ── Entry point ─────────────────────────────────────────────────────────────
