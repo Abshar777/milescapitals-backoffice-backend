@@ -3936,7 +3936,73 @@ async def get_psp_settlements(
         .sort("created_at", -1)
         .to_list(1000)
     )
+    # Enrich each settlement with payment currency info from its transactions
+    for stl in settlements:
+        tx_ids = stl.get("transaction_ids", [])
+        if tx_ids:
+            txs = await db.transactions.find(
+                {"transaction_id": {"$in": tx_ids}},
+                {"_id": 0, "base_currency": 1, "exchange_rate": 1, "base_amount": 1},
+            ).to_list(len(tx_ids))
+            currencies = set(
+                tx.get("base_currency")
+                for tx in txs
+                if tx.get("base_currency") and tx.get("base_currency") != "USD"
+            )
+            if currencies:
+                stl["payment_currency"] = ", ".join(sorted(currencies))
+                rates = [
+                    tx.get("exchange_rate") for tx in txs if tx.get("exchange_rate")
+                ]
+                stl["avg_exchange_rate"] = (
+                    round(sum(rates) / len(rates), 4) if rates else None
+                )
+                total_base = sum(
+                    tx.get("base_amount", 0) for tx in txs if tx.get("base_amount")
+                )
+                stl["base_gross_amount"] = round(total_base, 2) if total_base else None
+            else:
+                stl["payment_currency"] = "USD"
+        else:
+            stl["payment_currency"] = stl.get("treasury_currency", "USD")
     return settlements
+
+
+# Get transactions included in a specific settlement
+@api_router.get("/psp/{psp_id}/settlement/{settlement_id}/transactions")
+async def get_settlement_transactions(
+    psp_id: str,
+    settlement_id: str,
+    user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW)),
+):
+    settlement = await db.psp_settlements.find_one(
+        {"settlement_id": settlement_id, "psp_id": psp_id}, {"_id": 0}
+    )
+    if not settlement:
+        raise HTTPException(status_code=404, detail="Settlement not found")
+    tx_ids = settlement.get("transaction_ids", [])
+    if not tx_ids:
+        return []
+    txs = await db.transactions.find(
+        {"transaction_id": {"$in": tx_ids}},
+        {
+            "_id": 0,
+            "transaction_id": 1,
+            "reference": 1,
+            "client_name": 1,
+            "amount": 1,
+            "base_amount": 1,
+            "base_currency": 1,
+            "exchange_rate": 1,
+            "created_at": 1,
+            "psp_commission_amount": 1,
+            "psp_reserve_fund_amount": 1,
+            "psp_chargeback_amount": 1,
+            "psp_extra_charges": 1,
+            "psp_gateway_fee": 1,
+        },
+    ).to_list(len(tx_ids))
+    return txs
 
 
 @api_router.get("/psp-settlements")
@@ -4154,15 +4220,13 @@ async def complete_settlement(
 async def get_psp_pending_transactions(
     psp_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
 ):
-    """Get all pending/approved transactions for a PSP that haven't been settled"""
+    """Get approved transactions for a PSP that haven't been settled"""
     transactions = (
         await db.transactions.find(
             {
                 "psp_id": psp_id,
                 "destination_type": "psp",
-                "status": {
-                    "$in": [TransactionStatus.PENDING, TransactionStatus.APPROVED]
-                },
+                "status": TransactionStatus.APPROVED,
                 "settled": {"$ne": True},
             },
             {"_id": 0},
@@ -4189,9 +4253,7 @@ async def get_psp_summary(
             {
                 "psp_id": psp["psp_id"],
                 "destination_type": "psp",
-                "status": {
-                    "$in": [TransactionStatus.PENDING, TransactionStatus.APPROVED]
-                },
+                "status": TransactionStatus.APPROVED,
                 "settled": {"$ne": True},
             },
             {"_id": 0},
@@ -4691,6 +4753,208 @@ async def settle_psp_transaction(
     return await db.transactions.find_one(
         {"transaction_id": transaction_id}, {"_id": 0}
     )
+
+
+# Compound/Batch Settlement: Settle selected PSP transactions as one lump sum
+class BatchSettleRequest(BaseModel):
+    transaction_ids: List[str]
+    destination_account_id: Optional[str] = None
+
+
+@api_router.post("/psp/{psp_id}/settle-batch")
+async def batch_settle_psp_transactions(
+    request: Request,
+    psp_id: str,
+    body: BatchSettleRequest,
+    user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE)),
+):
+    """Create a compound settlement from selected PSP transactions (lump sum to treasury)"""
+    psp = await db.psps.find_one({"psp_id": psp_id}, {"_id": 0})
+    if not psp:
+        raise HTTPException(status_code=404, detail="PSP not found")
+
+    if not body.transaction_ids:
+        raise HTTPException(status_code=400, detail="No transactions selected")
+
+    # Fetch all selected transactions
+    selected_txs = await db.transactions.find(
+        {
+            "transaction_id": {"$in": body.transaction_ids},
+            "psp_id": psp_id,
+            "destination_type": "psp",
+        },
+        {"_id": 0},
+    ).to_list(len(body.transaction_ids))
+
+    if len(selected_txs) != len(body.transaction_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="Some transactions not found or do not belong to this PSP",
+        )
+
+    # Validate none are already settled
+    already_settled = [tx["transaction_id"] for tx in selected_txs if tx.get("settled")]
+    if already_settled:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Transactions already settled: {', '.join(already_settled)}",
+        )
+
+    # Calculate compound totals
+    gross_amount = sum(tx.get("amount", 0) for tx in selected_txs)
+    total_commission = sum(tx.get("psp_commission_amount", 0) for tx in selected_txs)
+    total_reserve = sum(
+        tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
+        for tx in selected_txs
+    )
+    total_extra = sum(tx.get("psp_extra_charges", 0) for tx in selected_txs)
+    total_gateway = sum(tx.get("psp_gateway_fee", 0) for tx in selected_txs)
+    total_deductions = total_commission + total_reserve + total_extra + total_gateway
+    net_amount = gross_amount - total_deductions
+
+    # Determine destination treasury account
+    dest_account_id = body.destination_account_id or psp.get(
+        "settlement_destination_id"
+    )
+    if not dest_account_id:
+        raise HTTPException(status_code=400, detail="No destination account specified")
+
+    dest = await db.treasury_accounts.find_one(
+        {"account_id": dest_account_id}, {"_id": 0}
+    )
+    if not dest:
+        raise HTTPException(
+            status_code=404, detail="Destination treasury account not found"
+        )
+
+    dest_currency = dest.get("currency", "USD")
+
+    # Use actual transaction exchange rates when treasury currency matches payment currency
+    # This ensures the exact amount that PSP sends to bank is credited to treasury
+    base_currencies = set(
+        tx.get("base_currency")
+        for tx in selected_txs
+        if tx.get("base_currency") and tx.get("base_currency") != "USD"
+    )
+    if len(base_currencies) == 1 and dest_currency in base_currencies:
+        # Treasury currency matches payment currency — calculate net directly from base amounts
+        base_gross = sum(
+            tx.get("base_amount", 0) for tx in selected_txs if tx.get("base_amount")
+        )
+        rates = [
+            tx.get("exchange_rate") for tx in selected_txs if tx.get("exchange_rate")
+        ]
+        avg_rate = sum(rates) / len(rates) if rates else 1
+        base_deductions = total_deductions / avg_rate if avg_rate else 0
+        treasury_amount = base_gross - base_deductions
+    else:
+        treasury_amount = convert_currency(net_amount, "USD", dest_currency)
+
+    now = datetime.now(timezone.utc)
+    settlement_id = f"stl_{uuid.uuid4().hex[:12]}"
+
+    # Create ONE compound settlement record
+    settlement_doc = {
+        "settlement_id": settlement_id,
+        "psp_id": psp_id,
+        "psp_name": psp["psp_name"],
+        "settlement_type": "compound",
+        "gross_amount": round(gross_amount, 2),
+        "commission_amount": round(total_commission, 2),
+        "reserve_fund_amount": round(total_reserve, 2),
+        "extra_charges": round(total_extra, 2),
+        "gateway_fees": round(total_gateway, 2),
+        "total_deductions": round(total_deductions, 2),
+        "net_amount": round(net_amount, 2),
+        "treasury_amount": round(treasury_amount, 2),
+        "treasury_currency": dest_currency,
+        "transaction_count": len(selected_txs),
+        "transaction_ids": [tx["transaction_id"] for tx in selected_txs],
+        "settlement_destination_id": dest_account_id,
+        "settlement_destination_name": dest["account_name"],
+        "status": PSPSettlementStatus.COMPLETED,
+        "expected_settlement_date": now.isoformat(),
+        "created_at": now.isoformat(),
+        "settled_at": now.isoformat(),
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+    }
+    await db.psp_settlements.insert_one(settlement_doc)
+
+    # Credit treasury with lump sum
+    await db.treasury_accounts.update_one(
+        {"account_id": dest_account_id},
+        {"$inc": {"balance": treasury_amount}, "$set": {"updated_at": now.isoformat()}},
+    )
+
+    # Add ONE treasury transaction record
+    treasury_tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+    conversion_note = (
+        f" (Converted: USD {net_amount:,.2f} -> {dest_currency} {treasury_amount:,.2f})"
+        if dest_currency != "USD"
+        else ""
+    )
+    treasury_tx = {
+        "treasury_transaction_id": treasury_tx_id,
+        "account_id": dest_account_id,
+        "account_name": dest["account_name"],
+        "transaction_type": "psp_settlement",
+        "amount": treasury_amount,
+        "currency": dest_currency,
+        "original_amount": net_amount,
+        "original_currency": "USD",
+        "reference": f"PSP Compound Settlement - {settlement_id}",
+        "description": f"Batch settlement ({len(selected_txs)} txns) from {psp['psp_name']}{conversion_note}",
+        "related_settlement_id": settlement_id,
+        "psp_id": psp_id,
+        "psp_name": psp["psp_name"],
+        "created_at": now.isoformat(),
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+    }
+    await db.treasury_transactions.insert_one(treasury_tx)
+
+    # Mark all selected transactions as settled
+    await db.transactions.update_many(
+        {"transaction_id": {"$in": body.transaction_ids}},
+        {
+            "$set": {
+                "settled": True,
+                "settlement_id": settlement_id,
+                "settlement_status": "completed",
+                "settled_at": now.isoformat(),
+                "settled_by": user["user_id"],
+                "settled_by_name": user["name"],
+                "settlement_destination_id": dest_account_id,
+                "settlement_destination_name": dest["account_name"],
+            }
+        },
+    )
+
+    # Update PSP stats
+    await db.psps.update_one(
+        {"psp_id": psp_id},
+        {
+            "$inc": {
+                "total_volume": gross_amount,
+                "total_commission": total_commission,
+                "pending_settlement": -net_amount,
+            }
+        },
+    )
+
+    await log_activity(
+        request,
+        user,
+        "approve",
+        "psp",
+        f"Compound settlement: {len(selected_txs)} transactions, net ${net_amount:,.2f}",
+    )
+
+    result = await db.psp_settlements.find_one(
+        {"settlement_id": settlement_id}, {"_id": 0}
+    )
+    return result
 
 
 # Migration endpoint: Backfill existing settled PSP transactions into psp_settlements
