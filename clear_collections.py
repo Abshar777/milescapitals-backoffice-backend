@@ -15,7 +15,7 @@ load_dotenv(ROOT_DIR / ".env")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 
-COLLECTIONS_TO_CLEAR = ["transaction_requests", "transactions", "treasury_transactions"]
+COLLECTIONS_TO_CLEAR = ["transaction_requests", "transactions", "treasury_transactions","psp_settlements","income_expenses"]
 
 
 def main():
