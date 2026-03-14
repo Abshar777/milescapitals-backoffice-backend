@@ -31,6 +31,8 @@ import jwt
 import httpx
 import base64
 import aiosmtplib
+import boto3
+from botocore.config import Config as BotoConfig
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -70,6 +72,41 @@ db = client[os.environ["DB_NAME"]]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 2
+
+# Cloudflare R2 Configuration
+R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = os.environ.get("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.environ.get("R2_SECRET_ACCESS_KEY")
+R2_BUCKET_NAME = os.environ.get("R2_BUCKET_NAME")
+R2_PUBLIC_URL = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+
+s3_client = boto3.client(
+    "s3",
+    endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+    aws_access_key_id=R2_ACCESS_KEY_ID,
+    aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+    config=BotoConfig(signature_version="s3v4"),
+    region_name="auto",
+)
+
+
+def upload_to_r2(
+    file_content: bytes,
+    filename: str,
+    content_type: str = "application/octet-stream",
+    folder: str = "uploads",
+) -> str:
+    """Upload a file to R2 and return the public URL."""
+    ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
+    key = f"{folder}/{uuid.uuid4().hex[:16]}_{filename}"
+    s3_client.put_object(
+        Bucket=R2_BUCKET_NAME,
+        Key=key,
+        Body=file_content,
+        ContentType=content_type,
+    )
+    return f"{R2_PUBLIC_URL}/{key}"
+
 
 # Create the main app
 app = FastAPI(title="FX Broker Back-Office API")
@@ -7087,14 +7124,19 @@ async def vendor_upload_proof(
         )
 
     content = await proof_image.read()
-    proof_image_data = base64.b64encode(content).decode("utf-8")
+    proof_image_url = upload_to_r2(
+        content,
+        proof_image.filename or "proof.png",
+        proof_image.content_type or "image/png",
+        "proofs",
+    )
 
     now = datetime.now(timezone.utc)
     await db.transactions.update_one(
         {"transaction_id": transaction_id},
         {
             "$set": {
-                "vendor_proof_image": proof_image_data,
+                "vendor_proof_image": proof_image_url,
                 "vendor_proof_uploaded_at": now.isoformat(),
                 "vendor_proof_uploaded_by": user["user_id"],
                 "vendor_proof_uploaded_by_name": user["name"],
@@ -7142,11 +7184,16 @@ async def vendor_complete_withdrawal(
 
     # Handle proof image upload
     content = await proof_image.read()
-    proof_image_data = base64.b64encode(content).decode("utf-8")
+    proof_image_url = upload_to_r2(
+        content,
+        proof_image.filename or "proof.png",
+        proof_image.content_type or "image/png",
+        "proofs",
+    )
 
     updates = {
         "status": TransactionStatus.COMPLETED,
-        "vendor_proof_image": proof_image_data,
+        "vendor_proof_image": proof_image_url,
         "processed_by": user["user_id"],
         "processed_by_name": user["name"],
         "processed_at": now.isoformat(),
@@ -7259,11 +7306,16 @@ async def vendor_approve_loan_transaction(
 
     # Handle proof image upload
     content = await proof_image.read()
-    proof_image_data = base64.b64encode(content).decode("utf-8")
+    proof_image_url = upload_to_r2(
+        content,
+        proof_image.filename or "proof.png",
+        proof_image.content_type or "image/png",
+        "proofs",
+    )
 
     updates = {
         "status": "completed",
-        "vendor_proof_image": proof_image_data,
+        "vendor_proof_image": proof_image_url,
         "approved_by": user["user_id"],
         "approved_by_name": user["name"],
         "approved_at": now.isoformat(),
@@ -8097,6 +8149,7 @@ async def create_transaction(
     collecting_person_name: Optional[str] = Form(None),
     collecting_person_number: Optional[str] = Form(None),
     crm_reference: Optional[str] = Form(None),
+    transaction_date: Optional[str] = Form(None),
     proof_image: Optional[UploadFile] = File(None),
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.CREATE)),
 ):
@@ -8216,10 +8269,15 @@ async def create_transaction(
     # now is already defined at the top for duplicate detection
 
     # Handle proof image upload
-    proof_image_data = None
+    proof_image_url = None
     if proof_image:
         content = await proof_image.read()
-        proof_image_data = base64.b64encode(content).decode("utf-8")
+        proof_image_url = upload_to_r2(
+            content,
+            proof_image.filename or "proof.png",
+            proof_image.content_type or "image/png",
+            "proofs",
+        )
 
     # Calculate USD amount if base currency is different
     usd_amount = amount
@@ -8434,7 +8492,8 @@ async def create_transaction(
         "description": description,
         "reference": reference or f"REF{uuid.uuid4().hex[:8].upper()}",
         "crm_reference": crm_reference.strip() if crm_reference else None,
-        "proof_image": proof_image_data,
+        "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
+        "proof_image": proof_image_url,
         "created_by": user["user_id"],
         "created_by_name": user["name"],
         "processed_by": None,
@@ -8994,14 +9053,19 @@ async def upload_transaction_proof(
         )
 
     content = await proof_image.read()
-    proof_image_data = base64.b64encode(content).decode("utf-8")
+    proof_image_url = upload_to_r2(
+        content,
+        proof_image.filename or "proof.png",
+        proof_image.content_type or "image/png",
+        "proofs",
+    )
 
     now = datetime.now(timezone.utc)
     await db.transactions.update_one(
         {"transaction_id": transaction_id},
         {
             "$set": {
-                "accountant_proof_image": proof_image_data,
+                "accountant_proof_image": proof_image_url,
                 "proof_uploaded_at": now.isoformat(),
                 "proof_uploaded_by": user["user_id"],
                 "proof_uploaded_by_name": user["name"],
@@ -9130,6 +9194,7 @@ async def create_transaction_request(
     client_bank_currency: Optional[str] = Form(None),
     client_usdt_address: Optional[str] = Form(None),
     client_usdt_network: Optional[str] = Form(None),
+    transaction_date: Optional[str] = Form(None),
     proof_image: Optional[UploadFile] = File(None),
     user: dict = Depends(
         require_permission(Modules.TRANSACTION_REQUESTS, Actions.CREATE)
@@ -9154,10 +9219,15 @@ async def create_transaction_request(
         raise HTTPException(status_code=404, detail="Client not found")
 
     # Handle proof image
-    proof_data = None
+    proof_url = None
     if proof_image and proof_image.filename:
         content = await proof_image.read()
-        proof_data = base64.b64encode(content).decode("utf-8")
+        proof_url = upload_to_r2(
+            content,
+            proof_image.filename,
+            proof_image.content_type or "image/png",
+            "proofs",
+        )
 
     request_id = f"txreq_{uuid.uuid4().hex[:12]}"
 
@@ -9177,6 +9247,7 @@ async def create_transaction_request(
         "vendor_id": vendor_id,
         "reference": reference,
         "crm_reference": crm_reference.strip() if crm_reference else None,
+        "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
         "description": description,
         "client_bank_name": client_bank_name,
         "client_bank_account_name": client_bank_account_name,
@@ -9185,7 +9256,7 @@ async def create_transaction_request(
         "client_bank_currency": client_bank_currency,
         "client_usdt_address": client_usdt_address,
         "client_usdt_network": client_usdt_network,
-        "proof_image": proof_data,
+        "proof_image": proof_url,
         "status": "pending",
         "created_at": now.isoformat(),
         "created_by": user["user_id"],
@@ -9262,7 +9333,8 @@ async def create_transaction_request(
             "description": description,
             "reference": reference or f"REF{uuid.uuid4().hex[:8].upper()}",
             "crm_reference": crm_reference.strip() if crm_reference else None,
-            "proof_image": proof_data,
+            "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
+            "proof_image": proof_url,
             "created_by": user["user_id"],
             "created_by_name": user["name"],
             "processed_by": None,
@@ -11381,16 +11453,19 @@ async def vendor_upload_ie_proof(
     if not vendor or vendor.get("vendor_id") != entry.get("vendor_id"):
         raise HTTPException(status_code=403, detail="Not authorized for this entry")
 
-    import base64
-
     contents = await proof_image.read()
-    b64 = base64.b64encode(contents).decode("utf-8")
+    proof_url = upload_to_r2(
+        contents,
+        proof_image.filename or "proof.png",
+        proof_image.content_type or "image/png",
+        "proofs",
+    )
 
     await db.income_expenses.update_one(
         {"entry_id": entry_id},
         {
             "$set": {
-                "vendor_proof_image": b64,
+                "vendor_proof_image": proof_url,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         },
@@ -11411,14 +11486,17 @@ async def upload_ie_invoice(
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
 
-    import base64
-
     contents = await invoice_file.read()
-    b64 = base64.b64encode(contents).decode("utf-8")
+    invoice_url = upload_to_r2(
+        contents,
+        invoice_file.filename or "invoice.pdf",
+        invoice_file.content_type or "application/pdf",
+        "invoices",
+    )
 
     # Store with filename info
     file_info = {
-        "data": b64,
+        "url": invoice_url,
         "filename": invoice_file.filename,
         "content_type": invoice_file.content_type,
         "uploaded_at": datetime.now(timezone.utc).isoformat(),
@@ -16057,11 +16135,17 @@ async def send_user_message(
         file_content = await attachment.read()
         if len(file_content) > 10 * 1024 * 1024:  # 10MB limit
             raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
+        attachment_url = upload_to_r2(
+            file_content,
+            attachment.filename,
+            attachment.content_type or "application/octet-stream",
+            "attachments",
+        )
         attachment_data = {
             "filename": attachment.filename,
             "content_type": attachment.content_type or "application/octet-stream",
             "size": len(file_content),
-            "data": base64.b64encode(file_content).decode("utf-8"),
+            "url": attachment_url,
         }
 
     message_doc = {
@@ -16120,6 +16204,12 @@ async def get_message_attachment(
     att = await db.message_attachments.find_one({"message_id": message_id}, {"_id": 0})
     if not att:
         raise HTTPException(status_code=404, detail="Attachment not found")
+
+    # Support both new R2 URLs and legacy base64 data
+    if att.get("url"):
+        from fastapi.responses import RedirectResponse
+
+        return RedirectResponse(url=att["url"])
 
     file_data = base64.b64decode(att["data"])
 
