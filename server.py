@@ -14504,7 +14504,11 @@ async def get_psp_summary_report(
                 "total_commission": {
                     "$sum": {"$ifNull": ["$psp_commission_amount", 0]}
                 },
+                "total_extra_charges": {"$sum": {"$ifNull": ["$psp_extra_charges", 0]}},
+                "total_reserve": {"$sum": {"$ifNull": ["$psp_reserve_fund_amount", 0]}},
                 "total_net": {"$sum": {"$ifNull": ["$psp_net_amount", "$amount"]}},
+                "total_base_amount": {"$sum": {"$ifNull": ["$base_amount", 0]}},
+                "base_currencies": {"$addToSet": "$base_currency"},
                 "settled_count": {
                     "$sum": {"$cond": [{"$eq": ["$settled", True]}, 1, 0]}
                 },
@@ -14524,6 +14528,17 @@ async def get_psp_summary_report(
         psp_id = stat["_id"]
         psp_info = psp_map.get(psp_id, {})
 
+        # Determine primary payment currency (exclude USD and None)
+        base_currencies = [
+            c for c in stat.get("base_currencies", []) if c and c != "USD"
+        ]
+        pay_currency = (
+            base_currencies[0]
+            if len(base_currencies) == 1
+            else (", ".join(base_currencies) if base_currencies else None)
+        )
+        total_base = stat.get("total_base_amount", 0) if base_currencies else None
+
         results.append(
             {
                 "psp_id": psp_id,
@@ -14531,7 +14546,11 @@ async def get_psp_summary_report(
                 "commission_rate": psp_info.get("commission_rate", 0),
                 "total_volume": stat["total_volume"],
                 "total_commission": stat["total_commission"],
+                "total_extra_charges": stat.get("total_extra_charges", 0),
+                "total_reserve": stat.get("total_reserve", 0),
                 "total_net": stat["total_net"],
+                "payment_currency": pay_currency,
+                "total_base_volume": round(total_base, 2) if total_base else None,
                 "settled_count": stat["settled_count"],
                 "pending_count": stat["pending_count"],
                 "transaction_count": stat["transaction_count"],
