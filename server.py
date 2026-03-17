@@ -1062,6 +1062,7 @@ class TransactionUpdate(BaseModel):
     base_currency: Optional[str] = None
     exchange_rate: Optional[float] = None
     reference: Optional[str] = None
+    transaction_date: Optional[str] = None
 
 
 # ============== HELPER FUNCTIONS ==============
@@ -8665,6 +8666,7 @@ async def update_transaction(
         "base_currency",
         "exchange_rate",
         "reference",
+        "transaction_date",
     }
     has_editable_fields = any(k in editable_fields for k in updates)
     if has_editable_fields:
