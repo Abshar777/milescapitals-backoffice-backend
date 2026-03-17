@@ -8877,6 +8877,7 @@ async def approve_transaction(
     request: Request,
     transaction_id: str,
     source_account_id: Optional[str] = None,
+    bank_receipt_date: Optional[str] = None,
     require_proof: bool = True,
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE)),
 ):
@@ -8890,12 +8891,26 @@ async def approve_transaction(
 
     now = datetime.now(timezone.utc)
 
+    # Use bank_receipt_date for treasury records if provided, otherwise use current time
+    # Normalize to ISO datetime format for consistent querying
+    if bank_receipt_date:
+        treasury_date = (
+            f"{bank_receipt_date}T00:00:00"
+            if "T" not in bank_receipt_date
+            else bank_receipt_date
+        )
+    else:
+        treasury_date = now.isoformat()
+
     updates = {
         "status": TransactionStatus.APPROVED,
         "processed_by": user["user_id"],
         "processed_by_name": user["name"],
         "processed_at": now.isoformat(),
     }
+
+    if bank_receipt_date:
+        updates["bank_receipt_date"] = bank_receipt_date
 
     # For deposits, require proof of payment screenshot
     if tx["transaction_type"] == TransactionType.DEPOSIT:
@@ -8998,7 +9013,7 @@ async def approve_transaction(
                 "reference": f"Withdrawal: {tx.get('client_name', 'Client')} - {tx.get('reference', '')}",
                 "transaction_id": transaction_id,
                 "client_id": tx.get("client_id"),
-                "created_at": now.isoformat(),
+                "created_at": treasury_date,
                 "created_by": user["user_id"],
                 "created_by_name": user["name"],
             }
@@ -9081,7 +9096,7 @@ async def approve_transaction(
                     "reference": f"Withdrawal: {tx.get('client_name', 'Client')} - {tx.get('reference', '')}",
                     "transaction_id": transaction_id,
                     "client_id": tx.get("client_id"),
-                    "created_at": now.isoformat(),
+                    "created_at": treasury_date,
                     "created_by": user["user_id"],
                     "created_by_name": user["name"],
                 }
@@ -9148,7 +9163,7 @@ async def approve_transaction(
                 "reference": f"Deposit: {tx.get('client_name', 'Client')} - {tx.get('reference', '')}",
                 "transaction_id": transaction_id,
                 "client_id": tx.get("client_id"),
-                "created_at": now.isoformat(),
+                "created_at": treasury_date,
                 "created_by": user["user_id"],
                 "created_by_name": user["name"],
             }
@@ -15940,15 +15955,20 @@ async def get_account_history_for_reconciliation(
     """Get transaction history for an account on a specific date"""
     date_start = f"{date}T00:00:00"
     date_end = f"{date}T23:59:59"
+    # Also match date-only strings (e.g., "2026-03-01" without time component)
+    date_only = date
 
     transactions = []
 
     if type == "treasury":
-        # Get treasury transactions
+        # Get treasury transactions - match both ISO datetime and date-only formats
         txs = await db.treasury_transactions.find(
             {
                 "account_id": account_id,
-                "created_at": {"$gte": date_start, "$lte": date_end},
+                "$or": [
+                    {"created_at": {"$gte": date_start, "$lte": date_end}},
+                    {"created_at": date_only},
+                ],
             },
             {"_id": 0},
         ).to_list(500)
