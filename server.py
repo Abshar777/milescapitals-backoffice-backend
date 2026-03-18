@@ -7967,8 +7967,10 @@ async def get_transactions(
         ).to_list(200)
         email_client_ids = [c["client_id"] for c in matched_clients]
 
-    # Build query
+    # Build query — always fetch fresh, no caching on transactions
     query = {}
+    and_clauses = []  # collect $and sub-clauses to avoid $or key conflicts
+
     if client_id:
         query["client_id"] = client_id
     elif email_client_ids is not None:
@@ -7979,36 +7981,38 @@ async def get_transactions(
         query["status"] = status
     if destination_type:
         query["destination_type"] = destination_type
-    # Date filtering uses transaction_date (YYYY-MM-DD string stored on each transaction)
-    if date_from or date_to:
-        date_query = {}
-        if date_from:
-            date_query["$gte"] = date_from
-        if date_to:
-            date_query["$lte"] = date_to
-        query["transaction_date"] = date_query
-    if search:
-        query["$or"] = [
-            {"reference": {"$regex": search, "$options": "i"}},
-            {"client_name": {"$regex": search, "$options": "i"}},
-            {"transaction_id": {"$regex": search, "$options": "i"}},
-        ]
 
-    # Skip cache for search / email / destination / date filter queries — always fetch fresh from DB
-    cached = None
-    cache_key = None
-    if not search and not client_email and not destination_type and not date_from and not date_to:
-        cache_key = get_cache_key(
-            "transactions:list",
-            page=page,
-            page_size=actual_limit,
-            client_id=client_id,
-            transaction_type=transaction_type,
-            status=status,
-        )
-        cached = get_cached(cache_key)
-    if cached:
-        return cached
+    # Date filtering: check transaction_date (YYYY-MM-DD) first,
+    # fall back to created_at for older records that may not have it.
+    if date_from or date_to:
+        tx_date_q = {}
+        ca_q = {}
+        if date_from:
+            tx_date_q["$gte"] = date_from
+            ca_q["$gte"] = date_from          # YYYY-MM-DD lexicographically < ISO string
+        if date_to:
+            tx_date_q["$lte"] = date_to
+            ca_q["$lte"] = date_to + "T23:59:59.999"
+        and_clauses.append({
+            "$or": [
+                {"transaction_date": tx_date_q},
+                {"transaction_date": {"$exists": False}, "created_at": ca_q},
+            ]
+        })
+
+    if search:
+        and_clauses.append({
+            "$or": [
+                {"reference": {"$regex": search, "$options": "i"}},
+                {"client_name": {"$regex": search, "$options": "i"}},
+                {"transaction_id": {"$regex": search, "$options": "i"}},
+            ]
+        })
+
+    if and_clauses:
+        query["$and"] = and_clauses
+
+    # No caching — always return fresh data from DB
 
     # Get total count for pagination
     total = await db.transactions.count_documents(query)
@@ -8101,10 +8105,6 @@ async def get_transactions(
         "page_size": actual_limit,
         "total_pages": total_pages,
     }
-
-    # Cache the result (only for non-search queries)
-    if cache_key:
-        set_cached(cache_key, result, CACHE_TTL.get("transactions", 30))
 
     return result
 
