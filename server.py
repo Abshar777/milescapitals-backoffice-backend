@@ -7978,19 +7978,21 @@ async def get_transactions(
             {"transaction_id": {"$regex": search, "$options": "i"}},
         ]
 
-    # Try cache first
-    cache_key = get_cache_key(
-        "transactions:list",
-        page=page,
-        page_size=actual_limit,
-        client_id=client_id,
-        transaction_type=transaction_type,
-        status=status,
-        search=search,
-        date_from=date_from,
-        date_to=date_to,
-    )
-    cached = get_cached(cache_key)
+    # Skip cache for search queries — always fetch fresh results from DB
+    cached = None
+    cache_key = None
+    if not search:
+        cache_key = get_cache_key(
+            "transactions:list",
+            page=page,
+            page_size=actual_limit,
+            client_id=client_id,
+            transaction_type=transaction_type,
+            status=status,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        cached = get_cached(cache_key)
     if cached:
         return cached
 
@@ -8086,8 +8088,9 @@ async def get_transactions(
         "total_pages": total_pages,
     }
 
-    # Cache the result
-    set_cached(cache_key, result, CACHE_TTL.get("transactions", 30))
+    # Cache the result (only for non-search queries)
+    if cache_key:
+        set_cached(cache_key, result, CACHE_TTL.get("transactions", 30))
 
     return result
 
@@ -8763,6 +8766,9 @@ async def update_transaction(
         {"transaction_id": transaction_id}, {"$set": updates}
     )
 
+    # Invalidate transaction cache
+    invalidate_transaction_cache()
+
     await log_activity(request, user, "edit", "transactions", "Updated transaction")
 
     return await db.transactions.find_one(
@@ -8859,6 +8865,10 @@ async def assign_transaction_destination(
     await db.transactions.update_one(
         {"transaction_id": transaction_id}, {"$set": updates}
     )
+
+    # Invalidate transaction cache
+    invalidate_transaction_cache()
+
     await log_activity(
         request,
         user,
