@@ -7945,6 +7945,7 @@ async def get_transactions(
     client_email: Optional[str] = None,
     transaction_type: Optional[str] = None,
     status: Optional[str] = None,
+    destination_type: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -7976,13 +7977,16 @@ async def get_transactions(
         query["transaction_type"] = transaction_type
     if status:
         query["status"] = status
-    if date_from:
-        query["created_at"] = {"$gte": date_from}
-    if date_to:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = date_to + "T23:59:59"
-        else:
-            query["created_at"] = {"$lte": date_to + "T23:59:59"}
+    if destination_type:
+        query["destination_type"] = destination_type
+    # Date filtering uses transaction_date (YYYY-MM-DD string stored on each transaction)
+    if date_from or date_to:
+        date_query = {}
+        if date_from:
+            date_query["$gte"] = date_from
+        if date_to:
+            date_query["$lte"] = date_to
+        query["transaction_date"] = date_query
     if search:
         query["$or"] = [
             {"reference": {"$regex": search, "$options": "i"}},
@@ -7990,10 +7994,10 @@ async def get_transactions(
             {"transaction_id": {"$regex": search, "$options": "i"}},
         ]
 
-    # Skip cache for search or email filter queries — always fetch fresh results from DB
+    # Skip cache for search / email / destination / date filter queries — always fetch fresh from DB
     cached = None
     cache_key = None
-    if not search and not client_email:
+    if not search and not client_email and not destination_type and not date_from and not date_to:
         cache_key = get_cache_key(
             "transactions:list",
             page=page,
@@ -8001,8 +8005,6 @@ async def get_transactions(
             client_id=client_id,
             transaction_type=transaction_type,
             status=status,
-            date_from=date_from,
-            date_to=date_to,
         )
         cached = get_cached(cache_key)
     if cached:
