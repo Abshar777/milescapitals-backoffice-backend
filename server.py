@@ -8111,15 +8111,104 @@ async def get_transactions(
 
 @api_router.get("/transactions/pending")
 async def get_pending_transactions(
-    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.VIEW))
+    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.VIEW)),
+    search: Optional[str] = None,
+    client_email: Optional[str] = None,
+    transaction_type: Optional[str] = None,
+    status: Optional[str] = "pending",
+    destination_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
 ):
-    """Get all pending transactions for accountant approval"""
+    """Get pending transactions for accountant approval with filtering and pagination"""
+    actual_limit = min(page_size, 100)
+    skip = (page - 1) * actual_limit
+
+    # Resolve client_email → client_id(s)
+    email_client_ids = None
+    if client_email:
+        matched = await db.clients.find(
+            {"email": {"$regex": client_email, "$options": "i"}},
+            {"_id": 0, "client_id": 1},
+        ).to_list(200)
+        email_client_ids = [c["client_id"] for c in matched]
+
+    # Build query
+    query = {}
+    and_clauses = []
+
+    if status:
+        query["status"] = status
+    if transaction_type:
+        query["transaction_type"] = transaction_type
+    if destination_type:
+        query["destination_type"] = destination_type
+    if email_client_ids is not None:
+        query["client_id"] = {"$in": email_client_ids}
+
+    # Date filtering with fallback to created_at for old records
+    if date_from or date_to:
+        tx_date_q = {}
+        ca_q = {}
+        if date_from:
+            tx_date_q["$gte"] = date_from
+            ca_q["$gte"] = date_from
+        if date_to:
+            tx_date_q["$lte"] = date_to
+            ca_q["$lte"] = date_to + "T23:59:59.999"
+        and_clauses.append({
+            "$or": [
+                {"transaction_date": tx_date_q},
+                {"transaction_date": {"$exists": False}, "created_at": ca_q},
+            ]
+        })
+
+    # Text search across reference, client_name, transaction_id
+    if search:
+        and_clauses.append({
+            "$or": [
+                {"reference": {"$regex": search, "$options": "i"}},
+                {"client_name": {"$regex": search, "$options": "i"}},
+                {"transaction_id": {"$regex": search, "$options": "i"}},
+            ]
+        })
+
+    if and_clauses:
+        query["$and"] = and_clauses
+
+    total = await db.transactions.count_documents(query)
+    total_pages = max(1, (total + actual_limit - 1) // actual_limit)
+
     transactions = (
-        await db.transactions.find({"status": TransactionStatus.PENDING}, {"_id": 0})
+        await db.transactions.find(query, {"_id": 0})
         .sort("created_at", -1)
-        .to_list(1000)
+        .skip(skip)
+        .limit(actual_limit)
+        .to_list(actual_limit)
     )
-    return transactions
+
+    # Enrich with client_email
+    client_ids = list(set(tx.get("client_id") for tx in transactions if tx.get("client_id")))
+    clients_map = {}
+    if client_ids:
+        clients_list = await db.clients.find(
+            {"client_id": {"$in": client_ids}},
+            {"_id": 0, "client_id": 1, "email": 1},
+        ).to_list(len(client_ids))
+        clients_map = {c["client_id"]: c.get("email", "") for c in clients_list}
+
+    for tx in transactions:
+        tx["client_email"] = clients_map.get(tx.get("client_id"), "")
+
+    return {
+        "items": transactions,
+        "total": total,
+        "page": page,
+        "page_size": actual_limit,
+        "total_pages": total_pages,
+    }
 
 
 @api_router.get("/transactions/form-data")
