@@ -24,7 +24,7 @@ import json
 load_dotenv()
 
 MONGO_URI = "mongodb://delta:123@31.97.237.248:27017"
-DB_NAME   = "miles_ac"
+DB_NAME   = "miles_ac_db"
 
 def fmt(val):
     """Pretty-print a document, hiding _id ObjectId noise."""
