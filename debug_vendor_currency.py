@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MONGO_URI = "mongodb://delta:123@31.97.237.248:27017"
-DB_NAME   = "miles_ac"
+DB_NAME   = "miles_ac_db"
 
 def divider(title=""):
     print("\n" + "=" * 70)
