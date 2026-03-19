@@ -184,10 +184,56 @@ async def debug_transaction(tx_id: str):
     client.close()
 
 
+async def clear_vendor_from_transaction(tx_id: str):
+    client = AsyncIOMotorClient(MONGO_URI)
+    db = client[DB_NAME]
+
+    print(f"\n🔧  Clearing vendor fields from transaction: {tx_id}")
+
+    # Show current values before update
+    tx = await db.transactions.find_one({"transaction_id": tx_id})
+    if not tx:
+        print(f"\n  ❌  Transaction '{tx_id}' not found.")
+        client.close()
+        return
+
+    print(f"\n  Before:")
+    print(f"    vendor_id   : {tx.get('vendor_id')}")
+    print(f"    vendor_name : {tx.get('vendor_name')}")
+
+    # Set vendor_id and vendor_name to null
+    result = await db.transactions.update_one(
+        {"transaction_id": tx_id},
+        {"$set": {"vendor_id": None, "vendor_name": None}}
+    )
+
+    if result.modified_count == 1:
+        # Confirm
+        updated = await db.transactions.find_one({"transaction_id": tx_id})
+        print(f"\n  ✅  Updated successfully.")
+        print(f"\n  After:")
+        print(f"    vendor_id   : {updated.get('vendor_id')}")
+        print(f"    vendor_name : {updated.get('vendor_name')}")
+    else:
+        print(f"\n  ⚠️  No document was modified (matched_count={result.matched_count}).")
+
+    print()
+    client.close()
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(__doc__)
         print("Error: transaction_id is required.")
         sys.exit(1)
 
-    asyncio.run(debug_transaction(sys.argv[1]))
+    command = sys.argv[1]
+
+    # Allow: python debug_transaction.py clear-vendor <tx_id>
+    if command == "clear-vendor":
+        if len(sys.argv) < 3:
+            print("Error: transaction_id is required.  Usage: clear-vendor <tx_id>")
+            sys.exit(1)
+        asyncio.run(clear_vendor_from_transaction(sys.argv[2]))
+    else:
+        asyncio.run(debug_transaction(command))
