@@ -4897,6 +4897,12 @@ async def batch_settle_psp_transactions(
     now = datetime.now(timezone.utc)
     settlement_id = f"stl_{uuid.uuid4().hex[:12]}"
 
+    # Use provided settlement_date or current time for treasury/settlement records
+    if body.settlement_date:
+        settle_date = f"{body.settlement_date}T00:00:00" if 'T' not in body.settlement_date else body.settlement_date
+    else:
+        settle_date = now.isoformat()
+
     # Create ONE compound settlement record
     settlement_doc = {
         "settlement_id": settlement_id,
@@ -4917,11 +4923,12 @@ async def batch_settle_psp_transactions(
         "settlement_destination_id": dest_account_id,
         "settlement_destination_name": dest["account_name"],
         "status": PSPSettlementStatus.COMPLETED,
-        "expected_settlement_date": now.isoformat(),
-        "created_at": now.isoformat(),
-        "settled_at": now.isoformat(),
+        "expected_settlement_date": settle_date,
+        "settlement_date": body.settlement_date or now.strftime("%Y-%m-%d"),
+        "created_at": settle_date,
+        "settled_at": settle_date,
         "created_by": user["user_id"],
-        "created_by_name": user["name"],
+        "created_by_name": user["name"]
     }
     await db.psp_settlements.insert_one(settlement_doc)
 
@@ -4952,9 +4959,9 @@ async def batch_settle_psp_transactions(
         "related_settlement_id": settlement_id,
         "psp_id": psp_id,
         "psp_name": psp["psp_name"],
-        "created_at": now.isoformat(),
+        "created_at": settle_date,
         "created_by": user["user_id"],
-        "created_by_name": user["name"],
+        "created_by_name": user["name"]
     }
     await db.treasury_transactions.insert_one(treasury_tx)
 
@@ -19121,63 +19128,73 @@ async def generate_daily_report_html():
     return html
 
 
+_daily_report_lock = asyncio.Lock()
+
 async def send_daily_report():
     """Send daily report to all directors"""
-    try:
-        settings = await db.app_settings.find_one({"setting_type": "email"}, {"_id": 0})
-
-        if not settings or not settings.get("report_enabled"):
-            logger.info("Daily report is disabled or not configured")
-            return
-
-        if not settings.get("smtp_email") or not settings.get("smtp_password"):
-            logger.warning("SMTP settings not configured - skipping daily report")
-            return
-
-        if not settings.get("director_emails"):
-            logger.warning("No director emails configured - skipping daily report")
-            return
-
-        html_content = await generate_daily_report_html()
-
-        await send_email(
-            to_emails=settings["director_emails"],
-            subject=f"Miles Capitals - Daily Report ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})",
-            html_content=html_content,
-            smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
-            smtp_port=settings.get("smtp_port", 587),
-            smtp_email=settings["smtp_email"],
-            smtp_password=settings["smtp_password"],
-            smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"]),
-        )
-
-        # Log successful send
-        await db.email_logs.insert_one(
-            {
+    if _daily_report_lock.locked():
+        logger.warning("Daily report already in progress - skipping duplicate execution")
+        return
+    
+    async with _daily_report_lock:
+        try:
+            settings = await db.app_settings.find_one({"setting_type": "email"}, {"_id": 0})
+            
+            if not settings or not settings.get("report_enabled"):
+                logger.info("Daily report is disabled or not configured")
+                return
+            
+            if not settings.get("smtp_email") or not settings.get("smtp_password"):
+                logger.warning("SMTP settings not configured - skipping daily report")
+                return
+            
+            if not settings.get("director_emails"):
+                logger.warning("No director emails configured - skipping daily report")
+                return
+            
+            # Dedup check: skip if report was already sent in the last 30 minutes
+            recent_log = await db.email_logs.find_one({
+                "type": "daily_report",
+                "status": "sent",
+                "sent_at": {"$gte": (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()}
+            }, {"_id": 0})
+            if recent_log:
+                logger.warning("Daily report already sent within last 30 minutes - skipping duplicate")
+                return
+            
+            html_content = await generate_daily_report_html()
+            
+            await send_email(
+                to_emails=settings["director_emails"],
+                subject=f"Miles Capitals - Daily Report ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})",
+                html_content=html_content,
+                smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
+                smtp_port=settings.get("smtp_port", 587),
+                smtp_email=settings["smtp_email"],
+                smtp_password=settings["smtp_password"],
+                smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"])
+            )
+            
+            # Log successful send
+            await db.email_logs.insert_one({
                 "log_id": f"email_{uuid.uuid4().hex[:12]}",
                 "type": "daily_report",
                 "recipients": settings["director_emails"],
                 "status": "sent",
-                "sent_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-
-        logger.info(
-            f"Daily report sent to {len(settings['director_emails'])} directors"
-        )
-
-    except Exception as e:
-        logger.error(f"Failed to send daily report: {e}")
-        await db.email_logs.insert_one(
-            {
+                "sent_at": datetime.now(timezone.utc).isoformat()
+            })
+            
+            logger.info(f"Daily report sent to {len(settings['director_emails'])} directors")
+            
+        except Exception as e:
+            logger.error(f"Failed to send daily report: {e}")
+            await db.email_logs.insert_one({
                 "log_id": f"email_{uuid.uuid4().hex[:12]}",
                 "type": "daily_report",
                 "status": "failed",
                 "error": str(e),
-                "attempted_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-
+                "attempted_at": datetime.now(timezone.utc).isoformat()
+            })
 
 @api_router.post("/reports/send-now")
 async def send_report_now(
@@ -20937,63 +20954,58 @@ async def startup_db_indexes():
         # Unique index on transaction reference (sparse to allow null values)
         await db.transactions.create_index("reference", unique=True, sparse=True)
         # Index for duplicate detection queries
-        await db.transactions.create_index(
-            [
-                ("client_id", 1),
-                ("transaction_type", 1),
-                ("amount", 1),
-                ("created_at", -1),
-            ]
-        )
+        await db.transactions.create_index([
+            ("client_id", 1),
+            ("transaction_type", 1),
+            ("amount", 1),
+            ("created_at", -1)
+        ])
         # Index for common transaction queries
         await db.transactions.create_index([("created_at", -1)])
         await db.transactions.create_index([("status", 1), ("created_at", -1)])
         await db.transactions.create_index([("vendor_id", 1), ("status", 1)])
-        await db.transactions.create_index(
-            [("destination_account_id", 1), ("status", 1)]
-        )
-
+        await db.transactions.create_index([("destination_account_id", 1), ("status", 1)])
+        
         # Vendor indexes
         await db.vendors.create_index("vendor_id", unique=True, sparse=True)
         await db.vendors.create_index([("status", 1)])
         await db.vendors.create_index([("vendor_name", "text")])
-
+        
         # Income/Expense indexes
         await db.income_expense_entries.create_index([("created_at", -1)])
-        await db.income_expense_entries.create_index(
-            [("entry_type", 1), ("created_at", -1)]
-        )
+        await db.income_expense_entries.create_index([("entry_type", 1), ("created_at", -1)])
         await db.income_expense_entries.create_index([("vendor_id", 1), ("status", 1)])
-
+        
         # Treasury transaction indexes
-        await db.treasury_transactions.create_index(
-            [("account_id", 1), ("created_at", -1)]
-        )
+        await db.treasury_transactions.create_index([("account_id", 1), ("created_at", -1)])
         await db.treasury_transactions.create_index([("transaction_id", 1)])
-
+        
         # Client indexes
         await db.clients.create_index("client_id", unique=True, sparse=True)
-        await db.clients.create_index(
-            [("first_name", "text"), ("last_name", "text"), ("email", "text")]
-        )
-
+        await db.clients.create_index([("first_name", "text"), ("last_name", "text"), ("email", "text")])
+        
         # Index for roles
         await db.roles.create_index("role_id", unique=True, sparse=True)
         await db.roles.create_index("name", unique=True, sparse=True)
         logger.info("Database indexes created/verified successfully")
     except Exception as e:
         logger.warning(f"Index creation warning (may already exist): {e}")
-
+    
     # Initialize default roles
     try:
         await initialize_default_roles()
         logger.info("Default roles initialized")
     except Exception as e:
         logger.error(f"Failed to initialize default roles: {e}")
-
+    
     # Start scheduler and schedule daily report
     try:
+        global _scheduler_started
+        # Prevent duplicate scheduler starts during hot-reload
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
         scheduler.start()
+        _scheduler_started = True
         await reschedule_daily_report()
         await reschedule_audit_scan()
         logger.info("Scheduler started successfully")
