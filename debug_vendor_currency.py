@@ -1,11 +1,11 @@
 """
-Debug script: Show ALL currency breakdown for a vendor across all three data sources.
+Debug script: Trace why a specific currency appears in a vendor's settlement_by_currency.
 
 Usage:
-    python debug_vendor_currency.py <vendor_id>
+    python debug_vendor_currency.py <vendor_id> <currency>
 
 Example:
-    python debug_vendor_currency.py vendor_459b153b7fca
+    python debug_vendor_currency.py vendor_459b153b7fca AED
 
 This script queries all three data sources that contribute to settlement_by_currency:
   1. db.transactions       (deposits / withdrawals)
@@ -16,13 +16,21 @@ This script queries all three data sources that contribute to settlement_by_curr
 import asyncio
 import sys
 import os
+from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
 MONGO_URI = "mongodb://delta:123@31.97.237.248:27017"
-DB_NAME   = "miles_ac_db"
+DB_NAME   = "miles_ac"
+
+def fmt(val):
+    """Pretty-print a document, hiding _id ObjectId noise."""
+    if isinstance(val, dict):
+        return json.dumps({k: str(v) if k == "_id" else v for k, v in val.items()}, indent=2, default=str)
+    return str(val)
 
 def divider(title=""):
     print("\n" + "=" * 70)
@@ -30,19 +38,53 @@ def divider(title=""):
         print(f"  {title}")
         print("=" * 70)
 
-async def debug_vendor(vendor_id: str):
+async def debug_vendor_currency(vendor_id: str, currency: str):
     client = AsyncIOMotorClient(MONGO_URI)
     db = client[DB_NAME]
 
-    print(f"\n🔍  Debugging ALL currencies for vendor={vendor_id}")
+    print(f"\n🔍  Debugging  vendor={vendor_id}  currency={currency}")
     print(f"    MongoDB: {MONGO_URI}  /  DB: {DB_NAME}")
 
     # ------------------------------------------------------------------ #
-    # 1. TRANSACTIONS — aggregated by currency
+    # 1. TRANSACTIONS collection
     # ------------------------------------------------------------------ #
-    divider("1. TRANSACTIONS  (db.transactions)  — grouped by currency")
+    divider("1. TRANSACTIONS  (db.transactions)")
 
-    tx_agg = await db.transactions.aggregate([
+    # The settlement pipeline groups by base_currency OR currency.
+    # We look for docs whose effective currency matches the target.
+    tx_query = {
+        "vendor_id": vendor_id,
+        "status": {"$in": ["approved", "completed"]},
+        "settled": {"$ne": True},
+        "$or": [
+            {"base_currency": currency},
+            {"currency": currency, "base_currency": {"$exists": False}},
+            {"currency": currency, "base_currency": None},
+        ],
+    }
+
+    tx_docs = await db.transactions.find(tx_query).to_list(500)
+    print(f"\n  Matching transaction docs: {len(tx_docs)}")
+
+    if tx_docs:
+        for doc in tx_docs:
+            print(f"\n  ─ transaction_id : {doc.get('transaction_id') or doc.get('_id')}")
+            print(f"    type           : {doc.get('transaction_type')}")
+            print(f"    status         : {doc.get('status')}")
+            print(f"    settled        : {doc.get('settled')}")
+            print(f"    currency       : {doc.get('currency')}")
+            print(f"    base_currency  : {doc.get('base_currency')}")
+            print(f"    amount (USD)   : {doc.get('amount')}")
+            print(f"    base_amount    : {doc.get('base_amount')}")
+            print(f"    commission_usd : {doc.get('vendor_commission_amount')}")
+            print(f"    created_at     : {doc.get('created_at')}")
+            print(f"    client_id      : {doc.get('client_id')}")
+            print(f"    reference      : {doc.get('reference')}")
+    else:
+        print("  ✅  No matching transaction docs found.")
+
+    # Also show the raw aggregation result for this currency
+    agg_pipeline = [
         {
             "$match": {
                 "vendor_id": vendor_id,
@@ -53,65 +95,63 @@ async def debug_vendor(vendor_id: str):
         {
             "$group": {
                 "_id": {"$ifNull": ["$base_currency", "$currency"]},
-                "deposit_count":     {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]},    1, 0]}},
-                "withdrawal_count":  {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]}, 1, 0]}},
-                "deposit_base":      {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]},    {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
-                "withdrawal_base":   {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]}, {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+                "deposit_amount":    {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]},    {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+                "withdrawal_amount": {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]}, {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
                 "deposit_usd":       {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]},    "$amount", 0]}},
                 "withdrawal_usd":    {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]}, "$amount", 0]}},
-                "commission_usd":    {"$sum": {"$ifNull": ["$vendor_commission_amount", 0]}},
-                "commission_base":   {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
-                "doc_count":         {"$sum": 1},
+                "deposit_count":     {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]},    1, 0]}},
+                "withdrawal_count":  {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]}, 1, 0]}},
+                "total_commission_usd":  {"$sum": {"$ifNull": ["$vendor_commission_amount", 0]}},
+                "total_commission_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
             }
         },
-        {"$sort": {"_id": 1}},
-    ]).to_list(100)
-
-    if tx_agg:
-        print(f"\n  {'Currency':<10} {'Docs':>5} {'Dep#':>5} {'With#':>6} {'Dep Base':>14} {'With Base':>14} {'Dep USD':>12} {'With USD':>12} {'Comm USD':>12}")
-        print(f"  {'-'*10} {'-'*5} {'-'*5} {'-'*6} {'-'*14} {'-'*14} {'-'*12} {'-'*12} {'-'*12}")
-        for r in tx_agg:
-            print(f"  {str(r['_id']):<10} {r['doc_count']:>5} {r['deposit_count']:>5} {r['withdrawal_count']:>6} "
-                  f"{r['deposit_base']:>14.2f} {r['withdrawal_base']:>14.2f} "
-                  f"{r['deposit_usd']:>12.2f} {r['withdrawal_usd']:>12.2f} {r['commission_usd']:>12.4f}")
-    else:
-        print("  ✅  No approved/completed unsettled transactions found.")
-
-    # Show each doc for every currency
-    print()
-    all_tx_docs = await db.transactions.find(
-        {
-            "vendor_id": vendor_id,
-            "status": {"$in": ["approved", "completed"]},
-            "settled": {"$ne": True},
-        },
-        sort=[("base_currency", 1), ("currency", 1), ("created_at", 1)]
-    ).to_list(500)
-
-    print(f"  Individual docs ({len(all_tx_docs)} total):")
-    if all_tx_docs:
-        print(f"  {'tx_id':<28} {'type':<12} {'status':<12} {'currency':<10} {'base_cur':<10} {'amount(USD)':>12} {'base_amount':>12} {'comm_usd':>10} {'settled':<8} {'created_at'}")
-        print(f"  {'-'*28} {'-'*12} {'-'*12} {'-'*10} {'-'*10} {'-'*12} {'-'*12} {'-'*10} {'-'*8} {'-'*24}")
-        for d in all_tx_docs:
-            print(f"  {str(d.get('transaction_id') or d.get('_id')):<28} "
-                  f"{str(d.get('transaction_type') or ''):<12} "
-                  f"{str(d.get('status') or ''):<12} "
-                  f"{str(d.get('currency') or ''):<10} "
-                  f"{str(d.get('base_currency') or ''):<10} "
-                  f"{(d.get('amount') or 0):>12.2f} "
-                  f"{(d.get('base_amount') or 0):>12.2f} "
-                  f"{(d.get('vendor_commission_amount') or 0):>10.4f} "
-                  f"{str(d.get('settled') or False):<8} "
-                  f"{str(d.get('created_at') or '')[:24]}")
-    else:
-        print("  (none)")
+    ]
+    all_agg = await db.transactions.aggregate(agg_pipeline).to_list(100)
+    print(f"\n  Raw aggregation by currency (all currencies for this vendor):")
+    for row in all_agg:
+        marker = " ◀ TARGET" if row["_id"] == currency else ""
+        print(f"    {row['_id']:10s}  deposit_count={row['deposit_count']}  withdrawal_count={row['withdrawal_count']}  deposit_usd={row['deposit_usd']:.2f}  withdrawal_usd={row['withdrawal_usd']:.2f}{marker}")
 
     # ------------------------------------------------------------------ #
-    # 2. INCOME / EXPENSES — aggregated by currency
+    # 2. INCOME / EXPENSES collection
     # ------------------------------------------------------------------ #
-    divider("2. INCOME / EXPENSES  (db.income_expenses)  — grouped by currency")
+    divider("2. INCOME / EXPENSES  (db.income_expenses)")
 
-    ie_agg = await db.income_expenses.aggregate([
+    ie_query = {
+        "vendor_id": vendor_id,
+        "status": "completed",
+        "converted_to_loan": {"$ne": True},
+        "settled": {"$ne": True},
+        "$or": [
+            {"base_currency": currency},
+            {"currency": currency, "base_currency": {"$exists": False}},
+            {"currency": currency, "base_currency": None},
+        ],
+    }
+
+    ie_docs = await db.income_expenses.find(ie_query).to_list(500)
+    print(f"\n  Matching income/expense docs: {len(ie_docs)}")
+
+    if ie_docs:
+        for doc in ie_docs:
+            print(f"\n  ─ _id            : {doc.get('_id')}")
+            print(f"    entry_type     : {doc.get('entry_type')}")
+            print(f"    status         : {doc.get('status')}")
+            print(f"    settled        : {doc.get('settled')}")
+            print(f"    converted_loan : {doc.get('converted_to_loan')}")
+            print(f"    currency       : {doc.get('currency')}")
+            print(f"    base_currency  : {doc.get('base_currency')}")
+            print(f"    amount         : {doc.get('amount')}")
+            print(f"    amount_usd     : {doc.get('amount_usd')}")
+            print(f"    base_amount    : {doc.get('base_amount')}")
+            print(f"    commission_usd : {doc.get('vendor_commission_amount')}")
+            print(f"    created_at     : {doc.get('created_at')}")
+            print(f"    description    : {doc.get('description') or doc.get('notes')}")
+    else:
+        print("  ✅  No matching income/expense docs found.")
+
+    # Raw IE aggregation
+    ie_agg_pipeline = [
         {
             "$match": {
                 "vendor_id": vendor_id,
@@ -127,180 +167,107 @@ async def debug_vendor(vendor_id: str):
                 "expense_count": {"$sum": {"$cond": [{"$eq": ["$entry_type", "expense"]}, 1, 0]}},
                 "income_base":   {"$sum": {"$cond": [{"$eq": ["$entry_type", "income"]},  {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
                 "expense_base":  {"$sum": {"$cond": [{"$eq": ["$entry_type", "expense"]}, {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
-                "income_usd":    {"$sum": {"$cond": [{"$eq": ["$entry_type", "income"]},  {"$ifNull": ["$amount_usd", "$amount"]}, 0]}},
-                "expense_usd":   {"$sum": {"$cond": [{"$eq": ["$entry_type", "expense"]}, {"$ifNull": ["$amount_usd", "$amount"]}, 0]}},
-                "commission_usd":  {"$sum": {"$ifNull": ["$vendor_commission_amount", 0]}},
-                "commission_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
-                "doc_count": {"$sum": 1},
             }
         },
-        {"$sort": {"_id": 1}},
-    ]).to_list(100)
-
-    if ie_agg:
-        print(f"\n  {'Currency':<10} {'Docs':>5} {'Inc#':>5} {'Exp#':>5} {'Inc Base':>14} {'Exp Base':>14} {'Inc USD':>12} {'Exp USD':>12} {'Comm USD':>12}")
-        print(f"  {'-'*10} {'-'*5} {'-'*5} {'-'*5} {'-'*14} {'-'*14} {'-'*12} {'-'*12} {'-'*12}")
-        for r in ie_agg:
-            print(f"  {str(r['_id']):<10} {r['doc_count']:>5} {r['income_count']:>5} {r['expense_count']:>5} "
-                  f"{r['income_base']:>14.2f} {r['expense_base']:>14.2f} "
-                  f"{r['income_usd']:>12.2f} {r['expense_usd']:>12.2f} {r['commission_usd']:>12.4f}")
+    ]
+    ie_all_agg = await db.income_expenses.aggregate(ie_agg_pipeline).to_list(100)
+    print(f"\n  Raw IE aggregation by currency:")
+    if ie_all_agg:
+        for row in ie_all_agg:
+            marker = " ◀ TARGET" if row["_id"] == currency else ""
+            print(f"    {row['_id']:10s}  income_count={row['income_count']}  expense_count={row['expense_count']}  income_base={row['income_base']:.2f}  expense_base={row['expense_base']:.2f}{marker}")
     else:
-        print("  ✅  No completed unsettled IE entries found.")
+        print("    (no IE entries for this vendor)")
 
-    # Individual IE docs
-    print()
-    all_ie_docs = await db.income_expenses.find(
-        {
+    # ------------------------------------------------------------------ #
+    # 3. LOAN TRANSACTIONS collection
+    # ------------------------------------------------------------------ #
+    divider("3. LOAN TRANSACTIONS  (db.loan_transactions)")
+
+    loan_query = {
+        "$or": [
+            {"source_vendor_id": vendor_id},
+            {"credit_to_vendor_id": vendor_id},
+        ],
+        "status": "completed",
+        "settled": {"$ne": True},
+        "currency": currency,
+    }
+
+    loan_docs = await db.loan_transactions.find(loan_query).to_list(500)
+    print(f"\n  Matching loan transaction docs: {len(loan_docs)}")
+
+    if loan_docs:
+        for doc in loan_docs:
+            direction = "IN (repayment to vendor)" if doc.get("credit_to_vendor_id") == vendor_id else "OUT (disbursement from vendor)"
+            print(f"\n  ─ _id                  : {doc.get('_id')}")
+            print(f"    direction              : {direction}")
+            print(f"    status                 : {doc.get('status')}")
+            print(f"    settled                : {doc.get('settled')}")
+            print(f"    currency               : {doc.get('currency')}")
+            print(f"    amount                 : {doc.get('amount')}")
+            print(f"    source_vendor_id       : {doc.get('source_vendor_id')}")
+            print(f"    credit_to_vendor_id    : {doc.get('credit_to_vendor_id')}")
+            print(f"    commission_usd         : {doc.get('vendor_commission_amount')}")
+            print(f"    created_at             : {doc.get('created_at')}")
+    else:
+        print("  ✅  No matching loan transaction docs found.")
+
+    # ------------------------------------------------------------------ #
+    # 4. SUMMARY
+    # ------------------------------------------------------------------ #
+    divider("SUMMARY")
+
+    sources_found = []
+    if tx_docs:       sources_found.append(f"transactions ({len(tx_docs)} doc(s))")
+    if ie_docs:       sources_found.append(f"income_expenses ({len(ie_docs)} doc(s))")
+    if loan_docs:     sources_found.append(f"loan_transactions ({len(loan_docs)} doc(s))")
+
+    if sources_found:
+        print(f"\n  AED appears because of:")
+        for s in sources_found:
+            print(f"    • {s}")
+    else:
+        print(f"\n  ⚠️  Could not find any docs for currency={currency} with the standard filters.")
+        print(f"      The entry might come from a doc where neither base_currency nor currency")
+        print(f"      is '{currency}' — check for null/missing base_currency fields that default to this.")
+
+        # Broader search — ignore settled/status filters
+        print(f"\n  Broader search (ignoring status/settled filters):")
+        broad_tx = await db.transactions.find({
             "vendor_id": vendor_id,
-            "status": "completed",
-            "converted_to_loan": {"$ne": True},
-            "settled": {"$ne": True},
-        },
-        sort=[("base_currency", 1), ("currency", 1), ("created_at", 1)]
-    ).to_list(500)
+            "$or": [{"base_currency": currency}, {"currency": currency}]
+        }).to_list(50)
+        print(f"    transactions  (any status/settled): {len(broad_tx)}")
+        for d in broad_tx:
+            print(f"      tx_id={d.get('transaction_id') or d.get('_id')}  status={d.get('status')}  settled={d.get('settled')}  base_currency={d.get('base_currency')}  currency={d.get('currency')}  amount={d.get('amount')}")
 
-    print(f"  Individual docs ({len(all_ie_docs)} total):")
-    if all_ie_docs:
-        print(f"  {'_id':<28} {'type':<10} {'currency':<10} {'base_cur':<10} {'amount':>12} {'base_amount':>12} {'amount_usd':>12} {'comm_usd':>10} {'settled':<8} {'created_at'}")
-        print(f"  {'-'*28} {'-'*10} {'-'*10} {'-'*10} {'-'*12} {'-'*12} {'-'*12} {'-'*10} {'-'*8} {'-'*24}")
-        for d in all_ie_docs:
-            print(f"  {str(d.get('_id')):<28} "
-                  f"{str(d.get('entry_type') or ''):<10} "
-                  f"{str(d.get('currency') or ''):<10} "
-                  f"{str(d.get('base_currency') or ''):<10} "
-                  f"{(d.get('amount') or 0):>12.2f} "
-                  f"{(d.get('base_amount') or 0):>12.2f} "
-                  f"{(d.get('amount_usd') or 0):>12.2f} "
-                  f"{(d.get('vendor_commission_amount') or 0):>10.4f} "
-                  f"{str(d.get('settled') or False):<8} "
-                  f"{str(d.get('created_at') or '')[:24]}")
-    else:
-        print("  (none)")
+        broad_ie = await db.income_expenses.find({
+            "vendor_id": vendor_id,
+            "$or": [{"base_currency": currency}, {"currency": currency}]
+        }).to_list(50)
+        print(f"    income_expenses (any status/settled): {len(broad_ie)}")
+        for d in broad_ie:
+            print(f"      _id={d.get('_id')}  status={d.get('status')}  settled={d.get('settled')}  entry_type={d.get('entry_type')}  base_currency={d.get('base_currency')}  currency={d.get('currency')}  amount={d.get('amount')}")
 
-    # ------------------------------------------------------------------ #
-    # 3. LOAN TRANSACTIONS — aggregated by currency
-    # ------------------------------------------------------------------ #
-    divider("3. LOAN TRANSACTIONS  (db.loan_transactions)  — grouped by currency")
-
-    loan_agg = await db.loan_transactions.aggregate([
-        {
-            "$match": {
-                "$or": [
-                    {"source_vendor_id": vendor_id},
-                    {"credit_to_vendor_id": vendor_id},
-                ],
-                "status": "completed",
-                "settled": {"$ne": True},
-            }
-        },
-        {
-            "$group": {
-                "_id": "$currency",
-                "loan_in_count":  {"$sum": {"$cond": [{"$eq": ["$credit_to_vendor_id", vendor_id]}, 1, 0]}},
-                "loan_out_count": {"$sum": {"$cond": [{"$eq": ["$source_vendor_id",   vendor_id]}, 1, 0]}},
-                "loan_in_amount": {"$sum": {"$cond": [{"$eq": ["$credit_to_vendor_id", vendor_id]}, "$amount", 0]}},
-                "loan_out_amount":{"$sum": {"$cond": [{"$eq": ["$source_vendor_id",   vendor_id]}, "$amount", 0]}},
-                "commission_usd": {"$sum": {"$ifNull": ["$vendor_commission_amount", 0]}},
-                "doc_count": {"$sum": 1},
-            }
-        },
-        {"$sort": {"_id": 1}},
-    ]).to_list(100)
-
-    if loan_agg:
-        print(f"\n  {'Currency':<10} {'Docs':>5} {'In#':>5} {'Out#':>5} {'In Amount':>14} {'Out Amount':>14} {'Comm USD':>12}")
-        print(f"  {'-'*10} {'-'*5} {'-'*5} {'-'*5} {'-'*14} {'-'*14} {'-'*12}")
-        for r in loan_agg:
-            print(f"  {str(r['_id']):<10} {r['doc_count']:>5} {r['loan_in_count']:>5} {r['loan_out_count']:>5} "
-                  f"{r['loan_in_amount']:>14.2f} {r['loan_out_amount']:>14.2f} {r['commission_usd']:>12.4f}")
-    else:
-        print("  ✅  No completed unsettled loan transactions found.")
-
-    # Individual loan docs
-    print()
-    all_loan_docs = await db.loan_transactions.find(
-        {
-            "$or": [
-                {"source_vendor_id": vendor_id},
-                {"credit_to_vendor_id": vendor_id},
-            ],
-            "status": "completed",
-            "settled": {"$ne": True},
-        },
-        sort=[("currency", 1), ("created_at", 1)]
-    ).to_list(500)
-
-    print(f"  Individual docs ({len(all_loan_docs)} total):")
-    if all_loan_docs:
-        print(f"  {'_id':<28} {'direction':<8} {'currency':<10} {'amount':>12} {'source_vendor':<28} {'credit_vendor':<28} {'settled':<8} {'created_at'}")
-        print(f"  {'-'*28} {'-'*8} {'-'*10} {'-'*12} {'-'*28} {'-'*28} {'-'*8} {'-'*24}")
-        for d in all_loan_docs:
-            direction = "IN " if d.get("credit_to_vendor_id") == vendor_id else "OUT"
-            print(f"  {str(d.get('_id')):<28} "
-                  f"{direction:<8} "
-                  f"{str(d.get('currency') or ''):<10} "
-                  f"{(d.get('amount') or 0):>12.2f} "
-                  f"{str(d.get('source_vendor_id') or ''):<28} "
-                  f"{str(d.get('credit_to_vendor_id') or ''):<28} "
-                  f"{str(d.get('settled') or False):<8} "
-                  f"{str(d.get('created_at') or '')[:24]}")
-    else:
-        print("  (none)")
-
-    # ------------------------------------------------------------------ #
-    # 4. COMBINED SUMMARY — what settlement_by_currency will look like
-    # ------------------------------------------------------------------ #
-    divider("4. COMBINED SUMMARY  (what settlement_by_currency returns)")
-
-    all_currencies = set()
-    tx_map   = {r["_id"]: r for r in tx_agg}
-    ie_map   = {r["_id"]: r for r in ie_agg}
-    loan_map = {r["_id"]: r for r in loan_agg}
-    all_currencies.update(tx_map.keys(), ie_map.keys(), loan_map.keys())
-
-    print(f"\n  {'Currency':<10} {'Source':<32} {'Total In Base':>14} {'Total Out Base':>15} {'Comm USD':>12} {'Net USD':>12}")
-    print(f"  {'-'*10} {'-'*32} {'-'*14} {'-'*15} {'-'*12} {'-'*12}")
-
-    for curr in sorted(c for c in all_currencies if c is not None):
-        sources = []
-        total_in = total_out = comm_usd = net_usd = 0
-
-        tx = tx_map.get(curr)
-        if tx:
-            sources.append(f"tx(dep={tx['deposit_count']},with={tx['withdrawal_count']})")
-            total_in  += tx["deposit_base"]
-            total_out += tx["withdrawal_base"]
-            comm_usd  += tx["commission_usd"]
-            net_usd   += tx["deposit_usd"] - tx["withdrawal_usd"] - tx["commission_usd"]
-
-        ie = ie_map.get(curr)
-        if ie:
-            sources.append(f"ie(inc={ie['income_count']},exp={ie['expense_count']})")
-            total_in  += ie["income_base"]
-            total_out += ie["expense_base"]
-            comm_usd  += ie["commission_usd"]
-            net_usd   += ie["income_usd"] - ie["expense_usd"] - ie["commission_usd"]
-
-        ln = loan_map.get(curr)
-        if ln:
-            sources.append(f"loan(in={ln['loan_in_count']},out={ln['loan_out_count']})")
-            total_in  += ln["loan_in_amount"]
-            total_out += ln["loan_out_amount"]
-            comm_usd  += ln["commission_usd"]
-            net_usd   += ln["loan_in_amount"] - ln["loan_out_amount"] - ln["commission_usd"]
-
-        src_str = ", ".join(sources)
-        print(f"  {curr:<10} {src_str:<32} {total_in:>14.2f} {total_out:>15.2f} {comm_usd:>12.4f} {net_usd:>12.2f}")
+        broad_loan = await db.loan_transactions.find({
+            "$or": [{"source_vendor_id": vendor_id}, {"credit_to_vendor_id": vendor_id}],
+            "currency": currency,
+        }).to_list(50)
+        print(f"    loan_transactions (any status/settled): {len(broad_loan)}")
+        for d in broad_loan:
+            print(f"      _id={d.get('_id')}  status={d.get('status')}  settled={d.get('settled')}  currency={d.get('currency')}  amount={d.get('amount')}")
 
     print()
     client.close()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print(__doc__)
-        print("Error: vendor_id is required.")
+        print("Error: vendor_id and currency are required.")
         sys.exit(1)
 
     vendor_id = sys.argv[1]
-    asyncio.run(debug_vendor(vendor_id))
+    currency  = sys.argv[2].upper()
+    asyncio.run(debug_vendor_currency(vendor_id, currency))
