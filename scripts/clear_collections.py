@@ -25,7 +25,7 @@ def main():
     print(f"\nConnected to database: {DB_NAME}")
     print("\nCollections to be cleared:")
     for col in COLLECTIONS_TO_CLEAR:
-        if col == "transactions":
+        if col == "treasury_transactions":
             count = db[col].count_documents({"reference": {"$ne": "REFFCFF8F47"}})
             kept = db[col].count_documents({"reference": "REFFCFF8F47"})
             print(f"  - {col}: {count} documents will be deleted (keeping {kept} with reference REFFCFF8F47)")
