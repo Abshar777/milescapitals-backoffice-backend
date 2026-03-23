@@ -15,7 +15,7 @@ load_dotenv(ROOT_DIR / ".env")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 
-COLLECTIONS_TO_CLEAR = ["transaction_requests", "transactions", "treasury_transactions","psp_settlements","income_expenses"]
+COLLECTIONS_TO_CLEAR = ["transaction_requests", "transactions", "treasury_transactions","psp_settlements"]
 
 
 def main():
@@ -25,8 +25,13 @@ def main():
     print(f"\nConnected to database: {DB_NAME}")
     print("\nCollections to be cleared:")
     for col in COLLECTIONS_TO_CLEAR:
-        count = db[col].count_documents({})
-        print(f"  - {col}: {count} documents")
+        if col == "transactions":
+            count = db[col].count_documents({"reference": {"$ne": "REFFCFF8F47"}})
+            kept = db[col].count_documents({"reference": "REFFCFF8F47"})
+            print(f"  - {col}: {count} documents will be deleted (keeping {kept} with reference REFFCFF8F47)")
+        else:
+            count = db[col].count_documents({})
+            print(f"  - {col}: {count} documents")
 
     print(
         "\n⚠️  WARNING: This will permanently delete all documents in the above collections!"
@@ -39,8 +44,14 @@ def main():
 
     print("\nClearing collections...")
     for col in COLLECTIONS_TO_CLEAR:
-        result = db[col].delete_many({})
-        print(f"  ✓ {col}: deleted {result.deleted_count} documents")
+        if col == "transactions":
+            query = {"reference": {"$ne": "REFFCFF8F47"}}
+            result = db[col].delete_many(query)
+            kept = db[col].count_documents({"reference": "REFFCFF8F47"})
+            print(f"  ✓ {col}: deleted {result.deleted_count} documents (kept {kept} with reference REFFCFF8F47)")
+        else:
+            result = db[col].delete_many({})
+            print(f"  ✓ {col}: deleted {result.deleted_count} documents")
 
     print("\nDone! All specified collections have been cleared.")
     client.close()
