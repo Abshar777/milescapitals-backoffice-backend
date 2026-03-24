@@ -8668,30 +8668,32 @@ async def bulk_validate_transactions(
     }
 
 
+
+
 @api_router.post("/transactions/bulk-create")
 async def bulk_create_transactions(
     request: Request,
     body: dict = Body(...),
-    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.CREATE)),
+    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.CREATE))
 ):
     """Create transactions from validated bulk data"""
     rows = body.get("rows", [])
     if not rows:
         raise HTTPException(status_code=400, detail="No rows to process")
-
+    
     now = datetime.now(timezone.utc)
     created = []
-
+    
     # Lookup caches for enrichment
     psp_cache = {}
     vendor_cache = {}
     treasury_cache = {}
-
+    
     for row_item in rows:
         data = row_item.get("data", {})
         if not row_item.get("valid"):
             continue
-
+        
         tx_id = f"tx_{uuid.uuid4().hex[:12]}"
         ref = data.get("reference") or f"REF{uuid.uuid4().hex[:8].upper()}"
         tx_type = data["type"]
@@ -8700,7 +8702,7 @@ async def bulk_create_transactions(
         base_amount = data.get("base_amount")
         exchange_rate = data.get("exchange_rate")
         dest_type = data.get("destination_type", "bank")
-
+        
         # Enrich PSP info
         psp_name = None
         psp_commission_rate = None
@@ -8708,9 +8710,7 @@ async def bulk_create_transactions(
         psp_net_amount = usd_amount
         if data.get("psp_id"):
             if data["psp_id"] not in psp_cache:
-                psp_cache[data["psp_id"]] = await db.psps.find_one(
-                    {"psp_id": data["psp_id"]}, {"_id": 0}
-                )
+                psp_cache[data["psp_id"]] = await db.psps.find_one({"psp_id": data["psp_id"]}, {"_id": 0})
             psp_info = psp_cache.get(data["psp_id"])
             if psp_info:
                 psp_name = psp_info["psp_name"]
@@ -8718,43 +8718,37 @@ async def bulk_create_transactions(
                 comm = psp_commission_rate / 100
                 psp_commission_amount = round(usd_amount * comm, 2)
                 psp_net_amount = usd_amount - psp_commission_amount
-
+        
         # Enrich vendor info
         vendor_name = None
         v_comm_rate = 0
         v_comm_amt = 0
+        v_comm_base_amt = 0
+        v_comm_base_currency = None
         if data.get("vendor_id"):
             if data["vendor_id"] not in vendor_cache:
-                vendor_cache[data["vendor_id"]] = await db.vendors.find_one(
-                    {"vendor_id": data["vendor_id"]}, {"_id": 0}
-                )
+                vendor_cache[data["vendor_id"]] = await db.vendors.find_one({"vendor_id": data["vendor_id"]}, {"_id": 0})
             vendor_info = vendor_cache.get(data["vendor_id"])
             if vendor_info:
                 vendor_name = vendor_info["vendor_name"]
-                v_comm_rate = vendor_info.get(
-                    (
-                        "deposit_commission"
-                        if tx_type == "deposit"
-                        else "withdrawal_commission"
-                    ),
-                    0,
-                )
+                v_comm_rate = vendor_info.get("deposit_commission" if tx_type == "deposit" else "withdrawal_commission", 0)
                 if v_comm_rate > 0:
+                    # USD commission
                     v_comm_amt = round(usd_amount * v_comm_rate / 100, 2)
-
+                    # Base/payment currency commission
+                    v_base = base_amount if (currency and currency != "USD" and base_amount) else usd_amount
+                    v_comm_base_amt = round(v_base * v_comm_rate / 100, 2)
+                    v_comm_base_currency = currency if (currency and currency != "USD") else "USD"
+        
         # Enrich treasury info
         dest_account_name = None
         if data.get("destination_id"):
             if data["destination_id"] not in treasury_cache:
-                treasury_cache[data["destination_id"]] = (
-                    await db.treasury_accounts.find_one(
-                        {"account_id": data["destination_id"]}, {"_id": 0}
-                    )
-                )
+                treasury_cache[data["destination_id"]] = await db.treasury_accounts.find_one({"account_id": data["destination_id"]}, {"_id": 0})
             treasury_info = treasury_cache.get(data["destination_id"])
             if treasury_info:
                 dest_account_name = treasury_info["account_name"]
-
+        
         tx_doc = {
             "transaction_id": tx_id,
             "client_id": data["client_id"],
@@ -8777,13 +8771,16 @@ async def bulk_create_transactions(
             "psp_net_amount": psp_net_amount if data.get("psp_id") else None,
             "vendor_commission_rate": v_comm_rate if v_comm_rate > 0 else None,
             "vendor_commission_amount": v_comm_amt if v_comm_amt > 0 else None,
+            "vendor_commission_base_amount": v_comm_base_amt if v_comm_base_amt > 0 else None,
+            "vendor_commission_base_currency": v_comm_base_currency,
+            "vendor_deposit_commission": vendor_info.get("deposit_commission") if (data.get("vendor_id") and vendor_cache.get(data["vendor_id"]) and tx_type == "deposit") else None,
+            "vendor_withdrawal_commission": vendor_info.get("withdrawal_commission") if (data.get("vendor_id") and vendor_cache.get(data["vendor_id"]) and tx_type == "withdrawal") else None,
             "transaction_mode": "bank",
             "status": TransactionStatus.PENDING,
             "description": data.get("description", ""),
             "reference": ref,
             "crm_reference": data.get("crm_reference") or None,
-            "transaction_date": data.get("transaction_date")
-            or now.strftime("%Y-%m-%d"),
+            "transaction_date": data.get("transaction_date") or now.strftime("%Y-%m-%d"),
             "proof_image": None,
             "created_by": user["user_id"],
             "created_by_name": user["name"],
@@ -8796,27 +8793,17 @@ async def bulk_create_transactions(
             "request_id": None,
             "bulk_upload": True,
             "created_at": now.isoformat(),
-            "processed_at": None,
+            "processed_at": None
         }
         await db.transactions.insert_one(tx_doc)
-        created.append(
-            {
-                "transaction_id": tx_id,
-                "reference": ref,
-                "client_name": data.get("client_name"),
-                "amount": usd_amount,
-            }
-        )
-
-    await log_activity(
-        request,
-        user,
-        "create",
-        "transactions",
-        f"Bulk created {len(created)} transactions",
-    )
-
+        created.append({"transaction_id": tx_id, "reference": ref, "client_name": data.get("client_name"), "amount": usd_amount})
+    
+    await log_activity(request, user, "create", "transactions", f"Bulk created {len(created)} transactions")
+    
     return {"created": len(created), "transactions": created}
+
+
+
 
 
 @api_router.post("/transactions")
