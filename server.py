@@ -2797,67 +2797,57 @@ class TreasuryTransferRequest(BaseModel):
     amount: float
     exchange_rate: Optional[float] = 1.0
     notes: Optional[str] = None
+    transfer_date: Optional[str] = None
 
 
 @api_router.post("/treasury/transfer")
-async def inter_treasury_transfer(
-    request: Request,
-    transfer: TreasuryTransferRequest,
-    user: dict = Depends(require_permission(Modules.TREASURY, Actions.CREATE)),
-):
+async def inter_treasury_transfer(request: Request, transfer: TreasuryTransferRequest, user: dict = Depends(require_permission(Modules.TREASURY, Actions.CREATE))):
+
     """Transfer funds between treasury accounts"""
     if transfer.source_account_id == transfer.destination_account_id:
-        raise HTTPException(
-            status_code=400, detail="Source and destination accounts must be different"
-        )
-
+        raise HTTPException(status_code=400, detail="Source and destination accounts must be different")
+    
     if transfer.amount <= 0:
         raise HTTPException(status_code=400, detail="Transfer amount must be positive")
-
+    
     # Get source account
-    source = await db.treasury_accounts.find_one(
-        {"account_id": transfer.source_account_id}, {"_id": 0}
-    )
+    source = await db.treasury_accounts.find_one({"account_id": transfer.source_account_id}, {"_id": 0})
     if not source:
         raise HTTPException(status_code=404, detail="Source account not found")
-
+    
     # Get destination account
-    destination = await db.treasury_accounts.find_one(
-        {"account_id": transfer.destination_account_id}, {"_id": 0}
-    )
+    destination = await db.treasury_accounts.find_one({"account_id": transfer.destination_account_id}, {"_id": 0})
     if not destination:
         raise HTTPException(status_code=404, detail="Destination account not found")
-
+    
     # Check sufficient balance
     if source.get("balance", 0) < transfer.amount:
-        raise HTTPException(
-            status_code=400, detail="Insufficient balance in source account"
-        )
-
+        raise HTTPException(status_code=400, detail="Insufficient balance in source account")
+    
     now = datetime.now(timezone.utc)
     transfer_id = f"trf_{uuid.uuid4().hex[:12]}"
-
+    
+    # Use provided transfer_date or current time
+    if transfer.transfer_date:
+        record_date = f"{transfer.transfer_date}T00:00:00" if 'T' not in transfer.transfer_date else transfer.transfer_date
+    else:
+        record_date = now.isoformat()
+    
     # Calculate destination amount based on exchange rate
     destination_amount = round(transfer.amount * (transfer.exchange_rate or 1.0), 2)
-
+    
     # Deduct from source
     await db.treasury_accounts.update_one(
         {"account_id": transfer.source_account_id},
-        {
-            "$inc": {"balance": -transfer.amount},
-            "$set": {"updated_at": now.isoformat()},
-        },
+        {"$inc": {"balance": -transfer.amount}, "$set": {"updated_at": now.isoformat()}}
     )
-
+    
     # Add to destination
     await db.treasury_accounts.update_one(
         {"account_id": transfer.destination_account_id},
-        {
-            "$inc": {"balance": destination_amount},
-            "$set": {"updated_at": now.isoformat()},
-        },
+        {"$inc": {"balance": destination_amount}, "$set": {"updated_at": now.isoformat()}}
     )
-
+    
     # Record source transaction (transfer out)
     source_tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
     source_tx_doc = {
@@ -2874,12 +2864,12 @@ async def inter_treasury_transfer(
         "destination_amount": destination_amount,
         "destination_currency": destination.get("currency", "USD"),
         "notes": transfer.notes,
-        "created_at": now.isoformat(),
+        "created_at": record_date,
         "created_by": user["user_id"],
-        "created_by_name": user["name"],
+        "created_by_name": user["name"]
     }
     await db.treasury_transactions.insert_one(source_tx_doc)
-
+    
     # Record destination transaction (transfer in)
     dest_tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
     dest_tx_doc = {
@@ -2896,12 +2886,12 @@ async def inter_treasury_transfer(
         "source_amount": transfer.amount,
         "source_currency": source.get("currency", "USD"),
         "notes": transfer.notes,
-        "created_at": now.isoformat(),
+        "created_at": record_date,
         "created_by": user["user_id"],
-        "created_by_name": user["name"],
+        "created_by_name": user["name"]
     }
     await db.treasury_transactions.insert_one(dest_tx_doc)
-
+    
     # Return transfer details
     await log_activity(request, user, "create", "treasury", "Inter-treasury transfer")
 
@@ -2916,9 +2906,8 @@ async def inter_treasury_transfer(
         "exchange_rate": transfer.exchange_rate,
         "notes": transfer.notes,
         "created_at": now.isoformat(),
-        "created_by_name": user["name"],
+        "created_by_name": user["name"]
     }
-
 
 # ============== LP (LIQUIDITY PROVIDER) ROUTES ==============
 
@@ -8412,25 +8401,29 @@ async def get_transactions(
         ca_q = {}
         if date_from:
             tx_date_q["$gte"] = date_from
-            ca_q["$gte"] = date_from          # YYYY-MM-DD lexicographically < ISO string
+            ca_q["$gte"] = date_from  # YYYY-MM-DD lexicographically < ISO string
         if date_to:
             tx_date_q["$lte"] = date_to
             ca_q["$lte"] = date_to + "T23:59:59.999"
-        and_clauses.append({
-            "$or": [
-                {"transaction_date": tx_date_q},
-                {"transaction_date": {"$exists": False}, "created_at": ca_q},
-            ]
-        })
+        and_clauses.append(
+            {
+                "$or": [
+                    {"transaction_date": tx_date_q},
+                    {"transaction_date": {"$exists": False}, "created_at": ca_q},
+                ]
+            }
+        )
 
     if search:
-        and_clauses.append({
-            "$or": [
-                {"reference": {"$regex": search, "$options": "i"}},
-                {"client_name": {"$regex": search, "$options": "i"}},
-                {"transaction_id": {"$regex": search, "$options": "i"}},
-            ]
-        })
+        and_clauses.append(
+            {
+                "$or": [
+                    {"reference": {"$regex": search, "$options": "i"}},
+                    {"client_name": {"$regex": search, "$options": "i"}},
+                    {"transaction_id": {"$regex": search, "$options": "i"}},
+                ]
+            }
+        )
 
     if and_clauses:
         query["$and"] = and_clauses
@@ -8581,22 +8574,26 @@ async def get_pending_transactions(
         if date_to:
             tx_date_q["$lte"] = date_to
             ca_q["$lte"] = date_to + "T23:59:59.999"
-        and_clauses.append({
-            "$or": [
-                {"transaction_date": tx_date_q},
-                {"transaction_date": {"$exists": False}, "created_at": ca_q},
-            ]
-        })
+        and_clauses.append(
+            {
+                "$or": [
+                    {"transaction_date": tx_date_q},
+                    {"transaction_date": {"$exists": False}, "created_at": ca_q},
+                ]
+            }
+        )
 
     # Text search across reference, client_name, transaction_id
     if search:
-        and_clauses.append({
-            "$or": [
-                {"reference": {"$regex": search, "$options": "i"}},
-                {"client_name": {"$regex": search, "$options": "i"}},
-                {"transaction_id": {"$regex": search, "$options": "i"}},
-            ]
-        })
+        and_clauses.append(
+            {
+                "$or": [
+                    {"reference": {"$regex": search, "$options": "i"}},
+                    {"client_name": {"$regex": search, "$options": "i"}},
+                    {"transaction_id": {"$regex": search, "$options": "i"}},
+                ]
+            }
+        )
 
     if and_clauses:
         query["$and"] = and_clauses
@@ -8613,7 +8610,9 @@ async def get_pending_transactions(
     )
 
     # Enrich with client_email
-    client_ids = list(set(tx.get("client_id") for tx in transactions if tx.get("client_id")))
+    client_ids = list(
+        set(tx.get("client_id") for tx in transactions if tx.get("client_id"))
+    )
     clients_map = {}
     if client_ids:
         clients_list = await db.clients.find(
