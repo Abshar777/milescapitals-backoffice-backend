@@ -20454,22 +20454,24 @@ async def send_daily_report():
                 logger.warning("No director emails configured - skipping daily report")
                 return
 
-            # Dedup check: skip if report was already sent in the last 30 minutes
-            recent_log = await db.email_logs.find_one(
+            # Atomic dedup: claim the send slot for today - only one worker wins
+            today_key = f"daily_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+            existing = await db.email_logs.find_one_and_update(
+                {"log_id": today_key, "type": "daily_report"},
                 {
-                    "type": "daily_report",
-                    "status": "sent",
-                    "sent_at": {
-                        "$gte": (
-                            datetime.now(timezone.utc) - timedelta(minutes=30)
-                        ).isoformat()
-                    },
+                    "$setOnInsert": {
+                        "log_id": today_key,
+                        "type": "daily_report",
+                        "status": "in_progress",
+                        "claimed_at": datetime.now(timezone.utc).isoformat(),
+                    }
                 },
-                {"_id": 0},
+                upsert=True,
+                return_document=False,
             )
-            if recent_log:
+            if existing is not None:
                 logger.warning(
-                    "Daily report already sent within last 30 minutes - skipping duplicate"
+                    "Daily report already sent/claimed today - skipping duplicate"
                 )
                 return
 
@@ -20486,15 +20488,16 @@ async def send_daily_report():
                 smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"]),
             )
 
-            # Log successful send
-            await db.email_logs.insert_one(
+            # Mark claimed slot as sent
+            await db.email_logs.update_one(
+                {"log_id": today_key},
                 {
-                    "log_id": f"email_{uuid.uuid4().hex[:12]}",
-                    "type": "daily_report",
-                    "recipients": settings["director_emails"],
-                    "status": "sent",
-                    "sent_at": datetime.now(timezone.utc).isoformat(),
-                }
+                    "$set": {
+                        "recipients": settings["director_emails"],
+                        "status": "sent",
+                        "sent_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
 
             logger.info(
@@ -20503,14 +20506,15 @@ async def send_daily_report():
 
         except Exception as e:
             logger.error(f"Failed to send daily report: {e}")
-            await db.email_logs.insert_one(
+            await db.email_logs.update_one(
+                {"log_id": today_key},
                 {
-                    "log_id": f"email_{uuid.uuid4().hex[:12]}",
-                    "type": "daily_report",
-                    "status": "failed",
-                    "error": str(e),
-                    "attempted_at": datetime.now(timezone.utc).isoformat(),
-                }
+                    "$set": {
+                        "status": "failed",
+                        "error": str(e),
+                        "attempted_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
 
 
