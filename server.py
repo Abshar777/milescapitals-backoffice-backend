@@ -368,6 +368,8 @@ class ClientCreate(BaseModel):
     mt5_number: Optional[str] = None
     crm_customer_id: Optional[str] = None
     notes: Optional[str] = None
+    tags: Optional[List[str]] = []
+
 
 
 class ClientUpdate(BaseModel):
@@ -380,6 +382,7 @@ class ClientUpdate(BaseModel):
     crm_customer_id: Optional[str] = None
     kyc_status: Optional[str] = None
     notes: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 # Treasury/Bank Account Models
@@ -2043,7 +2046,53 @@ async def delete_user(
     return {"message": "User deleted"}
 
 
+
+
+
+
+
+# ============== CLIENT TAGS ROUTES ==============
+
+class ClientTagCreate(BaseModel):
+    name: str
+    color: Optional[str] = "#3B82F6"
+
+@api_router.get("/client-tags")
+async def get_client_tags(user: dict = Depends(get_current_user)):
+    """Get all predefined client tags"""
+    tags = await db.client_tags.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+    return tags
+
+@api_router.post("/client-tags")
+async def create_client_tag(tag: ClientTagCreate, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.CREATE))):
+    """Create a new client tag"""
+    existing = await db.client_tags.find_one({"name": {"$regex": f"^{tag.name}$", "$options": "i"}})
+    if existing:
+        raise HTTPException(status_code=400, detail="Tag already exists")
+    
+    tag_doc = {
+        "tag_id": f"tag_{uuid.uuid4().hex[:8]}",
+        "name": tag.name.strip(),
+        "color": tag.color or "#3B82F6",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": user["user_id"]
+    }
+    await db.client_tags.insert_one(tag_doc)
+    return {k: v for k, v in tag_doc.items() if k != "_id"}
+
+@api_router.delete("/client-tags/{tag_id}")
+async def delete_client_tag(tag_id: str, user: dict = Depends(require_permission(Modules.CLIENTS, Actions.DELETE))):
+    """Delete a client tag"""
+    result = await db.client_tags.delete_one({"tag_id": tag_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Tag not found")
+    return {"message": "Tag deleted"}
+
+
+
 # ============== CLIENTS ROUTES ==============
+
+
 
 
 @api_router.get("/clients")
@@ -8361,6 +8410,7 @@ async def get_transactions(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    client_tag: Optional[str] = None,
     page: int = 1,
     page_size: int = 25,
     limit: int = 100,
@@ -8394,6 +8444,8 @@ async def get_transactions(
     if destination_type:
         query["destination_type"] = destination_type
 
+    if client_tag:
+        query["client_tags"] = client_tag
     # Date filtering: check transaction_date (YYYY-MM-DD) first,
     # fall back to created_at for older records that may not have it.
     if date_from or date_to:
@@ -9298,6 +9350,7 @@ async def create_transaction(
     collecting_person_number: Optional[str] = Form(None),
     crm_reference: Optional[str] = Form(None),
     transaction_date: Optional[str] = Form(None),
+    client_tags: Optional[str] = Form(None),
     proof_image: Optional[UploadFile] = File(None),
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.CREATE)),
 ):
@@ -9331,6 +9384,7 @@ async def create_transaction(
             collecting_person_number,
             crm_reference,
             transaction_date,
+            client_tags,
             proof_image,
             user,
         )
@@ -9372,6 +9426,7 @@ async def _create_transaction_impl(
     collecting_person_number,
     crm_reference,
     transaction_date,
+    client_tags_str, 
     proof_image,
     user,
 ):
@@ -9630,11 +9685,18 @@ async def _create_transaction_impl(
             vendor_commission_amount = round(
                 usd_amount * vendor_commission_rate / 100, 2
             )
+    # Parse client_tags: either from form (comma-separated string) or from client defaults
+    tx_client_tags = []
+    if client_tags_str:
+        tx_client_tags = [t.strip() for t in client_tags_str.split(",") if t.strip()]
+    elif client.get("tags"):
+        tx_client_tags = client["tags"]
 
     tx_doc = {
         "transaction_id": tx_id,
         "client_id": client_id,
         "client_name": f"{client['first_name']} {client['last_name']}",
+        "client_tags": tx_client_tags,
         "transaction_type": transaction_type,
         "amount": usd_amount,
         "currency": "USD",
@@ -10669,6 +10731,7 @@ async def create_transaction_request(
     client_usdt_address: Optional[str] = Form(None),
     client_usdt_network: Optional[str] = Form(None),
     transaction_date: Optional[str] = Form(None),
+    client_tags: Optional[str] = Form(None),
     proof_image: Optional[UploadFile] = File(None),
     user: dict = Depends(
         require_permission(Modules.TRANSACTION_REQUESTS, Actions.CREATE)
@@ -10692,6 +10755,15 @@ async def create_transaction_request(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
+
+
+    # Parse client_tags
+    tx_client_tags = []
+    if client_tags:
+        tx_client_tags = [t.strip() for t in client_tags.split(",") if t.strip()]
+    elif client.get("tags"):
+        tx_client_tags = client["tags"]
+    
     # Handle proof image
     proof_url = None
     if proof_image and proof_image.filename:
@@ -10710,6 +10782,7 @@ async def create_transaction_request(
         "transaction_type": transaction_type,
         "client_id": client_id,
         "client_name": f"{client.get('first_name', '')} {client.get('last_name', '')}".strip(),
+        "client_tags": tx_client_tags,
         "amount": amount,
         "currency": currency,
         "base_currency": base_currency,
@@ -10730,6 +10803,7 @@ async def create_transaction_request(
         "client_bank_currency": client_bank_currency,
         "client_usdt_address": client_usdt_address,
         "client_usdt_network": client_usdt_network,
+        "client_tags": doc.get("client_tags", []),
         "proof_image": proof_url,
         "status": "pending",
         "created_at": now.isoformat(),
@@ -11205,6 +11279,7 @@ async def process_transaction_request(
         "reference": req.get("reference") or f"REF{uuid.uuid4().hex[:8].upper()}",
         "crm_reference": req.get("crm_reference"),
         "transaction_date": req.get("transaction_date") or now.strftime("%Y-%m-%d"),
+        "client_tags": req.get("client_tags", []),
         "proof_image": req.get("proof_image"),
         "created_by": req.get("created_by"),
         "created_by_name": req.get("created_by_name"),
