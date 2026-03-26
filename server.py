@@ -4011,44 +4011,42 @@ async def delete_psp(
 # PSP Settlements
 @api_router.get("/psp/{psp_id}/settlements")
 async def get_psp_settlements(
-    psp_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
+    psp_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
 ):
-    settlements = (
-        await db.psp_settlements.find({"psp_id": psp_id}, {"_id": 0})
-        .sort("created_at", -1)
-        .to_list(1000)
-    )
+    query = {"psp_id": psp_id}
+    if date_from:
+        query.setdefault("created_at", {})["$gte"] = date_from
+    if date_to:
+        query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
+    
+    total = await db.psp_settlements.count_documents(query)
+    skip = (page - 1) * page_size
+    settlements = await db.psp_settlements.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
     # Enrich each settlement with payment currency info from its transactions
     for stl in settlements:
         tx_ids = stl.get("transaction_ids", [])
         if tx_ids:
             txs = await db.transactions.find(
                 {"transaction_id": {"$in": tx_ids}},
-                {"_id": 0, "base_currency": 1, "exchange_rate": 1, "base_amount": 1},
+                {"_id": 0, "base_currency": 1, "exchange_rate": 1, "base_amount": 1}
             ).to_list(len(tx_ids))
-            currencies = set(
-                tx.get("base_currency")
-                for tx in txs
-                if tx.get("base_currency") and tx.get("base_currency") != "USD"
-            )
+            currencies = set(tx.get("base_currency") for tx in txs if tx.get("base_currency") and tx.get("base_currency") != "USD")
             if currencies:
                 stl["payment_currency"] = ", ".join(sorted(currencies))
-                rates = [
-                    tx.get("exchange_rate") for tx in txs if tx.get("exchange_rate")
-                ]
-                stl["avg_exchange_rate"] = (
-                    round(sum(rates) / len(rates), 4) if rates else None
-                )
-                total_base = sum(
-                    tx.get("base_amount", 0) for tx in txs if tx.get("base_amount")
-                )
+                rates = [tx.get("exchange_rate") for tx in txs if tx.get("exchange_rate")]
+                stl["avg_exchange_rate"] = round(sum(rates) / len(rates), 4) if rates else None
+                total_base = sum(tx.get("base_amount", 0) for tx in txs if tx.get("base_amount"))
                 stl["base_gross_amount"] = round(total_base, 2) if total_base else None
             else:
                 stl["payment_currency"] = "USD"
         else:
             stl["payment_currency"] = stl.get("treasury_currency", "USD")
-    return settlements
-
+    return {"items": settlements, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, -(-total // page_size))}
 
 # Get transactions included in a specific settlement
 @api_router.get("/psp/{psp_id}/settlement/{settlement_id}/transactions")
@@ -4305,48 +4303,57 @@ async def complete_settlement(
 # Get pending PSP transactions (not yet settled)
 @api_router.get("/psp/{psp_id}/pending-transactions")
 async def get_psp_pending_transactions(
-    psp_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
+    psp_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
 ):
     """Get approved DEPOSIT transactions for a PSP that haven't been settled"""
-    transactions = (
-        await db.transactions.find(
-            {
-                "psp_id": psp_id,
-                "destination_type": "psp",
-                "transaction_type": "deposit",
-                "status": TransactionStatus.APPROVED,
-                "settled": {"$ne": True},
-            },
-            {"_id": 0},
-        )
-        .sort("created_at", -1)
-        .to_list(1000)
-    )
-    return transactions
-
+    query = {
+        "psp_id": psp_id,
+        "destination_type": "psp",
+        "transaction_type": "deposit",
+        "status": TransactionStatus.APPROVED,
+        "settled": {"$ne": True}
+    }
+    if date_from:
+        query.setdefault("created_at", {})["$gte"] = date_from
+    if date_to:
+        query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
+    
+    total = await db.transactions.count_documents(query)
+    skip = (page - 1) * page_size
+    transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+    return {"items": transactions, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, -(-total // page_size))}
 
 @api_router.get("/psp/{psp_id}/withdrawal-transactions")
 async def get_psp_withdrawal_transactions(
-    psp_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
+    psp_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
 ):
     """Get withdrawal transactions for a PSP (unsettled only)"""
-    transactions = (
-        await db.transactions.find(
-            {
-                "psp_id": psp_id,
-                "destination_type": "psp",
-                "transaction_type": "withdrawal",
-                "status": {
-                    "$in": [TransactionStatus.APPROVED, TransactionStatus.PENDING]
-                },
-                "settled": {"$ne": True},
-            },
-            {"_id": 0},
-        )
-        .sort("created_at", -1)
-        .to_list(1000)
-    )
-    return transactions
+    query = {
+        "psp_id": psp_id,
+        "destination_type": "psp",
+        "transaction_type": "withdrawal",
+        "status": {"$in": [TransactionStatus.APPROVED, TransactionStatus.PENDING]},
+        "settled": {"$ne": True}
+    }
+    if date_from:
+        query.setdefault("created_at", {})["$gte"] = date_from
+    if date_to:
+        query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
+    
+    total = await db.transactions.count_documents(query)
+    skip = (page - 1) * page_size
+    transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+    return {"items": transactions, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, -(-total // page_size))}
 
 
 @api_router.post("/psp/{psp_id}/deposit-extra-commission")
@@ -4457,134 +4464,99 @@ async def update_psp_withdrawal_extra_commission(
 # Get PSP dashboard summary
 @api_router.get("/psp-summary")
 async def get_psp_summary(
+    page: int = 1,
+    page_size: int = 20,
     user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
 ):
     """Get summary of all PSPs with pending settlements"""
-    psps = await db.psps.find({"status": PSPStatus.ACTIVE}, {"_id": 0}).to_list(1000)
+    total = await db.psps.count_documents({"status": PSPStatus.ACTIVE})
+    skip = (page - 1) * page_size
+    psps = await db.psps.find({"status": PSPStatus.ACTIVE}, {"_id": 0}).skip(skip).limit(page_size).to_list(page_size)
     now = datetime.now(timezone.utc)
-
+    
     result = []
     for psp in psps:
         # Get pending transactions count and amount
-        pending_txs = await db.transactions.find(
-            {
-                "psp_id": psp["psp_id"],
-                "destination_type": "psp",
-                "transaction_type": "deposit",
-                "status": TransactionStatus.APPROVED,
-                "settled": {"$ne": True},
-            },
-            {"_id": 0},
-        ).to_list(1000)
-
+        pending_txs = await db.transactions.find({
+            "psp_id": psp["psp_id"],
+            "destination_type": "psp",
+            "transaction_type": "deposit",
+            "status": TransactionStatus.APPROVED,
+            "settled": {"$ne": True}
+        }, {"_id": 0}).to_list(1000)
+        
         # Get unsettled approved withdrawals
-        withdrawal_txs = await db.transactions.find(
-            {
-                "psp_id": psp["psp_id"],
-                "destination_type": "psp",
-                "transaction_type": "withdrawal",
-                "status": TransactionStatus.APPROVED,
-                "settled": {"$ne": True},
-            },
-            {"_id": 0},
-        ).to_list(1000)
-
+        withdrawal_txs = await db.transactions.find({
+            "psp_id": psp["psp_id"],
+            "destination_type": "psp",
+            "transaction_type": "withdrawal",
+            "status": TransactionStatus.APPROVED,
+            "settled": {"$ne": True}
+        }, {"_id": 0}).to_list(1000)
+        
         pending_count = len(pending_txs)
-        pending_amount_gross = sum(
-            tx.get("psp_net_amount", tx.get("amount", 0)) for tx in pending_txs
-        )
-
+        pending_amount_gross = sum(tx.get("psp_net_amount", tx.get("amount", 0)) for tx in pending_txs)
+        
         # Check for overdue settlements
         overdue_count = 0
         for tx in pending_txs:
             exp_date = tx.get("psp_expected_settlement_date")
             if exp_date:
-                exp_dt = datetime.fromisoformat(exp_date.replace("Z", "+00:00"))
+                exp_dt = datetime.fromisoformat(exp_date.replace('Z', '+00:00'))
                 if exp_dt.tzinfo is None:
                     exp_dt = exp_dt.replace(tzinfo=timezone.utc)
                 if exp_dt < now:
                     overdue_count += 1
-
+        
         # Calculate reserve fund held from pending transactions
-        reserve_fund_rate = (
-            psp.get("reserve_fund_rate", psp.get("chargeback_rate", 0)) / 100
-        )
+        reserve_fund_rate = psp.get("reserve_fund_rate", psp.get("chargeback_rate", 0)) / 100
         reserve_from_pending = 0
         for tx in pending_txs:
             rf = tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
             if rf > 0:
                 reserve_from_pending += rf
             else:
-                reserve_from_pending += round(
-                    tx.get("amount", 0) * reserve_fund_rate, 2
-                )
+                reserve_from_pending += round(tx.get("amount", 0) * reserve_fund_rate, 2)
 
         # Pending Amount = Deposit Net - Reserve Fund - Withdrawals - Withdrawal Extra Commission
         withdrawal_total = sum(tx.get("amount", 0) for tx in withdrawal_txs)
-        withdrawal_extra_comm = sum(
-            tx.get("psp_withdrawal_extra_commission", 0) or 0 for tx in withdrawal_txs
-        )
-        pending_amount = max(
-            round(
-                pending_amount_gross
-                - reserve_from_pending
-                - withdrawal_total
-                - withdrawal_extra_comm,
-                2,
-            ),
-            0,
-        )
+        withdrawal_extra_comm = sum(tx.get("psp_withdrawal_extra_commission", 0) or 0 for tx in withdrawal_txs)
+        pending_amount = max(round(pending_amount_gross - reserve_from_pending - withdrawal_total - withdrawal_extra_comm, 2), 0)
 
         # Total reserve held includes pending + settled unreleased
         total_reserve_held = reserve_from_pending
 
         # Also count released/unreleased reserve funds from settled transactions
-        settled_with_reserve = await db.transactions.find(
-            {
-                "psp_id": psp["psp_id"],
-                "destination_type": "psp",
-                "settled": True,
-                "$or": [
-                    {"psp_reserve_fund_amount": {"$gt": 0}},
-                    {"psp_chargeback_amount": {"$gt": 0}},
-                ],
-            },
-            {
-                "_id": 0,
-                "psp_reserve_fund_amount": 1,
-                "psp_chargeback_amount": 1,
-                "reserve_fund_released": 1,
-            },
-        ).to_list(10000)
-
+        settled_with_reserve = await db.transactions.find({
+            "psp_id": psp["psp_id"],
+            "destination_type": "psp",
+            "settled": True,
+            "$or": [
+                {"psp_reserve_fund_amount": {"$gt": 0}},
+                {"psp_chargeback_amount": {"$gt": 0}}
+            ]
+        }, {"_id": 0, "psp_reserve_fund_amount": 1, "psp_chargeback_amount": 1, "reserve_fund_released": 1}).to_list(10000)
+        
         held_from_settled = sum(
             tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
-            for tx in settled_with_reserve
-            if not tx.get("reserve_fund_released")
+            for tx in settled_with_reserve if not tx.get("reserve_fund_released")
         )
         total_reserve_held += held_from_settled
 
         # Get settlement destination
-        dest = await db.treasury_accounts.find_one(
-            {"account_id": psp.get("settlement_destination_id")}, {"_id": 0}
-        )
-
-        result.append(
-            {
-                **psp,
-                "pending_transactions_count": pending_count,
-                "pending_amount": pending_amount,
-                "overdue_count": overdue_count,
-                "total_reserve_fund_held": round(total_reserve_held, 2),
-                "settlement_destination_name": (
-                    dest["account_name"] if dest else "Unknown"
-                ),
-                "settlement_destination_bank": dest.get("bank_name") if dest else None,
-            }
-        )
-
-    return result
-
+        dest = await db.treasury_accounts.find_one({"account_id": psp.get("settlement_destination_id")}, {"_id": 0})
+        
+        result.append({
+            **psp,
+            "pending_transactions_count": pending_count,
+            "pending_amount": pending_amount,
+            "overdue_count": overdue_count,
+            "total_reserve_fund_held": round(total_reserve_held, 2),
+            "settlement_destination_name": dest["account_name"] if dest else "Unknown",
+            "settlement_destination_bank": dest.get("bank_name") if dest else None
+        })
+    
+    return {"items": result, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, -(-total // page_size))}
 
 # Model for PSP transaction charges
 class PSPTransactionCharges(BaseModel):
@@ -10693,6 +10665,12 @@ async def get_transaction_requests(
     return result
 
 
+@api_router.get("/transaction-requests/pending-count")
+async def get_pending_request_count(user: dict = Depends(get_current_user)):
+    count = await db.transaction_requests.count_documents({"status": "pending"})
+    return {"count": count}
+
+
 @api_router.get("/transaction-requests/{request_id}")
 async def get_transaction_request(
     request_id: str,
@@ -10803,7 +10781,7 @@ async def create_transaction_request(
         "client_bank_currency": client_bank_currency,
         "client_usdt_address": client_usdt_address,
         "client_usdt_network": client_usdt_network,
-        "client_tags": doc.get("client_tags", []),
+        
         "proof_image": proof_url,
         "status": "pending",
         "created_at": now.isoformat(),
