@@ -20537,7 +20537,7 @@ async def generate_daily_report_html():
                     </div>
                     <table>
                         <tr><th>Account</th><th>Currency</th><th>Balance</th><th>USD Value</th></tr>
-                        {''.join(f"<tr><td>{a.get('account_name', 'N/A')}</td><td>{a.get('currency', 'USD')}</td><td>{a.get('balance', 0):,.2f}</td><td>${convert_to_usd(a.get('balance', 0), a.get('currency', 'USD')):,.2f}</td></tr>" for a in treasury_accounts[:5])}
+                        {''.join(f"<tr><td>{a.get('account_name', 'N/A')}</td><td>{a.get('currency', 'USD')}</td><td>{a.get('balance', 0):,.2f}</td><td>${convert_to_usd(a.get('balance', 0), a.get('currency', 'USD')):,.2f}</td></tr>" for a in treasury_accounts)}
                     </table>
                 </div>
                 
