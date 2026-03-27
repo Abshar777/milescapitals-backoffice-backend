@@ -6711,6 +6711,15 @@ async def get_vendor(
             "loan_commission_base", 0
         )
 
+    # Get custom settled amounts for this vendor (same logic as list endpoint)
+    custom_settled_map_detail = {}
+    custom_stls_detail = await db.vendor_settlements.aggregate([
+        {"$match": {"vendor_id": vendor_id, "settlement_mode": "custom", "status": VendorSettlementStatus.APPROVED}},
+        {"$group": {"_id": "$source_currency", "total": {"$sum": "$gross_amount"}}}
+    ]).to_list(50)
+    for cs in custom_stls_detail:
+        custom_settled_map_detail[cs["_id"]] = cs["total"]
+
     vendor["settlement_by_currency"] = [
         {
             "currency": curr,
@@ -6729,7 +6738,9 @@ async def get_vendor(
                 d["tx_commission_base"]
                 + d["ie_commission_base"]
                 + d["loan_commission_base"]
-            ),
+            )
+            - custom_settled_map_detail.get(curr, 0),
+            "custom_settled": custom_settled_map_detail.get(curr, 0),
             "usd_equivalent": (d["tx_deposit_usd"] + d["ie_in_usd"] + d["loan_in_usd"])
             - (d["tx_withdrawal_usd"] + d["ie_out_usd"] + d["loan_out_usd"])
             - (
