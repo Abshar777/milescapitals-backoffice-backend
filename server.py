@@ -9140,6 +9140,7 @@ async def bulk_create_transactions(
         psp_commission_rate = None
         psp_commission_amount = None
         psp_net_amount = usd_amount
+        psp_reserve_fund_amount = 0
         if data.get("psp_id"):
             if data["psp_id"] not in psp_cache:
                 psp_cache[data["psp_id"]] = await db.psps.find_one(
@@ -9151,7 +9152,10 @@ async def bulk_create_transactions(
                 psp_commission_rate = psp_info.get("commission_rate", 0)
                 comm = psp_commission_rate / 100
                 psp_commission_amount = round(usd_amount * comm, 2)
-                psp_net_amount = usd_amount - psp_commission_amount
+                rf_rate = psp_info.get("reserve_fund_rate", psp_info.get("chargeback_rate", 0)) / 100
+                if tx_type == "deposit" and rf_rate > 0:
+                    psp_reserve_fund_amount = round(usd_amount * rf_rate, 2)
+                psp_net_amount = round(usd_amount - psp_commission_amount - psp_reserve_fund_amount, 2)
 
         # Enrich vendor info
         vendor_name = None
@@ -9221,7 +9225,10 @@ async def bulk_create_transactions(
             "psp_name": psp_name,
             "psp_commission_rate": psp_commission_rate,
             "psp_commission_amount": psp_commission_amount,
+            "psp_reserve_fund_amount": psp_reserve_fund_amount if psp_reserve_fund_amount > 0 else None,
+            "psp_chargeback_amount": psp_reserve_fund_amount if psp_reserve_fund_amount > 0 else None,
             "psp_net_amount": psp_net_amount if data.get("psp_id") else None,
+            "psp_total_deductions": round((psp_commission_amount or 0) + psp_reserve_fund_amount, 2) if data.get("psp_id") else None,
             "vendor_commission_rate": v_comm_rate if v_comm_rate > 0 else None,
             "vendor_commission_amount": v_comm_amt if v_comm_amt > 0 else None,
             "vendor_commission_base_amount": (
