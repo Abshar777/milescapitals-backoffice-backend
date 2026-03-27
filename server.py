@@ -2735,7 +2735,7 @@ async def get_treasury_history(
     )
 
     # Adjust amounts for display - outflows should be negative
-    outflow_types = ["debt_payment", "withdrawal", "transfer_out", "expense"]
+    outflow_types = ["debt_payment", "withdrawal", "transfer_out", "expense", "balance_adjustment_debit", "loan_disbursement"]
     for ttx in treasury_txs:
         if ttx.get("transaction_type") in outflow_types:
             ttx["amount"] = -abs(ttx.get("amount", 0))
@@ -2838,6 +2838,130 @@ async def delete_treasury_account(
     await log_activity(request, user, "delete", "treasury", "Deleted treasury account")
 
     return {"message": "Treasury account deleted"}
+
+# Balance Fix / Opening Balance Adjustment
+class BalanceFixRequest(BaseModel):
+    actual_balance: float
+    effective_date: Optional[str] = None
+    reason: Optional[str] = None
+
+@api_router.post("/treasury/{account_id}/balance-fix")
+async def fix_treasury_balance(request: Request, account_id: str, fix: BalanceFixRequest, user: dict = Depends(require_admin)):
+    """Fix treasury opening balance at effective date.
+    Inserts an adjustment so the opening balance on that date matches the input.
+    Then recalculates all running balances and the final account balance."""
+    account = await db.treasury_accounts.find_one({"account_id": account_id}, {"_id": 0})
+    if not account:
+        raise HTTPException(status_code=404, detail="Treasury account not found")
+
+    # Effective date → adjustment placed at start-of-day (opening balance)
+    raw_date = fix.effective_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    day_str = raw_date[:10]  # YYYY-MM-DD
+    day_start = f"{day_str}T00:00:00"
+
+    outflow_types = ["debt_payment", "withdrawal", "transfer_out", "expense", "balance_adjustment_debit", "loan_disbursement"]
+
+    # Get all transactions for this account sorted by date
+    all_txs = await db.treasury_transactions.find(
+        {"account_id": account_id},
+        {"_id": 0, "treasury_transaction_id": 1, "created_at": 1, "amount": 1, "transaction_type": 1}
+    ).sort("created_at", 1).to_list(None)
+
+    # Remove any existing balance adjustments on the same date (re-fix scenario)
+    existing_adj_ids = []
+    for tx in all_txs:
+        tx_date = tx.get("created_at", "")[:10]
+        tx_type = tx.get("transaction_type", "")
+        if tx_date == day_str and tx_type in ("balance_adjustment", "balance_adjustment_debit"):
+            existing_adj_ids.append(tx["treasury_transaction_id"])
+
+    if existing_adj_ids:
+        await db.treasury_transactions.delete_many(
+            {"treasury_transaction_id": {"$in": existing_adj_ids}}
+        )
+        # Refresh the transaction list after deletion
+        all_txs = await db.treasury_transactions.find(
+            {"account_id": account_id},
+            {"_id": 0, "treasury_transaction_id": 1, "created_at": 1, "amount": 1, "transaction_type": 1}
+        ).sort("created_at", 1).to_list(None)
+
+    # Calculate running balance BEFORE the selected date's real transactions start.
+    # Include any existing midnight adjustments (they are prior opening fixes).
+    # "Real" transactions on this day start after 00:00:00.
+    running_before_date = 0.0
+    for tx in all_txs:
+        tx_date = tx.get("created_at", "")
+        # Include everything strictly before the day, PLUS any midnight entries (00:00:00)
+        if tx_date > day_start:
+            break
+        amt = tx.get("amount", 0)
+        if tx.get("transaction_type") in outflow_types:
+            running_before_date -= abs(amt)
+        else:
+            running_before_date += abs(amt)
+
+    running_before_date = round(running_before_date, 2)
+    adjustment = round(fix.actual_balance - running_before_date, 2)
+
+    if adjustment == 0:
+        raise HTTPException(status_code=400, detail=f"Opening balance on {day_str} already matches {fix.actual_balance:,.2f}. No adjustment needed.")
+
+    tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+    # Place slightly after midnight so it sorts after any existing midnight entries
+    adjustment_timestamp = f"{day_str}T00:00:00.500000"
+
+    adjustment_entry = {
+        "treasury_transaction_id": tx_id,
+        "account_id": account_id,
+        "transaction_type": "balance_adjustment",
+        "amount": abs(adjustment),
+        "currency": account.get("currency", "USD"),
+        "reference": f"Opening Balance Fix: {fix.reason or 'Manual correction'}",
+        "description": f"Opening balance on {day_str} fixed to {fix.actual_balance:,.2f}. Was {running_before_date:,.2f}. Reason: {fix.reason or 'Manual correction'}",
+        "created_at": adjustment_timestamp,
+        "created_by": user.get("email"),
+        "created_by_name": user.get("name", user.get("email")),
+        "adjustment_direction": "credit" if adjustment > 0 else "debit",
+        "previous_balance": running_before_date,
+        "new_balance": fix.actual_balance,
+    }
+
+    if adjustment < 0:
+        adjustment_entry["transaction_type"] = "balance_adjustment_debit"
+
+    await db.treasury_transactions.insert_one(adjustment_entry)
+
+    # Recalculate and update the account's current balance from all transactions
+    all_txs_after = await db.treasury_transactions.find(
+        {"account_id": account_id},
+        {"_id": 0, "amount": 1, "transaction_type": 1}
+    ).to_list(None)
+
+    new_balance = 0.0
+    for tx in all_txs_after:
+        amt = tx.get("amount", 0)
+        if tx.get("transaction_type") in outflow_types:
+            new_balance -= abs(amt)
+        else:
+            new_balance += abs(amt)
+
+    new_balance = round(new_balance, 2)
+    await db.treasury_accounts.update_one(
+        {"account_id": account_id},
+        {"$set": {"balance": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+
+    await log_activity(request, user, "edit", "treasury", f"Fixed opening balance on {day_str} to {fix.actual_balance:,.2f}. Adjustment: {adjustment:+,.2f}", reference_id=account_id)
+
+    return {
+        "message": f"Opening balance on {day_str} fixed successfully",
+        "previous_running_balance": running_before_date,
+        "target_balance": fix.actual_balance,
+        "adjustment": adjustment,
+        "adjustment_type": "credit" if adjustment > 0 else "debit",
+        "new_account_balance": new_balance,
+        "transaction_id": tx_id
+    }
 
 
 # Inter-Treasury Transfer
@@ -6222,22 +6346,28 @@ async def get_vendors(
         # Build settlement by currency for list view
         settlement_by_currency = []
         total_net_usd = 0
+
+        # Get custom settled amounts for this vendor
+        custom_settled_map = {}
+        custom_stls = await db.vendor_settlements.aggregate([
+            {"$match": {"vendor_id": vendor["vendor_id"], "settlement_mode": "custom", "status": VendorSettlementStatus.APPROVED}},
+            {"$group": {"_id": "$source_currency", "total": {"$sum": "$gross_amount"}}}
+        ]).to_list(50)
+        for cs in custom_stls:
+            custom_settled_map[cs["_id"]] = cs["total"]
+
         for currency, data in currency_breakdown.items():
-            net_base = (data["deposits_base"] - data["withdrawals_base"]) - data[
-                "commission_base"
-            ]
-            net_usd = (data["deposits_usd"] - data["withdrawals_usd"]) - data[
-                "commission_usd"
-            ]
+            cs_amount = custom_settled_map.get(currency, 0)
+            net_base = (data["deposits_base"] - data["withdrawals_base"]) - data["commission_base"] - cs_amount
+            net_usd = (data["deposits_usd"] - data["withdrawals_usd"]) - data["commission_usd"] - cs_amount
             total_net_usd += net_usd
-            settlement_by_currency.append(
-                {
-                    "currency": currency,
-                    "amount": net_base,
-                    "usd_equivalent": net_usd,
-                    "commission_base": data["commission_base"],
-                }
-            )
+            settlement_by_currency.append({
+                "currency": currency,
+                "amount": net_base,
+                "usd_equivalent": net_usd,
+                "commission_base": data["commission_base"],
+                "custom_settled": cs_amount,
+            })
 
         vendor["settlement_by_currency"] = settlement_by_currency
         vendor["pending_amount"] = total_net_usd
@@ -7076,13 +7206,19 @@ async def get_my_vendor_info(user: dict = Depends(require_vendor)):
             "loan_commission_base", 0
         )
 
+    # Get approved custom settlements for this vendor
+    custom_settled_portal = await db.vendor_settlements.aggregate([
+        {"$match": {"vendor_id": vendor["vendor_id"], "settlement_mode": "custom", "status": VendorSettlementStatus.APPROVED}},
+        {"$group": {"_id": "$source_currency", "total": {"$sum": "$gross_amount"}}}
+    ]).to_list(50)
+    custom_map_portal = {cs["_id"]: cs["total"] for cs in custom_settled_portal}
+
     vendor["settlement_by_currency"] = [
         {
             "currency": curr,
-            "amount": (d["deposit_amount"] - d["withdrawal_amount"])
-            - d["commission_base"],
-            "usd_equivalent": (d["deposit_usd"] - d["withdrawal_usd"])
-            - d["commission_usd"],
+            "amount": (d["deposit_amount"] - d["withdrawal_amount"]) - d["commission_base"] - custom_map_portal.get(curr, 0),
+            "usd_equivalent": (d["deposit_usd"] - d["withdrawal_usd"]) - d["commission_usd"] - custom_map_portal.get(curr, 0),
+            "custom_settled": custom_map_portal.get(curr, 0),
             "deposit_amount": d["deposit_amount"],
             "withdrawal_amount": d["withdrawal_amount"],
             "commission_earned_usd": d["commission_usd"],
@@ -7946,7 +8082,7 @@ async def get_settlement_statement(
 # Admin settle vendor balance
 class VendorSettlementRequest(BaseModel):
     settlement_type: str  # "bank" or "cash"
-    destination_account_id: str  # Required - treasury account
+    destination_account_id: Optional[str] = None  # Treasury account (optional for direct transfers)
     commission_amount: float = 0  # Manual commission entry
     charges_amount: float = 0  # Additional charges/fees
     charges_description: Optional[str] = None
@@ -7954,112 +8090,118 @@ class VendorSettlementRequest(BaseModel):
     source_currency: str = "USD"  # Currency of transactions
     destination_currency: str = "USD"  # Currency of destination treasury
     exchange_rate: float = 1.0  # Conversion rate
-    settlement_amount_in_dest_currency: Optional[float] = (
-        None  # Final amount in destination currency
-    )
-
+    settlement_amount_in_dest_currency: Optional[float] = None  # Final amount in destination currency
+    # Custom/partial amount settlement
+    settlement_mode: str = "full"  # "full" = settle all, "custom" = partial amount
+    custom_amount: Optional[float] = None  # Amount for custom settlement
+    custom_currency: Optional[str] = None  # Currency of custom amount
+    is_direct_transfer: bool = False  # True = just record (no treasury link)
+    notes: Optional[str] = None
 
 @api_router.post("/vendors/{vendor_id}/settle")
 async def settle_vendor_balance(
+
     request: Request,
+
     vendor_id: str,
     settlement_request: VendorSettlementRequest,
-    user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.CREATE)),
+    user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.CREATE))
 ):
     vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
 
-    # Get approved transactions for this vendor that haven't been settled
-    pending_txs = await db.transactions.find(
-        {
+    is_custom = settlement_request.settlement_mode == "custom"
+    is_direct = settlement_request.is_direct_transfer
+
+    # Validate: non-direct transfers require a destination account
+    if not is_direct and not settlement_request.destination_account_id:
+        raise HTTPException(status_code=400, detail="Please select a settlement destination account")
+
+    # Validate: custom mode requires amount and currency
+    if is_custom:
+        if not settlement_request.custom_amount or settlement_request.custom_amount <= 0:
+            raise HTTPException(status_code=400, detail="Please enter a valid custom settlement amount")
+        if not settlement_request.custom_currency:
+            raise HTTPException(status_code=400, detail="Please select a currency for the custom settlement")
+
+    pending_txs = []
+    pending_ie = []
+    pending_loans = []
+    ie_entry_ids = []
+    loan_tx_ids = []
+    gross_amount = 0
+    source_currency = settlement_request.source_currency
+
+    if is_custom:
+        # Custom/partial: use the provided amount, no transactions marked
+        gross_amount = settlement_request.custom_amount
+        source_currency = settlement_request.custom_currency
+    else:
+        # Full: get all approved transactions for this vendor that haven't been settled
+        pending_txs = await db.transactions.find({
             "vendor_id": vendor_id,
             "destination_type": "vendor",
-            "status": {
-                "$in": [TransactionStatus.APPROVED, TransactionStatus.COMPLETED]
-            },
-            "settled": {"$ne": True},
-        },
-        {"_id": 0},
-    ).to_list(1000)
+            "status": {"$in": [TransactionStatus.APPROVED, TransactionStatus.COMPLETED]},
+            "settled": {"$ne": True}
+        }, {"_id": 0}).to_list(1000)
 
-    # Also get approved IE entries for this vendor that haven't been settled
-    pending_ie = await db.income_expenses.find(
-        {
+        # Also get approved IE entries for this vendor that haven't been settled
+        pending_ie = await db.income_expenses.find({
             "vendor_id": vendor_id,
-            "status": "completed",
+            "status": {"$in": ["completed", "approved"]},
             "settled": {"$ne": True},
             "converted_to_loan": {"$ne": True},
-        },
-        {"_id": 0},
-    ).to_list(1000)
+        }, {"_id": 0}).to_list(1000)
 
-    # Also get completed loan transactions for this vendor that haven't been settled
-    pending_loans = await db.loan_transactions.find(
-        {
+        # Also get completed loan transactions for this vendor that haven't been settled
+        pending_loans = await db.loan_transactions.find({
             "$or": [
                 {"source_vendor_id": vendor_id},
-                {"credit_to_vendor_id": vendor_id},
+                {"credit_to_vendor_id": vendor_id}
             ],
             "status": "completed",
-            "settled": {"$ne": True},
-        },
-        {"_id": 0},
-    ).to_list(1000)
+            "settled": {"$ne": True}
+        }, {"_id": 0}).to_list(1000)
 
-    if not pending_txs and not pending_ie and not pending_loans:
-        raise HTTPException(status_code=400, detail="No pending transactions to settle")
+        if not pending_txs and not pending_ie and not pending_loans:
+            raise HTTPException(status_code=400, detail="No pending transactions to settle")
 
-    # Calculate NET amounts - deposits minus withdrawals, using base_amount for source currency
-    source_currency = settlement_request.source_currency
-    gross_amount = 0
-    for tx in pending_txs:
-        # Determine the amount to use based on currency match
-        if tx.get("base_currency") == source_currency and tx.get("base_amount"):
-            # Use base amount in the source currency
-            tx_amount = tx["base_amount"]
-        elif tx.get("currency") == source_currency:
-            # Use main amount if it matches source currency
-            tx_amount = tx["amount"]
-        else:
-            # Default to main amount
-            tx_amount = tx["amount"]
+        # Calculate NET amounts
+        for tx in pending_txs:
+            if tx.get("base_currency") == source_currency and tx.get("base_amount"):
+                tx_amount = tx["base_amount"]
+            elif tx.get("currency") == source_currency:
+                tx_amount = tx["amount"]
+            else:
+                tx_amount = tx["amount"]
+            if tx.get("transaction_type") == "deposit":
+                gross_amount += tx_amount
+            elif tx.get("transaction_type") == "withdrawal":
+                gross_amount -= tx_amount
+            else:
+                gross_amount += tx_amount
 
-        # Add for deposits, subtract for withdrawals (NET calculation)
-        if tx.get("transaction_type") == "deposit":
-            gross_amount += tx_amount
-        elif tx.get("transaction_type") == "withdrawal":
-            gross_amount -= tx_amount
-        else:
-            # Default: add
-            gross_amount += tx_amount
+        for ie in pending_ie:
+            if ie.get("base_currency") == source_currency and ie.get("base_amount"):
+                ie_amount = ie["base_amount"]
+            elif ie.get("currency") == source_currency:
+                ie_amount = ie["amount"]
+            else:
+                ie_amount = ie.get("amount_usd", ie["amount"])
+            if ie["entry_type"] == "income":
+                gross_amount += ie_amount
+            else:
+                gross_amount -= ie_amount
+            ie_entry_ids.append(ie["entry_id"])
 
-    # Add IE entries to gross amount
-    ie_entry_ids = []
-    for ie in pending_ie:
-        if ie.get("base_currency") == source_currency and ie.get("base_amount"):
-            ie_amount = ie["base_amount"]
-        elif ie.get("currency") == source_currency:
-            ie_amount = ie["amount"]
-        else:
-            ie_amount = ie.get("amount_usd", ie["amount"])
-
-        if ie["entry_type"] == "income":
-            gross_amount += ie_amount
-        else:  # expense
-            gross_amount -= ie_amount
-        ie_entry_ids.append(ie["entry_id"])
-
-    # Add Loan transactions to gross amount
-    loan_tx_ids = []
-    for ltx in pending_loans:
-        ltx_amount = ltx.get("amount", 0)
-        # Loan repayments TO vendor = Money In, Disbursements FROM vendor = Money Out
-        if ltx.get("credit_to_vendor_id") == vendor_id:
-            gross_amount += ltx_amount  # Money IN
-        elif ltx.get("source_vendor_id") == vendor_id:
-            gross_amount -= ltx_amount  # Money OUT
-        loan_tx_ids.append(ltx["transaction_id"])
+        for ltx in pending_loans:
+            ltx_amount = ltx.get("amount", 0)
+            if ltx.get("credit_to_vendor_id") == vendor_id:
+                gross_amount += ltx_amount
+            elif ltx.get("source_vendor_id") == vendor_id:
+                gross_amount -= ltx_amount
+            loan_tx_ids.append(ltx["transaction_id"])
 
     # Manual commission and charges
     commission_amount = settlement_request.commission_amount
@@ -8074,130 +8216,101 @@ async def settle_vendor_balance(
         settlement_amount = settlement_request.settlement_amount_in_dest_currency
     else:
         # Use exchange rate
-        settlement_amount = round(
-            net_amount_source * settlement_request.exchange_rate, 2
-        )
+        settlement_amount = round(net_amount_source * settlement_request.exchange_rate, 2)
 
     settlement_id = f"vstl_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc)
 
+    dest = None
     dest_account_id = settlement_request.destination_account_id
-    dest = await db.treasury_accounts.find_one(
-        {"account_id": dest_account_id}, {"_id": 0}
-    )
-    if not dest:
-        raise HTTPException(
-            status_code=404, detail="Settlement destination account not found"
-        )
+    if dest_account_id and not is_direct:
+        dest = await db.treasury_accounts.find_one({"account_id": dest_account_id}, {"_id": 0})
+        if not dest:
+            raise HTTPException(status_code=404, detail="Settlement destination account not found")
 
     settlement_doc = {
         "settlement_id": settlement_id,
         "vendor_id": vendor_id,
         "vendor_name": vendor["vendor_name"],
         "settlement_type": settlement_request.settlement_type,
+        "settlement_mode": settlement_request.settlement_mode,
+        "is_direct_transfer": is_direct,
         "gross_amount": gross_amount,
-        "source_currency": settlement_request.source_currency,
+        "source_currency": source_currency,
         "commission_amount": commission_amount,
         "charges_amount": charges_amount,
         "charges_description": settlement_request.charges_description,
         "net_amount_source": net_amount_source,
         "exchange_rate": settlement_request.exchange_rate,
-        "destination_currency": settlement_request.destination_currency,
+        "destination_currency": settlement_request.destination_currency if dest else source_currency,
         "settlement_amount": settlement_amount,
         "transaction_count": len(pending_txs) + len(pending_ie) + len(pending_loans),
         "transaction_ids": [tx["transaction_id"] for tx in pending_txs],
         "ie_entry_ids": ie_entry_ids,
         "loan_tx_ids": loan_tx_ids,
-        "settlement_destination_id": dest_account_id,
-        "settlement_destination_name": dest["account_name"],
-        "status": VendorSettlementStatus.PENDING,  # Settlements go to pending first
+        "settlement_destination_id": dest_account_id if not is_direct else None,
+        "settlement_destination_name": dest["account_name"] if dest else ("Direct Transfer" if is_direct else None),
+        "notes": settlement_request.notes,
+        "status": VendorSettlementStatus.PENDING,
         "created_at": now.isoformat(),
-        "settled_at": None,  # Will be set on approval
+        "settled_at": None,
         "approved_at": None,
         "approved_by": None,
         "approved_by_name": None,
         "rejection_reason": None,
         "created_by": user["user_id"],
-        "created_by_name": user["name"],
+        "created_by_name": user["name"]
     }
 
     await db.vendor_settlements.insert_one(settlement_doc)
 
-    # Mark transactions as pending settlement (not fully settled yet)
-    await db.transactions.update_many(
-        {"transaction_id": {"$in": [tx["transaction_id"] for tx in pending_txs]}},
-        {
-            "$set": {
-                "settlement_id": settlement_id,
-                "settlement_status": "pending_approval",
-            }
-        },
-    )
-
-    # Mark IE entries as pending settlement
-    if ie_entry_ids:
-        await db.income_expenses.update_many(
-            {"entry_id": {"$in": ie_entry_ids}},
-            {
-                "$set": {
-                    "settlement_id": settlement_id,
-                    "settlement_status": "pending_approval",
-                }
-            },
+    # Only mark specific transactions as pending settlement for full settlements
+    if not is_custom:
+        await db.transactions.update_many(
+            {"transaction_id": {"$in": [tx["transaction_id"] for tx in pending_txs]}},
+            {"$set": {"settlement_id": settlement_id, "settlement_status": "pending_approval"}}
         )
 
-    # Mark Loan transactions as pending settlement
-    if loan_tx_ids:
-        await db.loan_transactions.update_many(
-            {"transaction_id": {"$in": loan_tx_ids}},
-            {
-                "$set": {
-                    "settlement_id": settlement_id,
-                    "settlement_status": "pending_approval",
-                }
-            },
-        )
+        if ie_entry_ids:
+            await db.income_expenses.update_many(
+                {"entry_id": {"$in": ie_entry_ids}},
+                {"$set": {"settlement_id": settlement_id, "settlement_status": "pending_approval"}}
+            )
 
-    await log_activity(
-        request, user, "create", "exchangers", "Created vendor settlement"
-    )
+        if loan_tx_ids:
+            await db.loan_transactions.update_many(
+                {"transaction_id": {"$in": loan_tx_ids}},
+                {"$set": {"settlement_id": settlement_id, "settlement_status": "pending_approval"}}
+            )
+
+    mode_label = "Custom partial" if is_custom else "Full"
+    dest_label = "Direct Transfer" if is_direct else (dest["account_name"] if dest else "N/A")
+    await log_activity(request, user, "create", "exchangers", f"{mode_label} settlement for {vendor['vendor_name']}: {settlement_amount:,.2f} {settlement_request.destination_currency if dest else source_currency} → {dest_label}")
 
     # Send settlement approval notification email (fire and forget)
     import asyncio
-
-    asyncio.create_task(
-        send_approval_notification(
-            "settlement",
-            {
-                "settlement_id": settlement_id,
-                "vendor_name": vendor["vendor_name"],
-                "gross_amount": gross_amount,
-                "currency": settlement_request.source_currency,
-                "net_amount": settlement_amount,
-                "dest_currency": settlement_request.destination_currency,
-                "tx_count": len(pending_txs) + len(pending_ie) + len(pending_loans),
-                "created_by": user["name"],
-            },
-        )
-    )
+    asyncio.create_task(send_approval_notification("settlement", {
+        "settlement_id": settlement_id,
+        "vendor_name": vendor["vendor_name"],
+        "gross_amount": gross_amount,
+        "currency": source_currency,
+        "net_amount": settlement_amount,
+        "dest_currency": settlement_request.destination_currency if dest else source_currency,
+        "tx_count": len(pending_txs) + len(pending_ie) + len(pending_loans),
+        "created_by": user["name"],
+        "settlement_mode": settlement_request.settlement_mode,
+        "is_direct_transfer": is_direct,
+    }))
 
     # Notify the exchanger about settlement
-    asyncio.create_task(
-        send_exchanger_notification(
-            "settlement",
-            vendor_id,
-            {
-                "settlement_id": settlement_id,
-                "gross_display": f"{gross_amount:,.2f} {settlement_request.source_currency}",
-                "net_display": f"{settlement_amount:,.2f} {settlement_request.destination_currency}",
-                "tx_count": len(pending_txs) + len(pending_ie) + len(pending_loans),
-            },
-        )
-    )
+    asyncio.create_task(send_exchanger_notification("settlement", vendor_id, {
+        "settlement_id": settlement_id,
+        "gross_display": f"{gross_amount:,.2f} {source_currency}",
+        "net_display": f"{settlement_amount:,.2f} {(settlement_request.destination_currency if dest else source_currency)}",
+        "tx_count": len(pending_txs) + len(pending_ie) + len(pending_loans),
+    }))
 
-    return await db.vendor_settlements.find_one(
-        {"settlement_id": settlement_id}, {"_id": 0}
-    )
+    return await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
 
 
 # Get all pending settlements (for approval page)
@@ -8665,6 +8778,517 @@ async def get_pending_transactions(
         "page_size": actual_limit,
         "total_pages": total_pages,
     }
+
+
+# ============================================================================
+# UNIFIED PENDING APPROVALS ENDPOINTS
+# ============================================================================
+
+@api_router.get("/pending-approvals/all")
+async def get_all_pending_approvals(user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.VIEW))):
+    """Get all pending items across all modules for the Accountant Dashboard"""
+    # Pending Income/Expenses
+    pending_ie = await db.income_expenses.find(
+        {"status": "pending"},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+
+    # Pending Loans (pending_approval)
+    pending_loans = await db.loans.find(
+        {"status": "pending_approval"},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+
+    # Pending Loan Repayments
+    pending_repayments = await db.loan_repayments.find(
+        {"status": "pending_approval"},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+    # Enrich with loan details
+    for rep in pending_repayments:
+        loan = await db.loans.find_one({"loan_id": rep["loan_id"]}, {"_id": 0, "borrower_name": 1, "amount": 1, "currency": 1})
+        if loan:
+            rep["borrower_name"] = loan.get("borrower_name", "Unknown")
+
+    # Pending PSP Settlements
+    pending_psp_settlements = await db.psp_settlements.find(
+        {"status": PSPSettlementStatus.PENDING},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+    # Enrich with destination info
+    for stl in pending_psp_settlements:
+        dest = await db.treasury_accounts.find_one(
+            {"account_id": stl.get("settlement_destination_id")},
+            {"_id": 0, "account_name": 1, "bank_name": 1, "currency": 1}
+        )
+        if dest:
+            stl["settlement_destination_name"] = dest.get("account_name", "Unknown")
+            stl["settlement_destination_bank"] = dest.get("bank_name")
+            stl["settlement_destination_currency"] = dest.get("currency", "USD")
+
+    return {
+        "income_expenses": pending_ie,
+        "loans": pending_loans,
+        "loan_repayments": pending_repayments,
+        "psp_settlements": pending_psp_settlements,
+        "counts": {
+            "income_expenses": len(pending_ie),
+            "loans": len(pending_loans),
+            "loan_repayments": len(pending_repayments),
+            "psp_settlements": len(pending_psp_settlements),
+        }
+    }
+
+
+# ---- Income/Expense Approve/Reject ----
+
+@api_router.post("/income-expenses/{entry_id}/approve")
+async def approve_income_expense(request: Request, entry_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.APPROVE))):
+    """Approve a pending income/expense entry and execute treasury operations"""
+    entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Entry is not pending approval")
+
+    now = datetime.now(timezone.utc)
+
+    # Get treasury account
+    treasury = None
+    treasury_account_id = entry.get("treasury_account_id")
+    if treasury_account_id:
+        treasury = await db.treasury_accounts.find_one({"account_id": treasury_account_id}, {"_id": 0})
+
+    # Execute treasury operations
+    if treasury:
+        if entry["entry_type"] == "income":
+            await db.treasury_accounts.update_one(
+                {"account_id": treasury_account_id},
+                {"$inc": {"balance": entry["amount"]}, "$set": {"updated_at": now.isoformat()}}
+            )
+            ttx_amount = entry["amount"]
+        else:
+            await db.treasury_accounts.update_one(
+                {"account_id": treasury_account_id},
+                {"$inc": {"balance": -entry["amount"]}, "$set": {"updated_at": now.isoformat()}}
+            )
+            ttx_amount = -entry["amount"]
+
+        # Record treasury transaction
+        tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+        await db.treasury_transactions.insert_one({
+            "treasury_transaction_id": tx_id,
+            "account_id": treasury_account_id,
+            "transaction_type": entry["entry_type"],
+            "amount": ttx_amount,
+            "currency": entry.get("currency", "USD"),
+            "reference": f"{entry['entry_type'].capitalize()}: {entry.get('description') or entry.get('category', 'N/A')}",
+            "income_expense_id": entry_id,
+            "created_at": now.isoformat(),
+            "created_by": user["user_id"],
+            "created_by_name": user["name"]
+        })
+
+    # Update status to approved
+    await db.income_expenses.update_one(
+        {"entry_id": entry_id},
+        {"$set": {
+            "status": "approved",
+            "approved_at": now.isoformat(),
+            "approved_by": user["user_id"],
+            "approved_by_name": user["name"]
+        }}
+    )
+
+    await log_activity(request, user, "approve", "income_expenses", f"Approved {entry['entry_type']}: {entry.get('description', 'N/A')}", reference_id=entry_id)
+    return {"message": "Income/Expense entry approved successfully"}
+
+
+@api_router.post("/income-expenses/{entry_id}/reject")
+async def reject_income_expense(request: Request, entry_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.APPROVE))):
+    """Reject a pending income/expense entry"""
+    entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="Entry is not pending approval")
+
+    now = datetime.now(timezone.utc)
+    await db.income_expenses.update_one(
+        {"entry_id": entry_id},
+        {"$set": {
+            "status": "rejected",
+            "rejected_at": now.isoformat(),
+            "rejected_by": user["user_id"],
+            "rejected_by_name": user["name"],
+            "rejection_reason": reason
+        }}
+    )
+
+    await log_activity(request, user, "reject", "income_expenses", f"Rejected {entry['entry_type']}: {entry.get('description', 'N/A')}", reference_id=entry_id)
+    return {"message": "Income/Expense entry rejected"}
+
+
+# ---- Loan Disbursement Approve/Reject ----
+
+@api_router.post("/loans/{loan_id}/approve-disbursement")
+async def approve_loan_disbursement(request: Request, loan_id: str, user: dict = Depends(require_permission(Modules.LOANS, Actions.APPROVE))):
+    """Approve a pending loan disbursement and execute treasury deduction"""
+    loan = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    if loan.get("status") != "pending_approval":
+        raise HTTPException(status_code=400, detail="Loan is not pending approval")
+
+    now = datetime.now(timezone.utc)
+
+    # Execute treasury deduction if from treasury
+    if loan.get("source_treasury_id"):
+        treasury = await db.treasury_accounts.find_one({"account_id": loan["source_treasury_id"]}, {"_id": 0})
+        if not treasury:
+            raise HTTPException(status_code=404, detail="Source treasury account not found")
+
+        if treasury.get("balance", 0) < loan["amount"]:
+            raise HTTPException(status_code=400, detail="Insufficient balance in treasury account")
+
+        treasury_currency = treasury.get("currency", "USD")
+        treasury_deduct_amount = loan["amount"]
+        if treasury_currency.upper() != loan["currency"].upper():
+            treasury_deduct_amount = convert_currency(loan["amount"], loan["currency"], treasury_currency)
+
+        await db.treasury_accounts.update_one(
+            {"account_id": loan["source_treasury_id"]},
+            {"$inc": {"balance": -treasury_deduct_amount}, "$set": {"updated_at": now.isoformat()}}
+        )
+
+        # Record treasury transaction
+        conversion_note = f" (Converted from {loan['amount']:,.2f} {loan['currency']})" if treasury_currency.upper() != loan["currency"].upper() else ""
+        tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+        await db.treasury_transactions.insert_one({
+            "treasury_transaction_id": tx_id,
+            "account_id": loan["source_treasury_id"],
+            "transaction_type": "loan_disbursement",
+            "amount": -treasury_deduct_amount,
+            "currency": treasury_currency,
+            "original_amount": loan["amount"],
+            "original_currency": loan["currency"],
+            "reference": f"Loan to {loan['borrower_name']}{conversion_note}",
+            "loan_id": loan_id,
+            "created_at": now.isoformat(),
+            "created_by": user["user_id"],
+            "created_by_name": user["name"]
+        })
+
+    # Update loan status to active
+    await db.loans.update_one(
+        {"loan_id": loan_id},
+        {"$set": {
+            "status": LoanStatus.ACTIVE,
+            "approved_at": now.isoformat(),
+            "approved_by": user["user_id"],
+            "approved_by_name": user["name"]
+        }}
+    )
+
+    # Update loan transaction status
+    await db.loan_transactions.update_one(
+        {"loan_id": loan_id, "transaction_type": LoanTransactionType.DISBURSEMENT, "status": "pending_approval"},
+        {"$set": {"status": "completed"}}
+    )
+
+    await log_activity(request, user, "approve", "loans", f"Approved loan disbursement to {loan['borrower_name']}: {loan['amount']} {loan['currency']}", reference_id=loan_id)
+    return {"message": "Loan disbursement approved successfully"}
+
+
+@api_router.post("/loans/{loan_id}/reject-disbursement")
+async def reject_loan_disbursement(request: Request, loan_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.LOANS, Actions.APPROVE))):
+    """Reject a pending loan disbursement"""
+    loan = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    if loan.get("status") != "pending_approval":
+        raise HTTPException(status_code=400, detail="Loan is not pending approval")
+
+    now = datetime.now(timezone.utc)
+    await db.loans.update_one(
+        {"loan_id": loan_id},
+        {"$set": {
+            "status": "rejected",
+            "rejected_at": now.isoformat(),
+            "rejected_by": user["user_id"],
+            "rejected_by_name": user["name"],
+            "rejection_reason": reason
+        }}
+    )
+
+    # Update loan transaction status
+    await db.loan_transactions.update_one(
+        {"loan_id": loan_id, "transaction_type": LoanTransactionType.DISBURSEMENT, "status": "pending_approval"},
+        {"$set": {"status": "rejected"}}
+    )
+
+    await log_activity(request, user, "reject", "loans", f"Rejected loan disbursement to {loan['borrower_name']}", reference_id=loan_id)
+    return {"message": "Loan disbursement rejected"}
+
+
+# ---- Loan Repayment Approve/Reject ----
+
+@api_router.post("/loan-repayments/{repayment_id}/approve")
+async def approve_loan_repayment(request: Request, repayment_id: str, user: dict = Depends(require_permission(Modules.LOANS, Actions.APPROVE))):
+    """Approve a pending loan repayment - execute treasury credit and update loan totals"""
+    repayment = await db.loan_repayments.find_one({"repayment_id": repayment_id}, {"_id": 0})
+    if not repayment:
+        raise HTTPException(status_code=404, detail="Repayment not found")
+    if repayment.get("status") != "pending_approval":
+        raise HTTPException(status_code=400, detail="Repayment is not pending approval")
+
+    loan = await db.loans.find_one({"loan_id": repayment["loan_id"]}, {"_id": 0})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Associated loan not found")
+
+    now = datetime.now(timezone.utc)
+    repayment_amount_in_loan_currency = repayment.get("amount_in_loan_currency", repayment["amount"])
+
+    # Update loan totals
+    new_total_repaid = loan.get("total_repaid", 0) + repayment_amount_in_loan_currency
+    outstanding = loan["amount"] + loan.get("total_interest", 0) - new_total_repaid
+
+    new_status = loan["status"]
+    if outstanding <= 0:
+        new_status = LoanStatus.FULLY_PAID
+    elif new_total_repaid > 0:
+        new_status = LoanStatus.PARTIALLY_PAID
+
+    await db.loans.update_one(
+        {"loan_id": repayment["loan_id"]},
+        {
+            "$set": {
+                "total_repaid": new_total_repaid,
+                "outstanding_balance": max(0, outstanding),
+                "status": new_status,
+                "updated_at": now.isoformat()
+            },
+            "$inc": {"repayment_count": 1}
+        }
+    )
+
+    # Credit treasury if from treasury
+    if repayment.get("treasury_account_id"):
+        treasury = await db.treasury_accounts.find_one({"account_id": repayment["treasury_account_id"]}, {"_id": 0})
+        if treasury:
+            treasury_currency = treasury.get("currency", "USD")
+            treasury_credit_amount = repayment["amount"]
+            if treasury_currency.upper() != repayment["currency"].upper():
+                treasury_credit_amount = convert_currency(repayment["amount"], repayment["currency"], treasury_currency)
+
+            await db.treasury_accounts.update_one(
+                {"account_id": repayment["treasury_account_id"]},
+                {"$inc": {"balance": treasury_credit_amount}, "$set": {"updated_at": now.isoformat()}}
+            )
+
+            conversion_note = f" (Converted from {repayment['amount']:,.2f} {repayment['currency']})" if treasury_currency.upper() != repayment["currency"].upper() else ""
+            tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+            await db.treasury_transactions.insert_one({
+                "treasury_transaction_id": tx_id,
+                "account_id": repayment["treasury_account_id"],
+                "transaction_type": "loan_repayment",
+                "amount": treasury_credit_amount,
+                "currency": treasury_currency,
+                "original_amount": repayment["amount"],
+                "original_currency": repayment["currency"],
+                "reference": f"Loan repayment from {loan['borrower_name']}{conversion_note}",
+                "loan_id": repayment["loan_id"],
+                "repayment_id": repayment_id,
+                "created_at": now.isoformat(),
+                "created_by": user["user_id"],
+                "created_by_name": user["name"]
+            })
+
+    # Update repayment status
+    await db.loan_repayments.update_one(
+        {"repayment_id": repayment_id},
+        {"$set": {
+            "status": "approved",
+            "approved_at": now.isoformat(),
+            "approved_by": user["user_id"],
+            "approved_by_name": user["name"]
+        }}
+    )
+
+    # Update loan transaction status
+    await db.loan_transactions.update_one(
+        {"loan_id": repayment["loan_id"], "transaction_type": LoanTransactionType.REPAYMENT, "status": "pending_approval"},
+        {"$set": {"status": "completed"}}
+    )
+
+    await log_activity(request, user, "approve", "loans", f"Approved loan repayment from {loan['borrower_name']}: {repayment['amount']} {repayment['currency']}", reference_id=repayment_id)
+    return {"message": "Loan repayment approved successfully"}
+
+
+@api_router.post("/loan-repayments/{repayment_id}/reject")
+async def reject_loan_repayment(request: Request, repayment_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.LOANS, Actions.APPROVE))):
+    """Reject a pending loan repayment"""
+    repayment = await db.loan_repayments.find_one({"repayment_id": repayment_id}, {"_id": 0})
+    if not repayment:
+        raise HTTPException(status_code=404, detail="Repayment not found")
+    if repayment.get("status") != "pending_approval":
+        raise HTTPException(status_code=400, detail="Repayment is not pending approval")
+
+    now = datetime.now(timezone.utc)
+    await db.loan_repayments.update_one(
+        {"repayment_id": repayment_id},
+        {"$set": {
+            "status": "rejected",
+            "rejected_at": now.isoformat(),
+            "rejected_by": user["user_id"],
+            "rejected_by_name": user["name"],
+            "rejection_reason": reason
+        }}
+    )
+
+    # Update loan transaction status
+    await db.loan_transactions.update_one(
+        {"loan_id": repayment["loan_id"], "transaction_type": LoanTransactionType.REPAYMENT, "status": "pending_approval"},
+        {"$set": {"status": "rejected"}}
+    )
+
+    await log_activity(request, user, "reject", "loans", f"Rejected loan repayment", reference_id=repayment_id)
+    return {"message": "Loan repayment rejected"}
+
+
+# ---- PSP Settlement Approve (uses existing complete logic) / Reject ----
+
+@api_router.post("/psp-settlements/{settlement_id}/approve")
+async def approve_psp_settlement(request: Request, settlement_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))):
+    """Approve a pending PSP settlement and execute treasury credit"""
+    settlement = await db.psp_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
+    if not settlement:
+        raise HTTPException(status_code=404, detail="Settlement not found")
+    if settlement["status"] != PSPSettlementStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Settlement is not pending approval")
+
+    now = datetime.now(timezone.utc)
+
+    # Get destination treasury account
+    dest = await db.treasury_accounts.find_one({"account_id": settlement["settlement_destination_id"]}, {"_id": 0})
+    dest_currency = dest.get("currency", "USD") if dest else "USD"
+
+    # Calculate treasury amount
+    treasury_amount = settlement.get("treasury_amount")
+    if not treasury_amount:
+        treasury_amount = convert_currency(settlement["net_amount"], "USD", dest_currency)
+
+    # Credit treasury
+    await db.treasury_accounts.update_one(
+        {"account_id": settlement["settlement_destination_id"]},
+        {"$inc": {"balance": treasury_amount}, "$set": {"updated_at": now.isoformat()}}
+    )
+
+    # Record treasury transaction
+    treasury_tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+    stl_type = settlement.get("settlement_type", "standard")
+    conversion_note = f" (Converted: USD {settlement['net_amount']:,.2f} -> {dest_currency} {treasury_amount:,.2f})" if dest_currency != "USD" else ""
+    await db.treasury_transactions.insert_one({
+        "treasury_transaction_id": treasury_tx_id,
+        "account_id": settlement["settlement_destination_id"],
+        "account_name": dest["account_name"] if dest else "Unknown",
+        "transaction_type": "psp_settlement",
+        "amount": treasury_amount,
+        "currency": dest_currency,
+        "original_amount": settlement["net_amount"],
+        "original_currency": "USD",
+        "reference": f"PSP {stl_type.capitalize()} Settlement - {settlement_id}",
+        "description": f"{stl_type.capitalize()} settlement ({settlement.get('transaction_count', 0)} txns) from {settlement.get('psp_name', 'Unknown')}{conversion_note}",
+        "related_settlement_id": settlement_id,
+        "psp_id": settlement.get("psp_id"),
+        "psp_name": settlement.get("psp_name"),
+        "created_at": now.isoformat(),
+        "created_by": user["user_id"],
+        "created_by_name": user["name"]
+    })
+
+    # Mark settlement as completed
+    await db.psp_settlements.update_one(
+        {"settlement_id": settlement_id},
+        {"$set": {
+            "status": PSPSettlementStatus.COMPLETED,
+            "settled_at": now.isoformat(),
+            "approved_by": user["user_id"],
+            "approved_by_name": user["name"]
+        }}
+    )
+
+    # Mark all transactions as settled
+    tx_ids = settlement.get("transaction_ids", [])
+    if tx_ids:
+        await db.transactions.update_many(
+            {"transaction_id": {"$in": tx_ids}},
+            {"$set": {
+                "settled": True,
+                "settlement_id": settlement_id,
+                "settlement_status": "completed",
+                "settled_at": now.isoformat(),
+                "settled_by": user["user_id"],
+                "settled_by_name": user["name"],
+                "settlement_destination_id": settlement["settlement_destination_id"],
+                "settlement_destination_name": dest["account_name"] if dest else "Unknown"
+            }}
+        )
+
+    # Update PSP stats
+    psp = await db.psps.find_one({"psp_id": settlement["psp_id"]}, {"_id": 0})
+    if psp:
+        current_pending = psp.get("pending_settlement", 0) or 0
+        new_pending = max(current_pending - settlement["net_amount"], 0)
+        await db.psps.update_one(
+            {"psp_id": settlement["psp_id"]},
+            {
+                "$set": {"pending_settlement": round(new_pending, 2)},
+                "$inc": {
+                    "total_volume": settlement.get("gross_amount", 0),
+                    "total_commission": settlement.get("commission_amount", 0)
+                }
+            }
+        )
+
+    await log_activity(request, user, "approve", "psp", f"Approved PSP settlement: {settlement.get('psp_name')} - ${settlement['net_amount']:,.2f}", reference_id=settlement_id)
+    return {"message": "PSP settlement approved successfully"}
+
+
+@api_router.post("/psp-settlements/{settlement_id}/reject")
+async def reject_psp_settlement(request: Request, settlement_id: str, reason: str = "", user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))):
+    """Reject a pending PSP settlement"""
+    settlement = await db.psp_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
+    if not settlement:
+        raise HTTPException(status_code=404, detail="Settlement not found")
+    if settlement["status"] != PSPSettlementStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Settlement is not pending approval")
+
+    now = datetime.now(timezone.utc)
+
+    # Revert transactions back to unsettled state
+    tx_ids = settlement.get("transaction_ids", [])
+    if tx_ids:
+        await db.transactions.update_many(
+            {"transaction_id": {"$in": tx_ids}},
+            {"$unset": {"settlement_id": "", "settlement_status": ""}}
+        )
+
+    # Mark settlement as rejected
+    await db.psp_settlements.update_one(
+        {"settlement_id": settlement_id},
+        {"$set": {
+            "status": "rejected",
+            "rejected_at": now.isoformat(),
+            "rejected_by": user["user_id"],
+            "rejected_by_name": user["name"],
+            "rejection_reason": reason
+        }}
+    )
+
+    await log_activity(request, user, "reject", "psp", f"Rejected PSP settlement: {settlement.get('psp_name')}", reference_id=settlement_id)
+    return {"message": "PSP settlement rejected"}
+
 
 
 @api_router.get("/transactions/form-data")
@@ -12629,8 +13253,8 @@ async def create_income_expense(
     # Calculate USD equivalent
     amount_usd = convert_to_usd(entry_data.amount, entry_data.currency)
 
-    # Determine initial status: pending if exchanger-linked, completed otherwise
-    status = "pending_vendor" if vendor_info else "completed"
+    # Determine initial status: always pending for approval
+    status = "pending"
 
     # Calculate vendor commission at creation time
     ie_commission_rate = 0.0
@@ -12739,128 +13363,18 @@ async def create_income_expense(
 
     await db.income_expenses.insert_one(entry_doc)
 
-    # Only update treasury if not vendor-linked (vendor must approve first)
-    if not vendor_info and treasury:
-        treasury_currency = treasury.get("currency", "USD")
-
-        # Determine the amount to use for treasury update
-        # If base_currency matches treasury currency, use base_amount directly
-        # Otherwise convert from the appropriate currency
-        if entry_data.base_currency and entry_data.base_amount:
-            # Payment was made in a non-USD currency
-            if treasury_currency.upper() == entry_data.base_currency.upper():
-                # Treasury currency matches payment currency - use base_amount directly
-                converted_amount = entry_data.base_amount
-                original_amount = entry_data.base_amount
-                original_currency = entry_data.base_currency
-            elif treasury_currency.upper() == "USD":
-                # Treasury is in USD - use the USD amount
-                converted_amount = entry_data.amount
-                original_amount = entry_data.base_amount
-                original_currency = entry_data.base_currency
-            else:
-                # Treasury is in a different currency - convert from USD
-                converted_amount = convert_currency(
-                    entry_data.amount, "USD", treasury_currency
-                )
-                original_amount = entry_data.base_amount
-                original_currency = entry_data.base_currency
-        else:
-            # Payment was made in USD (no base_currency)
-            if treasury_currency.upper() == "USD":
-                converted_amount = entry_data.amount
-                original_amount = entry_data.amount
-                original_currency = "USD"
-            else:
-                converted_amount = convert_currency(
-                    entry_data.amount, "USD", treasury_currency
-                )
-                original_amount = entry_data.amount
-                original_currency = "USD"
-
-        if entry_data.entry_type == IncomeExpenseType.INCOME:
-            await db.treasury_accounts.update_one(
-                {"account_id": entry_data.treasury_account_id},
-                {
-                    "$inc": {"balance": converted_amount},
-                    "$set": {"updated_at": now.isoformat()},
-                },
-            )
-        else:
-            if treasury.get("balance", 0) < converted_amount:
-                raise HTTPException(
-                    status_code=400, detail="Insufficient balance in treasury account"
-                )
-            await db.treasury_accounts.update_one(
-                {"account_id": entry_data.treasury_account_id},
-                {
-                    "$inc": {"balance": -converted_amount},
-                    "$set": {"updated_at": now.isoformat()},
-                },
-            )
-
-        # Record in treasury transactions
-        tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
-        tx_type = (
-            "income" if entry_data.entry_type == IncomeExpenseType.INCOME else "expense"
-        )
-        tx_amount = (
-            converted_amount
-            if entry_data.entry_type == IncomeExpenseType.INCOME
-            else -converted_amount
-        )
-
-        # Build reference from category name
-        category_label = (
-            entry_data.category.replace("_", " ").title()
-            if entry_data.category
-            else (ie_category_info["name"] if ie_category_info else "Other")
-        )
-
-        # Include conversion info if applicable
-        conversion_note = ""
-        if original_currency.upper() != treasury_currency.upper():
-            conversion_note = (
-                f" (Converted from {original_amount:,.2f} {original_currency})"
-            )
-
-        tx_doc = {
-            "treasury_transaction_id": tx_id,
-            "account_id": entry_data.treasury_account_id,
-            "transaction_type": tx_type,
-            "amount": tx_amount,
-            "currency": treasury_currency,
-            "original_amount": original_amount,
-            "original_currency": original_currency,
-            "base_amount": entry_data.base_amount,
-            "base_currency": entry_data.base_currency,
-            "exchange_rate": entry_data.exchange_rate,
-            "reference": f"{category_label}: {entry_data.description or 'N/A'}{conversion_note}",
-            "income_expense_id": entry_id,
-            "created_at": f"{entry_date}T12:00:00+00:00",
-            "created_by": user["user_id"],
-            "created_by_name": user["name"],
-        }
-        await db.treasury_transactions.insert_one(tx_doc)
+    # Treasury update is deferred to approval step
 
     entry_doc.pop("_id", None)
     if treasury:
         entry_doc["treasury_account_name"] = treasury["account_name"]
 
     # Log activity
-    await log_activity(
-        request,
-        user,
-        "create",
-        "income_expenses",
-        f"Created {entry_data.entry_type}: {entry_data.description or entry_data.category}",
-        reference_id=entry_id,
-    )
+    await log_activity(request, user, "create", "income_expenses", f"Created {entry_data.entry_type}: {entry_data.description or entry_data.category} (pending approval)", reference_id=entry_id)
 
     # Notify exchanger if assigned
     if vendor_info and entry_data.vendor_id:
         import asyncio
-
         amt_display = (
             f"{entry_data.base_amount:,.2f} {entry_data.base_currency}"
             if entry_data.base_currency and entry_data.base_amount
@@ -14191,17 +14705,13 @@ async def create_loan(
     treasury = None
     disburse_vendor = None
 
-    # Check treasury source
+    # Check treasury source (balance check deferred to approval)
     if loan_data.treasury_account_id:
         treasury = await db.treasury_accounts.find_one(
             {"account_id": loan_data.treasury_account_id}, {"_id": 0}
         )
         if not treasury:
             raise HTTPException(status_code=404, detail="Treasury account not found")
-        if treasury.get("balance", 0) < loan_data.amount:
-            raise HTTPException(
-                status_code=400, detail="Insufficient balance in treasury account"
-            )
 
     # Check vendor source
     if loan_data.disburse_from_vendor_id:
@@ -14267,7 +14777,7 @@ async def create_loan(
         "bank_details": loan_data.bank_details,
         "total_repaid": 0,
         "repayment_count": 0,
-        "status": LoanStatus.ACTIVE,
+        "status": "pending_approval",
         "notes": loan_data.notes,
         "created_at": now.isoformat(),
         "created_by": user["user_id"],
@@ -14276,49 +14786,7 @@ async def create_loan(
 
     await db.loans.insert_one(loan_doc)
 
-    # Deduct from treasury OR create expense entry for vendor
-    if treasury:
-        # Deduct from treasury account - convert if currencies differ
-        treasury_currency = treasury.get("currency", "USD")
-        treasury_deduct_amount = loan_data.amount
-        if treasury_currency.upper() != loan_data.currency.upper():
-            treasury_deduct_amount = convert_currency(
-                loan_data.amount, loan_data.currency, treasury_currency
-            )
-
-        await db.treasury_accounts.update_one(
-            {"account_id": loan_data.treasury_account_id},
-            {
-                "$inc": {"balance": -treasury_deduct_amount},
-                "$set": {"updated_at": now.isoformat()},
-            },
-        )
-
-        # Record treasury transaction
-        conversion_note = (
-            f" (Converted from {loan_data.amount:,.2f} {loan_data.currency})"
-            if treasury_currency.upper() != loan_data.currency.upper()
-            else ""
-        )
-        tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
-        tx_doc = {
-            "treasury_transaction_id": tx_id,
-            "account_id": loan_data.treasury_account_id,
-            "transaction_type": "loan_disbursement",
-            "amount": -treasury_deduct_amount,
-            "currency": treasury_currency,
-            "original_amount": loan_data.amount,
-            "original_currency": loan_data.currency,
-            "reference": f"Loan to {loan_data.borrower_name}{conversion_note}",
-            "loan_id": loan_id,
-            "created_at": now.isoformat(),
-            "created_by": user["user_id"],
-            "created_by_name": user["name"],
-        }
-        await db.treasury_transactions.insert_one(tx_doc)
-    elif disburse_vendor:
-        # Disbursing from vendor - no I&E entry needed (loan tracking is separate from I&E)
-        pass
+    # Treasury deduction is deferred to approval step
 
     # Calculate commission for vendor disbursement (OUT = withdrawal type)
     vendor_commission_rate = 0.0
@@ -14338,43 +14806,40 @@ async def create_loan(
             vendor_commission_base_amount = vendor_commission_amount
             vendor_commission_base_currency = loan_data.currency
 
-    # Record loan transaction - set pending_vendor status if disbursing from Exchanger
-    tx_status = "pending_vendor" if loan_data.disburse_from_vendor_id else "completed"
-    await db.loan_transactions.insert_one(
-        {
-            "transaction_id": f"ltx_{uuid.uuid4().hex[:12]}",
-            "loan_id": loan_id,
-            "transaction_type": LoanTransactionType.DISBURSEMENT,
-            "amount": loan_data.amount,
-            "currency": loan_data.currency,
-            "treasury_account_id": loan_data.treasury_account_id,
-            "source_vendor_id": loan_data.disburse_from_vendor_id,
-            "source_vendor_name": (
-                disburse_vendor.get("name") or disburse_vendor.get("vendor_name")
-                if disburse_vendor
-                else None
-            ),
-            "bank_details": loan_data.bank_details,
-            "borrower_name": loan_data.borrower_name,
-            "status": tx_status,
-            "description": f"Loan disbursement to {loan_data.borrower_name}",
-            "vendor_commission_rate": (
-                vendor_commission_rate if vendor_commission_rate > 0 else None
-            ),
-            "vendor_commission_amount": (
-                vendor_commission_amount if vendor_commission_amount > 0 else None
-            ),
-            "vendor_commission_base_amount": (
-                vendor_commission_base_amount
-                if vendor_commission_base_amount > 0
-                else None
-            ),
-            "vendor_commission_base_currency": vendor_commission_base_currency,
-            "created_at": now.isoformat(),
-            "created_by": user["user_id"],
-            "created_by_name": user["name"],
-        }
-    )
+    # Record loan transaction - always pending_approval
+    await db.loan_transactions.insert_one({
+        "transaction_id": f"ltx_{uuid.uuid4().hex[:12]}",
+        "loan_id": loan_id,
+        "transaction_type": LoanTransactionType.DISBURSEMENT,
+        "amount": loan_data.amount,
+        "currency": loan_data.currency,
+        "treasury_account_id": loan_data.treasury_account_id,
+        "source_vendor_id": loan_data.disburse_from_vendor_id,
+        "source_vendor_name": (
+            disburse_vendor.get("name") or disburse_vendor.get("vendor_name")
+            if disburse_vendor
+            else None
+        ),
+        "bank_details": loan_data.bank_details,
+        "borrower_name": loan_data.borrower_name,
+        "status": "pending_approval",
+        "description": f"Loan disbursement to {loan_data.borrower_name}",
+        "vendor_commission_rate": (
+            vendor_commission_rate if vendor_commission_rate > 0 else None
+        ),
+        "vendor_commission_amount": (
+            vendor_commission_amount if vendor_commission_amount > 0 else None
+        ),
+        "vendor_commission_base_amount": (
+            vendor_commission_base_amount
+            if vendor_commission_base_amount > 0
+            else None
+        ),
+        "vendor_commission_base_currency": vendor_commission_base_currency,
+        "created_at": now.isoformat(),
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+    })
 
     loan_doc.pop("_id", None)
     if treasury:
@@ -14649,6 +15114,7 @@ async def record_loan_repayment(
         "payment_date": payment_date,
         "reference": repayment.reference,
         "notes": repayment.notes,
+        "status": "pending_approval",
         "created_at": now.isoformat(),
         "created_by": user["user_id"],
         "created_by_name": user["name"],
@@ -14656,74 +15122,7 @@ async def record_loan_repayment(
 
     await db.loan_repayments.insert_one(repayment_doc)
 
-    # Update loan totals
-    new_total_repaid = loan.get("total_repaid", 0) + repayment_amount_in_loan_currency
-    outstanding = loan["amount"] + loan.get("total_interest", 0) - new_total_repaid
-
-    # Determine new status
-    new_status = loan["status"]
-    if outstanding <= 0:
-        new_status = LoanStatus.FULLY_PAID
-    elif new_total_repaid > 0:
-        new_status = LoanStatus.PARTIALLY_PAID
-
-    await db.loans.update_one(
-        {"loan_id": loan_id},
-        {
-            "$set": {
-                "total_repaid": new_total_repaid,
-                "outstanding_balance": max(0, outstanding),
-                "status": new_status,
-                "updated_at": now.isoformat(),
-            },
-            "$inc": {"repayment_count": 1},
-        },
-    )
-
-    # Credit to treasury OR create income entry for vendor
-    if treasury:
-        # Credit treasury account - convert if currency differs
-        treasury_currency = treasury.get("currency", "USD")
-        treasury_credit_amount = repayment.amount
-        if treasury_currency.upper() != repayment.currency.upper():
-            treasury_credit_amount = convert_currency(
-                repayment.amount, repayment.currency, treasury_currency
-            )
-
-        await db.treasury_accounts.update_one(
-            {"account_id": repayment.treasury_account_id},
-            {
-                "$inc": {"balance": treasury_credit_amount},
-                "$set": {"updated_at": now.isoformat()},
-            },
-        )
-
-        # Record treasury transaction
-        conversion_note = (
-            f" (Converted from {repayment.amount:,.2f} {repayment.currency})"
-            if treasury_currency.upper() != repayment.currency.upper()
-            else ""
-        )
-        tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
-        tx_doc = {
-            "treasury_transaction_id": tx_id,
-            "account_id": repayment.treasury_account_id,
-            "transaction_type": "loan_repayment",
-            "amount": treasury_credit_amount,
-            "currency": treasury_currency,
-            "original_amount": repayment.amount,
-            "original_currency": repayment.currency,
-            "reference": f"Loan repayment from {loan['borrower_name']}{conversion_note}",
-            "loan_id": loan_id,
-            "repayment_id": repayment_id,
-            "created_at": now.isoformat(),
-            "created_by": user["user_id"],
-            "created_by_name": user["name"],
-        }
-        await db.treasury_transactions.insert_one(tx_doc)
-    elif credit_vendor:
-        # Crediting to vendor - no I&E entry needed (loan tracking is separate from I&E)
-        pass
+    # Loan totals and treasury credit are deferred to approval step
 
     # Calculate commission for vendor repayment (IN = deposit type)
     vendor_commission_rate = 0.0
@@ -14743,42 +15142,39 @@ async def record_loan_repayment(
             vendor_commission_base_amount = vendor_commission_amount
             vendor_commission_base_currency = repayment.currency
 
-    # Record loan transaction - set pending_vendor status if crediting to Exchanger
-    tx_status = "pending_vendor" if repayment.credit_to_vendor_id else "completed"
-    await db.loan_transactions.insert_one(
-        {
-            "transaction_id": f"ltx_{uuid.uuid4().hex[:12]}",
-            "loan_id": loan_id,
-            "transaction_type": LoanTransactionType.REPAYMENT,
-            "amount": repayment.amount,
-            "currency": repayment.currency,
-            "treasury_account_id": repayment.treasury_account_id,
-            "credit_to_vendor_id": repayment.credit_to_vendor_id,
-            "credit_vendor_name": (
-                credit_vendor.get("name") or credit_vendor.get("vendor_name")
-                if credit_vendor
-                else None
-            ),
-            "borrower_name": loan.get("borrower_name"),
-            "status": tx_status,
-            "description": f"Repayment from {loan['borrower_name']}",
-            "vendor_commission_rate": (
-                vendor_commission_rate if vendor_commission_rate > 0 else None
-            ),
-            "vendor_commission_amount": (
-                vendor_commission_amount if vendor_commission_amount > 0 else None
-            ),
-            "vendor_commission_base_amount": (
-                vendor_commission_base_amount
-                if vendor_commission_base_amount > 0
-                else None
-            ),
-            "vendor_commission_base_currency": vendor_commission_base_currency,
-            "created_at": now.isoformat(),
-            "created_by": user["user_id"],
-            "created_by_name": user["name"],
-        }
-    )
+    # Record loan transaction - always pending_approval
+    await db.loan_transactions.insert_one({
+        "transaction_id": f"ltx_{uuid.uuid4().hex[:12]}",
+        "loan_id": loan_id,
+        "transaction_type": LoanTransactionType.REPAYMENT,
+        "amount": repayment.amount,
+        "currency": repayment.currency,
+        "treasury_account_id": repayment.treasury_account_id,
+        "credit_to_vendor_id": repayment.credit_to_vendor_id,
+        "credit_vendor_name": (
+            credit_vendor.get("name") or credit_vendor.get("vendor_name")
+            if credit_vendor
+            else None
+        ),
+        "borrower_name": loan.get("borrower_name"),
+        "status": "pending_approval",
+        "description": f"Repayment from {loan['borrower_name']}",
+        "vendor_commission_rate": (
+            vendor_commission_rate if vendor_commission_rate > 0 else None
+        ),
+        "vendor_commission_amount": (
+            vendor_commission_amount if vendor_commission_amount > 0 else None
+        ),
+        "vendor_commission_base_amount": (
+            vendor_commission_base_amount
+            if vendor_commission_base_amount > 0
+            else None
+        ),
+        "vendor_commission_base_currency": vendor_commission_base_currency,
+        "created_at": now.isoformat(),
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+    })
 
     repayment_doc.pop("_id", None)
     if treasury:
@@ -14787,9 +15183,9 @@ async def record_loan_repayment(
         repayment_doc["vendor_name"] = credit_vendor.get("name") or credit_vendor.get(
             "vendor_name"
         )
-    repayment_doc["new_outstanding"] = max(0, outstanding)
-    repayment_doc["loan_status"] = new_status
-    await log_activity(request, user, "create", "loans", "Recorded loan repayment")
+    repayment_doc["new_outstanding"] = max(0, loan["amount"] + loan.get("total_interest", 0) - loan.get("total_repaid", 0))
+    repayment_doc["loan_status"] = loan["status"]
+    await log_activity(request, user, "create", "loans", "Recorded loan repayment (pending approval)")
 
     # Notify exchanger if crediting to vendor
     if repayment.credit_to_vendor_id:
