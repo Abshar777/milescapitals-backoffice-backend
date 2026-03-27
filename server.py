@@ -7546,7 +7546,7 @@ async def vendor_reject_transaction(
 async def vendor_upload_proof(
     request: Request,
     transaction_id: str,
-    proof_image: UploadFile = File(...),
+    proof_images: List[UploadFile] = File(default=[]),
     user: dict = Depends(require_vendor),
 ):
     """Vendor uploads proof of payment for withdrawal transactions"""
@@ -7563,20 +7563,26 @@ async def vendor_upload_proof(
             status_code=403, detail="Transaction does not belong to this vendor"
         )
 
-    content = await proof_image.read()
-    proof_image_url = upload_to_r2(
-        content,
-        proof_image.filename or "proof.png",
-        proof_image.content_type or "image/png",
-        "proofs",
-    )
+    uploaded_urls = []
+    for img in (proof_images or []):
+        if img and img.filename:
+            content = await img.read()
+            url = upload_to_r2(content, img.filename or "proof.png", img.content_type or "image/png", "proofs")
+            uploaded_urls.append(url)
+    if not uploaded_urls:
+        raise HTTPException(status_code=400, detail="No valid images provided")
+    existing = tx.get("vendor_proof_images", [])
+    if not existing and tx.get("vendor_proof_image"):
+        existing = [tx["vendor_proof_image"]]
+    all_urls = existing + uploaded_urls
 
     now = datetime.now(timezone.utc)
     await db.transactions.update_one(
         {"transaction_id": transaction_id},
         {
             "$set": {
-                "vendor_proof_image": proof_image_url,
+                "vendor_proof_image": all_urls[0],
+                "vendor_proof_images": all_urls,
                 "vendor_proof_uploaded_at": now.isoformat(),
                 "vendor_proof_uploaded_by": user["user_id"],
                 "vendor_proof_uploaded_by_name": user["name"],
@@ -7594,7 +7600,7 @@ async def vendor_upload_proof(
 async def vendor_complete_withdrawal(
     request: Request,
     transaction_id: str,
-    proof_image: UploadFile = File(...),
+    proof_images: List[UploadFile] = File(default=[]),
     user: dict = Depends(require_vendor),
 ):
     vendor = await db.vendors.find_one({"user_id": user["user_id"]}, {"_id": 0})
@@ -7622,18 +7628,21 @@ async def vendor_complete_withdrawal(
 
     now = datetime.now(timezone.utc)
 
-    # Handle proof image upload
-    content = await proof_image.read()
-    proof_image_url = upload_to_r2(
-        content,
-        proof_image.filename or "proof.png",
-        proof_image.content_type or "image/png",
-        "proofs",
-    )
+    # Handle multiple proof images upload
+    uploaded_urls = []
+    for img in (proof_images or []):
+        if img and img.filename:
+            content = await img.read()
+            url = upload_to_r2(content, img.filename or "proof.png", img.content_type or "image/png", "proofs")
+            uploaded_urls.append(url)
+    if not uploaded_urls:
+        raise HTTPException(status_code=400, detail="No valid proof images provided")
+    proof_image_url = uploaded_urls[0]
 
     updates = {
         "status": TransactionStatus.COMPLETED,
         "vendor_proof_image": proof_image_url,
+        "vendor_proof_images": uploaded_urls,
         "processed_by": user["user_id"],
         "processed_by_name": user["name"],
         "processed_at": now.isoformat(),
@@ -9330,9 +9339,16 @@ async def create_transaction(
     crm_reference: Optional[str] = Form(None),
     transaction_date: Optional[str] = Form(None),
     client_tags: Optional[str] = Form(None),
-    proof_image: Optional[UploadFile] = File(None),
+    proof_images: List[UploadFile] = File(default=[]),
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.CREATE)),
 ):
+    # Upload all proof images and collect URLs
+    proof_image_urls = []
+    for img in (proof_images or []):
+        if img and img.filename:
+            content = await img.read()
+            url = upload_to_r2(content, img.filename, img.content_type or "image/png", "proofs")
+            proof_image_urls.append(url)
     try:
         return await _create_transaction_impl(
             request,
@@ -9364,7 +9380,7 @@ async def create_transaction(
             crm_reference,
             transaction_date,
             client_tags,
-            proof_image,
+            proof_image_urls,
             user,
         )
     except HTTPException:
@@ -9405,8 +9421,8 @@ async def _create_transaction_impl(
     collecting_person_number,
     crm_reference,
     transaction_date,
-    client_tags_str, 
-    proof_image,
+    client_tags_str,
+    proof_image_urls,
     user,
 ):
     now = datetime.now(timezone.utc)
@@ -9546,16 +9562,9 @@ async def _create_transaction_impl(
     tx_id = f"tx_{uuid.uuid4().hex[:12]}"
     # now is already defined at the top for duplicate detection
 
-    # Handle proof image upload
-    proof_image_url = None
-    if proof_image:
-        content = await proof_image.read()
-        proof_image_url = upload_to_r2(
-            content,
-            proof_image.filename or "proof.png",
-            proof_image.content_type or "image/png",
-            "proofs",
-        )
+    # Handle proof images (already uploaded; proof_image_urls is a list of URLs)
+    proof_image_urls = proof_image_urls or []
+    proof_image_url = proof_image_urls[0] if proof_image_urls else None
 
     # Calculate USD amount if base currency is different
     usd_amount = amount
@@ -9779,6 +9788,7 @@ async def _create_transaction_impl(
         "crm_reference": crm_reference.strip() if crm_reference else None,
         "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
         "proof_image": proof_image_url,
+        "proof_images": proof_image_urls,
         "created_by": user["user_id"],
         "created_by_name": user["name"],
         "processed_by": None,
@@ -10518,7 +10528,7 @@ async def approve_transaction(
 async def upload_transaction_proof(
     request: Request,
     transaction_id: str,
-    proof_image: UploadFile = File(...),
+    proof_images: List[UploadFile] = File(default=[]),
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.EDIT)),
 ):
     """Upload proof of payment for deposit and withdrawal transactions"""
@@ -10536,20 +10546,29 @@ async def upload_transaction_proof(
             detail="Proof upload is only for deposit and withdrawal transactions",
         )
 
-    content = await proof_image.read()
-    proof_image_url = upload_to_r2(
-        content,
-        proof_image.filename or "proof.png",
-        proof_image.content_type or "image/png",
-        "proofs",
-    )
+    uploaded_urls = []
+    for img in (proof_images or []):
+        if img and img.filename:
+            content = await img.read()
+            url = upload_to_r2(content, img.filename or "proof.png", img.content_type or "image/png", "proofs")
+            uploaded_urls.append(url)
+
+    if not uploaded_urls:
+        raise HTTPException(status_code=400, detail="No valid images provided")
+
+    # Merge with existing accountant proof images
+    existing = tx.get("accountant_proof_images", [])
+    if not existing and tx.get("accountant_proof_image"):
+        existing = [tx["accountant_proof_image"]]
+    all_urls = existing + uploaded_urls
 
     now = datetime.now(timezone.utc)
     await db.transactions.update_one(
         {"transaction_id": transaction_id},
         {
             "$set": {
-                "accountant_proof_image": proof_image_url,
+                "accountant_proof_image": all_urls[0],
+                "accountant_proof_images": all_urls,
                 "proof_uploaded_at": now.isoformat(),
                 "proof_uploaded_by": user["user_id"],
                 "proof_uploaded_by_name": user["name"],
@@ -10717,7 +10736,7 @@ async def create_transaction_request(
     client_usdt_network: Optional[str] = Form(None),
     transaction_date: Optional[str] = Form(None),
     client_tags: Optional[str] = Form(None),
-    proof_image: Optional[UploadFile] = File(None),
+    proof_images: List[UploadFile] = File(default=[]),
     user: dict = Depends(
         require_permission(Modules.TRANSACTION_REQUESTS, Actions.CREATE)
     ),
@@ -10749,16 +10768,14 @@ async def create_transaction_request(
     elif client.get("tags"):
         tx_client_tags = client["tags"]
     
-    # Handle proof image
-    proof_url = None
-    if proof_image and proof_image.filename:
-        content = await proof_image.read()
-        proof_url = upload_to_r2(
-            content,
-            proof_image.filename,
-            proof_image.content_type or "image/png",
-            "proofs",
-        )
+    # Handle multiple proof images upload
+    proof_urls = []
+    for img in (proof_images or []):
+        if img and img.filename:
+            content = await img.read()
+            url = upload_to_r2(content, img.filename, img.content_type or "image/png", "proofs")
+            proof_urls.append(url)
+    proof_url = proof_urls[0] if proof_urls else None
 
     request_id = f"txreq_{uuid.uuid4().hex[:12]}"
 
@@ -10925,6 +10942,7 @@ async def create_transaction_request(
             "crm_reference": crm_reference.strip() if crm_reference else None,
             "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
             "proof_image": proof_url,
+            "proof_images": proof_urls,
             "created_by": user["user_id"],
             "created_by_name": user["name"],
             "processed_by": None,
@@ -11421,6 +11439,7 @@ async def process_transaction_request(
         "transaction_date": req.get("transaction_date") or now.strftime("%Y-%m-%d"),
         "client_tags": req.get("client_tags", []),
         "proof_image": req.get("proof_image"),
+        "proof_images": req.get("proof_images", []),
         "created_by": req.get("created_by"),
         "created_by_name": req.get("created_by_name"),
         "processed_by": None,
