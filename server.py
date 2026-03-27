@@ -1066,6 +1066,7 @@ class TransactionUpdate(BaseModel):
     exchange_rate: Optional[float] = None
     reference: Optional[str] = None
     transaction_date: Optional[str] = None
+    client_tags: Optional[list] = None
 
 
 # ============== HELPER FUNCTIONS ==============
@@ -9907,7 +9908,10 @@ async def update_transaction(
                 status_code=400,
                 detail="These fields can only be edited on pending transactions",
             )
-
+      # client_tags can be updated on any status
+    if "client_tags" in updates:
+        updates["client_tags"] = updates["client_tags"] if updates["client_tags"] else []
+    
     # Validate CRM reference uniqueness if being updated
     if "crm_reference" in updates and updates["crm_reference"]:
         existing_crm = await db.transactions.find_one(
