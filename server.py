@@ -8872,27 +8872,45 @@ async def approve_income_expense(request: Request, entry_id: str, user: dict = D
 
     # Execute treasury operations
     if treasury:
+        treasury_currency = treasury.get("currency", "USD")
+        ie_currency = entry.get("currency", "USD")
+        ie_base_currency = entry.get("base_currency")
+        ie_base_amount = entry.get("base_amount")
+
+        # Determine the correct amount in the treasury's currency
+        if ie_base_currency and ie_base_currency.upper() == treasury_currency.upper() and ie_base_amount:
+            treasury_amount = ie_base_amount
+            ttx_currency = ie_base_currency
+        elif ie_currency.upper() == treasury_currency.upper():
+            treasury_amount = entry["amount"]
+            ttx_currency = ie_currency
+        else:
+            treasury_amount = convert_currency(entry["amount"], ie_currency, treasury_currency)
+            ttx_currency = treasury_currency
+
         if entry["entry_type"] == "income":
             await db.treasury_accounts.update_one(
                 {"account_id": treasury_account_id},
-                {"$inc": {"balance": entry["amount"]}, "$set": {"updated_at": now.isoformat()}}
+                {"$inc": {"balance": treasury_amount}, "$set": {"updated_at": now.isoformat()}}
             )
-            ttx_amount = entry["amount"]
+            ttx_amount = treasury_amount
         else:
             await db.treasury_accounts.update_one(
                 {"account_id": treasury_account_id},
-                {"$inc": {"balance": -entry["amount"]}, "$set": {"updated_at": now.isoformat()}}
+                {"$inc": {"balance": -treasury_amount}, "$set": {"updated_at": now.isoformat()}}
             )
-            ttx_amount = -entry["amount"]
+            ttx_amount = -treasury_amount
 
-        # Record treasury transaction
+        # Record treasury transaction in the treasury's currency
         tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
         await db.treasury_transactions.insert_one({
             "treasury_transaction_id": tx_id,
             "account_id": treasury_account_id,
             "transaction_type": entry["entry_type"],
             "amount": ttx_amount,
-            "currency": entry.get("currency", "USD"),
+            "currency": ttx_currency,
+            "original_amount": entry["amount"],
+            "original_currency": ie_currency,
             "reference": f"{entry['entry_type'].capitalize()}: {entry.get('description') or entry.get('category', 'N/A')}",
             "income_expense_id": entry_id,
             "created_at": now.isoformat(),
