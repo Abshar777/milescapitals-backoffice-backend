@@ -4319,9 +4319,9 @@ async def get_psp_pending_transactions(
         "settled": {"$ne": True}
     }
     if date_from:
-        query.setdefault("created_at", {})["$gte"] = date_from
+        query.setdefault("transaction_date", {})["$gte"] = date_from
     if date_to:
-        query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
+        query.setdefault("transaction_date", {})["$lte"] = date_to
     
     total = await db.transactions.count_documents(query)
     skip = (page - 1) * page_size
@@ -4346,9 +4346,9 @@ async def get_psp_withdrawal_transactions(
         "settled": {"$ne": True}
     }
     if date_from:
-        query.setdefault("created_at", {})["$gte"] = date_from
+        query.setdefault("transaction_date", {})["$gte"] = date_from
     if date_to:
-        query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
+        query.setdefault("transaction_date", {})["$lte"] = date_to
     
     total = await db.transactions.count_documents(query)
     skip = (page - 1) * page_size
