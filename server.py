@@ -8345,6 +8345,7 @@ async def get_pending_settlements(
 async def approve_settlement(
     request: Request,
     settlement_id: str,
+    approval_date: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.APPROVE)),
 ):
     """Approve a pending vendor settlement"""
@@ -8358,6 +8359,10 @@ async def approve_settlement(
         raise HTTPException(status_code=400, detail="Settlement is not pending")
 
     now = datetime.now(timezone.utc)
+    # Use approval_date for treasury records if provided
+    treasury_date_str = now.isoformat()
+    if approval_date:
+        treasury_date_str = f"{approval_date}T00:00:00" if 'T' not in approval_date else approval_date
 
     # Update settlement status
     await db.vendor_settlements.update_one(
@@ -8426,11 +8431,18 @@ async def approve_settlement(
         "reference": f"Vendor Settlement: {settlement['vendor_name']}",
         "settlement_id": settlement_id,
         "vendor_id": settlement["vendor_id"],
-        "created_at": now.isoformat(),
+        "created_at": treasury_date_str,
         "created_by": user["user_id"],
         "created_by_name": user["name"],
     }
     await db.treasury_transactions.insert_one(treasury_tx_doc)
+
+    # Store approval_date on the settlement record if provided
+    if approval_date:
+        await db.vendor_settlements.update_one(
+            {"settlement_id": settlement_id},
+            {"$set": {"approval_date": approval_date}}
+        )
 
     await log_activity(request, user, "approve", "exchangers", "Approved settlement")
 
@@ -8854,7 +8866,7 @@ async def get_all_pending_approvals(user: dict = Depends(require_permission(Modu
 # ---- Income/Expense Approve/Reject ----
 
 @api_router.post("/income-expenses/{entry_id}/approve")
-async def approve_income_expense(request: Request, entry_id: str, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.APPROVE))):
+async def approve_income_expense(request: Request, entry_id: str, approval_date: Optional[str] = None, user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.APPROVE))):
     """Approve a pending income/expense entry and execute treasury operations"""
     entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
     if not entry:
@@ -8863,6 +8875,10 @@ async def approve_income_expense(request: Request, entry_id: str, user: dict = D
         raise HTTPException(status_code=400, detail="Entry is not pending approval")
 
     now = datetime.now(timezone.utc)
+    # Use approval_date for treasury records if provided
+    treasury_date_str = now.isoformat()
+    if approval_date:
+        treasury_date_str = f"{approval_date}T00:00:00" if 'T' not in approval_date else approval_date
 
     # Get treasury account
     treasury = None
@@ -8913,20 +8929,23 @@ async def approve_income_expense(request: Request, entry_id: str, user: dict = D
             "original_currency": ie_currency,
             "reference": f"{entry['entry_type'].capitalize()}: {entry.get('description') or entry.get('category', 'N/A')}",
             "income_expense_id": entry_id,
-            "created_at": now.isoformat(),
+            "created_at": treasury_date_str,
             "created_by": user["user_id"],
             "created_by_name": user["name"]
         })
 
     # Update status to approved
+    update_fields = {
+        "status": "approved",
+        "approved_at": now.isoformat(),
+        "approved_by": user["user_id"],
+        "approved_by_name": user["name"]
+    }
+    if approval_date:
+        update_fields["approval_date"] = approval_date
     await db.income_expenses.update_one(
         {"entry_id": entry_id},
-        {"$set": {
-            "status": "approved",
-            "approved_at": now.isoformat(),
-            "approved_by": user["user_id"],
-            "approved_by_name": user["name"]
-        }}
+        {"$set": update_fields}
     )
 
     await log_activity(request, user, "approve", "income_expenses", f"Approved {entry['entry_type']}: {entry.get('description', 'N/A')}", reference_id=entry_id)
@@ -8961,7 +8980,7 @@ async def reject_income_expense(request: Request, entry_id: str, reason: str = "
 # ---- Loan Disbursement Approve/Reject ----
 
 @api_router.post("/loans/{loan_id}/approve-disbursement")
-async def approve_loan_disbursement(request: Request, loan_id: str, user: dict = Depends(require_permission(Modules.LOANS, Actions.APPROVE))):
+async def approve_loan_disbursement(request: Request, loan_id: str, approval_date: Optional[str] = None, user: dict = Depends(require_permission(Modules.LOANS, Actions.APPROVE))):
     """Approve a pending loan disbursement and execute treasury deduction"""
     loan = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
     if not loan:
@@ -8970,6 +8989,10 @@ async def approve_loan_disbursement(request: Request, loan_id: str, user: dict =
         raise HTTPException(status_code=400, detail="Loan is not pending approval")
 
     now = datetime.now(timezone.utc)
+    # Use approval_date for treasury records if provided
+    treasury_date_str = now.isoformat()
+    if approval_date:
+        treasury_date_str = f"{approval_date}T00:00:00" if 'T' not in approval_date else approval_date
 
     # Execute treasury deduction if from treasury
     if loan.get("source_treasury_id"):
@@ -9003,20 +9026,23 @@ async def approve_loan_disbursement(request: Request, loan_id: str, user: dict =
             "original_currency": loan["currency"],
             "reference": f"Loan to {loan['borrower_name']}{conversion_note}",
             "loan_id": loan_id,
-            "created_at": now.isoformat(),
+            "created_at": treasury_date_str,
             "created_by": user["user_id"],
             "created_by_name": user["name"]
         })
 
     # Update loan status to active
+    update_fields = {
+        "status": LoanStatus.ACTIVE,
+        "approved_at": now.isoformat(),
+        "approved_by": user["user_id"],
+        "approved_by_name": user["name"]
+    }
+    if approval_date:
+        update_fields["approval_date"] = approval_date
     await db.loans.update_one(
         {"loan_id": loan_id},
-        {"$set": {
-            "status": LoanStatus.ACTIVE,
-            "approved_at": now.isoformat(),
-            "approved_by": user["user_id"],
-            "approved_by_name": user["name"]
-        }}
+        {"$set": update_fields}
     )
 
     # Update loan transaction status
@@ -9063,7 +9089,7 @@ async def reject_loan_disbursement(request: Request, loan_id: str, reason: str =
 # ---- Loan Repayment Approve/Reject ----
 
 @api_router.post("/loan-repayments/{repayment_id}/approve")
-async def approve_loan_repayment(request: Request, repayment_id: str, user: dict = Depends(require_permission(Modules.LOANS, Actions.APPROVE))):
+async def approve_loan_repayment(request: Request, repayment_id: str, approval_date: Optional[str] = None, user: dict = Depends(require_permission(Modules.LOANS, Actions.APPROVE))):
     """Approve a pending loan repayment - execute treasury credit and update loan totals"""
     repayment = await db.loan_repayments.find_one({"repayment_id": repayment_id}, {"_id": 0})
     if not repayment:
@@ -9076,6 +9102,10 @@ async def approve_loan_repayment(request: Request, repayment_id: str, user: dict
         raise HTTPException(status_code=404, detail="Associated loan not found")
 
     now = datetime.now(timezone.utc)
+    # Use approval_date for treasury records if provided
+    treasury_date_str = now.isoformat()
+    if approval_date:
+        treasury_date_str = f"{approval_date}T00:00:00" if 'T' not in approval_date else approval_date
     repayment_amount_in_loan_currency = repayment.get("amount_in_loan_currency", repayment["amount"])
 
     # Update loan totals
@@ -9128,20 +9158,23 @@ async def approve_loan_repayment(request: Request, repayment_id: str, user: dict
                 "reference": f"Loan repayment from {loan['borrower_name']}{conversion_note}",
                 "loan_id": repayment["loan_id"],
                 "repayment_id": repayment_id,
-                "created_at": now.isoformat(),
+                "created_at": treasury_date_str,
                 "created_by": user["user_id"],
                 "created_by_name": user["name"]
             })
 
     # Update repayment status
+    update_fields = {
+        "status": "approved",
+        "approved_at": now.isoformat(),
+        "approved_by": user["user_id"],
+        "approved_by_name": user["name"]
+    }
+    if approval_date:
+        update_fields["approval_date"] = approval_date
     await db.loan_repayments.update_one(
         {"repayment_id": repayment_id},
-        {"$set": {
-            "status": "approved",
-            "approved_at": now.isoformat(),
-            "approved_by": user["user_id"],
-            "approved_by_name": user["name"]
-        }}
+        {"$set": update_fields}
     )
 
     # Update loan transaction status
@@ -9188,7 +9221,7 @@ async def reject_loan_repayment(request: Request, repayment_id: str, reason: str
 # ---- PSP Settlement Approve (uses existing complete logic) / Reject ----
 
 @api_router.post("/psp-settlements/{settlement_id}/approve")
-async def approve_psp_settlement(request: Request, settlement_id: str, user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))):
+async def approve_psp_settlement(request: Request, settlement_id: str, approval_date: Optional[str] = None, user: dict = Depends(require_permission(Modules.PSP, Actions.APPROVE))):
     """Approve a pending PSP settlement and execute treasury credit"""
     settlement = await db.psp_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
     if not settlement:
@@ -9197,6 +9230,10 @@ async def approve_psp_settlement(request: Request, settlement_id: str, user: dic
         raise HTTPException(status_code=400, detail="Settlement is not pending approval")
 
     now = datetime.now(timezone.utc)
+    # Use approval_date for treasury records if provided
+    treasury_date_str = now.isoformat()
+    if approval_date:
+        treasury_date_str = f"{approval_date}T00:00:00" if 'T' not in approval_date else approval_date
 
     # Get destination treasury account
     dest = await db.treasury_accounts.find_one({"account_id": settlement["settlement_destination_id"]}, {"_id": 0})
@@ -9231,20 +9268,23 @@ async def approve_psp_settlement(request: Request, settlement_id: str, user: dic
         "related_settlement_id": settlement_id,
         "psp_id": settlement.get("psp_id"),
         "psp_name": settlement.get("psp_name"),
-        "created_at": now.isoformat(),
+        "created_at": treasury_date_str,
         "created_by": user["user_id"],
         "created_by_name": user["name"]
     })
 
     # Mark settlement as completed
+    psp_update_fields = {
+        "status": PSPSettlementStatus.COMPLETED,
+        "settled_at": now.isoformat(),
+        "approved_by": user["user_id"],
+        "approved_by_name": user["name"]
+    }
+    if approval_date:
+        psp_update_fields["approval_date"] = approval_date
     await db.psp_settlements.update_one(
         {"settlement_id": settlement_id},
-        {"$set": {
-            "status": PSPSettlementStatus.COMPLETED,
-            "settled_at": now.isoformat(),
-            "approved_by": user["user_id"],
-            "approved_by_name": user["name"]
-        }}
+        {"$set": psp_update_fields}
     )
 
     # Mark all transactions as settled
