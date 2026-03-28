@@ -11598,6 +11598,7 @@ async def create_transaction_request(
             "reference": reference or f"REF{uuid.uuid4().hex[:8].upper()}",
             "crm_reference": crm_reference.strip() if crm_reference else None,
             "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
+            "client_tags": tx_client_tags,
             "proof_image": proof_url,
             "proof_images": proof_urls,
             "created_by": user["user_id"],
