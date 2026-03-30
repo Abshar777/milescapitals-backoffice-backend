@@ -10041,7 +10041,7 @@ async def create_transaction(
     for img in (proof_images or []):
         if img and img.filename:
             content = await img.read()
-            url = upload_to_r2(content, img.filename, img.content_type or "image/png", "proofs")
+            url = upload_to_r2(content, img.filename, img.content_type or "application/octet-stream", "proofs")
             proof_image_urls.append(url)
     try:
         return await _create_transaction_impl(
@@ -10824,7 +10824,7 @@ async def approve_transaction(
     # Normalize to ISO datetime format for consistent querying
     if bank_receipt_date:
         treasury_date = (
-            f"{bank_receipt_date}T00:00:00"
+            f"{bank_receipt_date}T00:00:00+00:00"
             if "T" not in bank_receipt_date
             else bank_receipt_date
         )
@@ -10843,7 +10843,8 @@ async def approve_transaction(
 
     # For deposits, require proof of payment screenshot
     if tx["transaction_type"] == TransactionType.DEPOSIT:
-        if require_proof and not tx.get("accountant_proof_image"):
+        has_proof = tx.get("accountant_proof_image") or tx.get("accountant_proof_images")
+        if require_proof and not has_proof:
             raise HTTPException(
                 status_code=400,
                 detail="Proof of payment screenshot is required for deposit approvals",
@@ -11020,6 +11021,8 @@ async def approve_transaction(
             dest_account = await db.treasury_accounts.find_one(
                 {"account_id": tx["destination_account_id"]}, {"_id": 0}
             )
+            if not dest_account:
+                raise HTTPException(status_code=404, detail="Destination treasury account not found")
             if dest_account:
                 dest_currency = dest_account.get("currency", "USD")
                 tx_currency = tx.get("currency", "USD")
@@ -11061,6 +11064,7 @@ async def approve_transaction(
 
                 updates["source_account_id"] = tx["destination_account_id"]
                 updates["source_account_name"] = dest_account.get("account_name")
+                updates["source_type"] = "treasury"
                 updates["withdrawal_amount_in_source_currency"] = withdrawal_amount
                 updates["source_currency"] = dest_currency
 
@@ -11456,7 +11460,26 @@ async def create_transaction_request(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-
+    # Duplicate detection: same client, type, amount within 5 minutes
+    # five_minutes_ago = (now - timedelta(minutes=5)).isoformat()
+    # dup_query = {
+    #     "client_id": client_id,
+    #     "transaction_type": transaction_type,
+    #     "amount": amount,
+    #     "created_at": {"$gte": five_minutes_ago},
+    # }
+    # if destination_type == "psp" and psp_id:
+    #     dup_query["psp_id"] = psp_id
+    # elif destination_type == "vendor" and vendor_id:
+    #     dup_query["vendor_id"] = vendor_id
+    # elif destination_type == "treasury" and destination_account_id:
+    #     dup_query["destination_account_id"] = destination_account_id
+    # recent_dup = await db.transaction_requests.find_one(dup_query, {"_id": 0})
+    # if recent_dup:
+    #     raise HTTPException(
+    #         status_code=400,
+    #         detail=f"Possible duplicate: Similar request created recently (Request ID: {recent_dup['request_id']}). Wait 5 minutes or use a unique reference.",
+    #     )
 
     # Parse client_tags
     tx_client_tags = []
@@ -11504,6 +11527,7 @@ async def create_transaction_request(
         "client_usdt_network": client_usdt_network,
         
         "proof_image": proof_url,
+        "proof_images": proof_urls,
         "status": "pending",
         "created_at": now.isoformat(),
         "created_by": user["user_id"],
@@ -11603,8 +11627,8 @@ async def create_transaction_request(
             "destination_bank_name": (
                 destination_account.get("bank_name") if destination_account else None
             ),
-            "vendor_id": vendor_id,
-            "vendor_name": vendor_info["vendor_name"] if vendor_info else None,
+            "vendor_id": vendor_id if destination_type == "vendor" else None,
+            "vendor_name": vendor_info["vendor_name"] if vendor_info and destination_type == "vendor" else None,
             "psp_id": psp_id if destination_type == "psp" else None,
             "psp_name": psp_info["psp_name"] if psp_info else None,
             "psp_commission_rate": psp_info["commission_rate"] if psp_info else None,
@@ -11727,248 +11751,6 @@ async def create_transaction_request(
     return await db.transaction_requests.find_one(
         {"request_id": request_id}, {"_id": 0}
     )
-
-
-
-@api_router.post("/transaction-requests")
-async def create_transaction_request(
-    request: Request,
-    client_id: str = Form(...),
-    transaction_type: str = Form(...),
-    amount: float = Form(...),
-    currency: str = Form("USD"),
-    base_currency: str = Form("USD"),
-    base_amount: Optional[float] = Form(None),
-    exchange_rate: Optional[float] = Form(None),
-    destination_type: str = Form("bank"),
-    destination_account_id: Optional[str] = Form(None),
-    psp_id: Optional[str] = Form(None),
-    vendor_id: Optional[str] = Form(None),
-    reference: Optional[str] = Form(None),
-    crm_reference: Optional[str] = Form(None),
-    description: Optional[str] = Form(None),
-    client_bank_name: Optional[str] = Form(None),
-    client_bank_account_name: Optional[str] = Form(None),
-    client_bank_account_number: Optional[str] = Form(None),
-    client_bank_swift_iban: Optional[str] = Form(None),
-    client_bank_currency: Optional[str] = Form(None),
-    client_usdt_address: Optional[str] = Form(None),
-    client_usdt_network: Optional[str] = Form(None),
-    transaction_date: Optional[str] = Form(None),
-    client_tags: Optional[str] = Form(None),
-    proof_image: Optional[UploadFile] = File(None),
-    user: dict = Depends(require_permission(Modules.TRANSACTION_REQUESTS, Actions.CREATE))
-):
-    now = datetime.now(timezone.utc)
-    
-    # CRM reference uniqueness
-    if crm_reference and crm_reference.strip():
-        existing = await db.transaction_requests.find_one({"crm_reference": crm_reference.strip()}, {"_id": 0})
-        if existing:
-            raise HTTPException(status_code=400, detail=f"CRM Reference '{crm_reference}' already exists")
-    
-    # Get client info
-    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    
-    # Parse client_tags
-    tx_client_tags = []
-    if client_tags:
-        tx_client_tags = [t.strip() for t in client_tags.split(",") if t.strip()]
-    elif client.get("tags"):
-        tx_client_tags = client["tags"]
-    
-    # Handle proof image
-    proof_url = None
-    if proof_image and proof_image.filename:
-        content = await proof_image.read()
-        proof_url = upload_to_r2(content, proof_image.filename, proof_image.content_type or "image/png", "proofs")
-    
-    request_id = f"txreq_{uuid.uuid4().hex[:12]}"
-    
-    doc = {
-        "request_id": request_id,
-        "transaction_type": transaction_type,
-        "client_id": client_id,
-        "client_name": f"{client.get('first_name', '')} {client.get('last_name', '')}".strip(),
-        "client_tags": tx_client_tags,
-        "amount": amount,
-        "currency": currency,
-        "base_currency": base_currency,
-        "base_amount": base_amount,
-        "exchange_rate": exchange_rate,
-        "destination_type": destination_type,
-        "destination_account_id": destination_account_id,
-        "psp_id": psp_id,
-        "vendor_id": vendor_id,
-        "reference": reference,
-        "crm_reference": crm_reference.strip() if crm_reference else None,
-        "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
-        "description": description,
-        "client_bank_name": client_bank_name,
-        "client_bank_account_name": client_bank_account_name,
-        "client_bank_account_number": client_bank_account_number,
-        "client_bank_swift_iban": client_bank_swift_iban,
-        "client_bank_currency": client_bank_currency,
-        "client_usdt_address": client_usdt_address,
-        "client_usdt_network": client_usdt_network,
-        "proof_image": proof_url,
-        "status": "pending",
-        "created_at": now.isoformat(),
-        "created_by": user["user_id"],
-        "created_by_name": user["name"],
-        "processed_at": None,
-        "processed_by": None,
-        "processed_by_name": None,
-        "transaction_id": None,
-    }
-    
-    await db.transaction_requests.insert_one(doc)
-    await log_activity(request, user, "create", "transaction_requests", f"Created {transaction_type} request")
-    
-    # Auto-process deposits immediately
-    if transaction_type == "deposit":
-        tx_id = f"tx_{uuid.uuid4().hex[:12]}"
-        vendor_info = None
-        psp_info = None
-        destination_account = None
-        
-        if vendor_id:
-            vendor_info = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
-        if psp_id:
-            psp_info = await db.psps.find_one({"psp_id": psp_id}, {"_id": 0})
-        if destination_account_id and destination_type in ["treasury", "usdt"]:
-            destination_account = await db.treasury_accounts.find_one({"account_id": destination_account_id}, {"_id": 0})
-        
-        # Calculate vendor commission
-        v_comm_rate = 0.0
-        v_comm_amt = 0.0
-        v_comm_base = 0.0
-        if destination_type == "vendor" and vendor_info:
-            v_comm_rate = vendor_info.get("deposit_commission", 0)
-            if v_comm_rate > 0:
-                v_base = base_amount if (base_currency and base_currency != "USD" and base_amount) else amount
-                v_comm_base = round(v_base * v_comm_rate / 100, 2)
-                v_comm_amt = round(amount * v_comm_rate / 100, 2)
-        
-        # Calculate PSP commission if applicable
-        psp_commission_amount = 0.0
-        psp_net_amount = amount
-        psp_expected_settlement_date = None
-        psp_reserve_fund_amount = 0.0
-        psp_holding_release_date = None
-        if destination_type == "psp" and psp_info:
-            comm_rate = psp_info.get("commission_rate", 0) / 100
-            psp_commission_amount = round(amount * comm_rate, 2)
-            psp_net_amount = amount - psp_commission_amount
-            settlement_days = psp_info.get("settlement_days", 1)
-            psp_expected_settlement_date = (now + timedelta(days=settlement_days)).isoformat()
-            reserve_fund_rate_pct = psp_info.get("reserve_fund_rate", psp_info.get("chargeback_rate", 0))
-            psp_reserve_fund_amount = round(amount * reserve_fund_rate_pct / 100, 2)
-            holding_days = psp_info.get("holding_days", 0)
-            psp_holding_release_date = (now + timedelta(days=holding_days)).isoformat() if holding_days > 0 else None
-        
-        tx_doc = {
-            "transaction_id": tx_id,
-            "client_id": client_id,
-            "client_name": doc["client_name"],
-            "transaction_type": "deposit",
-            "amount": amount,
-            "currency": "USD",
-            "base_currency": base_currency,
-            "base_amount": base_amount if base_currency != "USD" else None,
-            "exchange_rate": exchange_rate,
-            "destination_type": destination_type,
-            "destination_account_id": destination_account_id if destination_type in ["treasury", "usdt"] else None,
-            "destination_account_name": destination_account["account_name"] if destination_account else None,
-            "destination_bank_name": destination_account.get("bank_name") if destination_account else None,
-            "vendor_id": vendor_id,
-            "vendor_name": vendor_info["vendor_name"] if vendor_info else None,
-            "psp_id": psp_id if destination_type == "psp" else None,
-            "psp_name": psp_info["psp_name"] if psp_info else None,
-            "psp_commission_rate": psp_info["commission_rate"] if psp_info else None,
-            "psp_commission_amount": psp_commission_amount if psp_info else None,
-            "psp_net_amount": psp_net_amount if psp_info else None,
-            "psp_expected_settlement_date": psp_expected_settlement_date,
-            "psp_reserve_fund_rate": psp_info.get("reserve_fund_rate", psp_info.get("chargeback_rate", 0)) if psp_info else None,
-            "psp_reserve_fund_amount": psp_reserve_fund_amount if psp_info else None,
-            "psp_holding_days": psp_info.get("holding_days", 0) if psp_info else None,
-            "psp_holding_release_date": psp_holding_release_date,
-            "client_bank_name": client_bank_name,
-            "client_bank_account_name": client_bank_account_name,
-            "client_bank_account_number": client_bank_account_number,
-            "client_bank_swift_iban": client_bank_swift_iban,
-            "client_bank_currency": client_bank_currency,
-            "client_usdt_address": client_usdt_address,
-            "client_usdt_network": client_usdt_network,
-            "vendor_commission_rate": v_comm_rate if v_comm_rate > 0 else None,
-            "vendor_commission_amount": v_comm_amt if v_comm_amt > 0 else None,
-            "vendor_commission_base_amount": v_comm_base if v_comm_base > 0 else None,
-            "vendor_commission_base_currency": base_currency if v_comm_base > 0 else None,
-            "transaction_mode": "bank",
-            "status": TransactionStatus.PENDING,
-            "description": description,
-            "reference": reference or f"REF{uuid.uuid4().hex[:8].upper()}",
-            "crm_reference": crm_reference.strip() if crm_reference else None,
-            "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
-            "client_tags": doc.get("client_tags", []),
-            "proof_image": proof_url,
-            "created_by": user["user_id"],
-            "created_by_name": user["name"],
-            "processed_by": None,
-            "processed_by_name": None,
-            "rejection_reason": None,
-            "settled": False,
-            "settlement_id": None,
-            "settlement_status": None,
-            "request_id": request_id,
-            "created_at": now.isoformat(),
-            "processed_at": None
-        }
-        await db.transactions.insert_one(tx_doc)
-        
-        # Mark request as processed
-        await db.transaction_requests.update_one(
-            {"request_id": request_id},
-            {"$set": {
-                "status": "processed",
-                "processed_at": now.isoformat(),
-                "processed_by": user["user_id"],
-                "processed_by_name": user["name"],
-                "transaction_id": tx_id
-            }}
-        )
-        
-        # Send notifications
-        import asyncio
-        if destination_type == "vendor" and vendor_id:
-            amt_display = f"{base_amount:,.2f} {base_currency}" if base_currency and base_currency != "USD" and base_amount else f"${amount:,.2f} USD"
-            asyncio.create_task(send_exchanger_notification("transaction", vendor_id, {
-                "reference": tx_doc["reference"],
-                "type": "deposit",
-                "client": doc["client_name"],
-                "amount_display": amt_display,
-            }))
-        else:
-            asyncio.create_task(send_approval_notification("transaction", {
-                "reference": tx_doc["reference"],
-                "type": "deposit",
-                "client": doc["client_name"],
-                "amount": amount,
-                "base_amount": base_amount,
-                "base_currency": base_currency,
-                "destination": vendor_info["vendor_name"] if vendor_info else destination_type,
-                "created_by": user["name"]
-            }))
-        
-        await log_activity(request, user, "approve", "transaction_requests", f"Auto-processed deposit → TX {tx_id}")
-        
-        result = await db.transaction_requests.find_one({"request_id": request_id}, {"_id": 0})
-        return result
-    
-    return await db.transaction_requests.find_one({"request_id": request_id}, {"_id": 0})
-
 
 
 @api_router.post("/transaction-requests/{request_id}/process")
