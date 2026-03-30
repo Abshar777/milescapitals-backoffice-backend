@@ -11465,12 +11465,12 @@ async def create_transaction_request(
     elif client.get("tags"):
         tx_client_tags = client["tags"]
     
-    # Handle multiple proof images upload
+    # Handle multiple proof images/PDFs upload
     proof_urls = []
     for img in (proof_images or []):
         if img and img.filename:
             content = await img.read()
-            url = upload_to_r2(content, img.filename, img.content_type or "image/png", "proofs")
+            url = upload_to_r2(content, img.filename, img.content_type or "application/octet-stream", "proofs")
             proof_urls.append(url)
     proof_url = proof_urls[0] if proof_urls else None
 
