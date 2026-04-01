@@ -22738,6 +22738,730 @@ async def get_impersonation_logs(
     return logs
 
 
+# ============================================================
+# REINSTATE CENTER — Admin-only endpoints to reverse approvals
+# ============================================================
+
+@api_router.get("/reinstate/transactions")
+async def reinstate_list_transactions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    user: dict = Depends(require_admin),
+):
+    """List all approved unsettled transactions available for reinstatement"""
+    query = {"status": TransactionStatus.APPROVED, "settled": {"$ne": True}}
+    return await paginate_query(db.transactions, query, page, page_size)
+
+
+@api_router.get("/reinstate/vendor-settlements")
+async def reinstate_list_vendor_settlements(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    user: dict = Depends(require_admin),
+):
+    """List all approved vendor settlements available for reinstatement"""
+    query = {"status": VendorSettlementStatus.APPROVED}
+    return await paginate_query(db.vendor_settlements, query, page, page_size)
+
+
+@api_router.get("/reinstate/income-expenses")
+async def reinstate_list_income_expenses(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    user: dict = Depends(require_admin),
+):
+    """List all approved unsettled income/expense entries available for reinstatement"""
+    query = {"status": "approved", "settled": {"$ne": True}}
+    return await paginate_query(db.income_expenses, query, page, page_size)
+
+
+@api_router.get("/reinstate/loans")
+async def reinstate_list_loans(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    user: dict = Depends(require_admin),
+):
+    """List all active loans (approved disbursements) available for reinstatement"""
+    query = {"status": LoanStatus.ACTIVE}
+    return await paginate_query(db.loans, query, page, page_size)
+
+
+@api_router.get("/reinstate/repayments")
+async def reinstate_list_repayments(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    user: dict = Depends(require_admin),
+):
+    """List all approved loan repayments available for reinstatement"""
+    query = {"status": "approved"}
+    return await paginate_query(db.loan_repayments, query, page, page_size)
+
+
+@api_router.get("/reinstate/psp-settlements")
+async def reinstate_list_psp_settlements(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    user: dict = Depends(require_admin),
+):
+    """List all completed PSP settlements available for reinstatement"""
+    query = {"status": PSPSettlementStatus.COMPLETED}
+    return await paginate_query(db.psp_settlements, query, page, page_size)
+
+
+@api_router.get("/reinstate/transactions/{transaction_id}/preview")
+async def reinstate_transaction_preview(
+    transaction_id: str,
+    user: dict = Depends(require_admin),
+):
+    tx = await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    balance_changes = []
+
+    if tx["transaction_type"] == TransactionType.WITHDRAWAL:
+        source_id = tx.get("source_account_id")
+        withdrawal_amount = tx.get("withdrawal_amount_in_source_currency", tx["amount"])
+        if source_id and withdrawal_amount:
+            if source_id.startswith("psp_"):
+                acc = await db.psps.find_one({"psp_id": source_id}, {"_id": 0})
+                if acc:
+                    balance_changes.append({
+                        "type": "psp",
+                        "account_id": source_id,
+                        "account_name": acc.get("name", source_id),
+                        "currency": acc.get("currency", ""),
+                        "balance_before": acc.get("current_balance", 0),
+                        "balance_after": acc.get("current_balance", 0) + withdrawal_amount,
+                        "change": withdrawal_amount,
+                        "description": "PSP balance restored (withdrawal reversed)",
+                    })
+            else:
+                acc = await db.treasury_accounts.find_one({"account_id": source_id}, {"_id": 0})
+                if acc:
+                    balance_changes.append({
+                        "type": "treasury",
+                        "account_id": source_id,
+                        "account_name": acc.get("account_name", source_id),
+                        "currency": acc.get("currency", ""),
+                        "balance_before": acc.get("balance", 0),
+                        "balance_after": acc.get("balance", 0) + withdrawal_amount,
+                        "change": withdrawal_amount,
+                        "description": "Treasury balance restored (withdrawal reversed)",
+                    })
+    elif tx["transaction_type"] == TransactionType.DEPOSIT:
+        ttx = await db.treasury_transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
+        dest_id = tx.get("destination_account_id")
+        if ttx and dest_id:
+            acc = await db.treasury_accounts.find_one({"account_id": dest_id}, {"_id": 0})
+            if acc:
+                balance_changes.append({
+                    "type": "treasury",
+                    "account_id": dest_id,
+                    "account_name": acc.get("account_name", dest_id),
+                    "currency": acc.get("currency", ""),
+                    "balance_before": acc.get("balance", 0),
+                    "balance_after": acc.get("balance", 0) - ttx["amount"],
+                    "change": -ttx["amount"],
+                    "description": "Treasury balance reduced (deposit reversed)",
+                })
+
+    return {
+        "item": tx,
+        "balance_changes": balance_changes,
+        "affected_records": [],
+        "fields_to_clear": ["source_account_id", "source_account_name", "source_type", "bank_receipt_date", "accountant_proof_image", "accountant_proof_images", "processed_by"],
+    }
+
+
+@api_router.get("/reinstate/vendor-settlements/{settlement_id}/preview")
+async def reinstate_vendor_settlement_preview(
+    settlement_id: str,
+    user: dict = Depends(require_admin),
+):
+    settlement = await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
+    if not settlement:
+        raise HTTPException(status_code=404, detail="Settlement not found")
+
+    balance_changes = []
+    acc = await db.treasury_accounts.find_one({"account_id": settlement.get("settlement_destination_id")}, {"_id": 0})
+    if acc:
+        balance_changes.append({
+            "type": "treasury",
+            "account_id": acc["account_id"],
+            "account_name": acc.get("account_name", acc["account_id"]),
+            "currency": acc.get("currency", ""),
+            "balance_before": acc.get("balance", 0),
+            "balance_after": acc.get("balance", 0) - settlement["settlement_amount"],
+            "change": -settlement["settlement_amount"],
+            "description": "Treasury deducted (settlement reversed)",
+        })
+
+    tx_count = await db.transactions.count_documents({"settlement_id": settlement_id})
+    affected = []
+    if tx_count:
+        affected.append({"type": "transactions", "count": tx_count, "description": f"{tx_count} transaction(s) marked unsettled"})
+    ie_count = len(settlement.get("ie_entry_ids", []))
+    if ie_count:
+        affected.append({"type": "income_expenses", "count": ie_count, "description": f"{ie_count} I&E entry(s) marked unsettled"})
+    loan_tx_count = len(settlement.get("loan_tx_ids", []))
+    if loan_tx_count:
+        affected.append({"type": "loan_transactions", "count": loan_tx_count, "description": f"{loan_tx_count} loan transaction(s) marked unsettled"})
+
+    vendor = await db.vendors.find_one({"vendor_id": settlement.get("vendor_id")}, {"_id": 0})
+    vendor_stats = None
+    if vendor:
+        vendor_stats = {
+            "vendor_name": vendor.get("name", settlement.get("vendor_id")),
+            "total_volume_before": vendor.get("total_volume", 0),
+            "total_volume_after": vendor.get("total_volume", 0) - settlement.get("gross_amount", 0),
+            "total_commission_before": vendor.get("total_commission", 0),
+            "total_commission_after": vendor.get("total_commission", 0) - settlement.get("commission_amount", 0),
+        }
+
+    return {
+        "item": settlement,
+        "balance_changes": balance_changes,
+        "affected_records": affected,
+        "vendor_stats": vendor_stats,
+        "fields_to_clear": ["approved_at", "approved_by", "approved_by_name", "settled_at"],
+    }
+
+
+@api_router.get("/reinstate/income-expenses/{entry_id}/preview")
+async def reinstate_income_expense_preview(
+    entry_id: str,
+    user: dict = Depends(require_admin),
+):
+    entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+
+    balance_changes = []
+    ttx = await db.treasury_transactions.find_one({"income_expense_id": entry_id}, {"_id": 0})
+    treasury_account_id = entry.get("treasury_account_id")
+    if ttx and treasury_account_id:
+        acc = await db.treasury_accounts.find_one({"account_id": treasury_account_id}, {"_id": 0})
+        if acc:
+            balance_changes.append({
+                "type": "treasury",
+                "account_id": treasury_account_id,
+                "account_name": acc.get("account_name", treasury_account_id),
+                "currency": acc.get("currency", ""),
+                "balance_before": acc.get("balance", 0),
+                "balance_after": acc.get("balance", 0) - ttx["amount"],
+                "change": -ttx["amount"],
+                "description": f"Treasury reversed ({entry.get('entry_type', 'I&E')} entry)",
+            })
+
+    return {
+        "item": entry,
+        "balance_changes": balance_changes,
+        "affected_records": [],
+        "fields_to_clear": ["approved_at", "approved_by", "approved_by_name"],
+    }
+
+
+@api_router.get("/reinstate/loans/{loan_id}/preview")
+async def reinstate_loan_preview(
+    loan_id: str,
+    user: dict = Depends(require_admin),
+):
+    loan = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+
+    balance_changes = []
+    ttx = await db.treasury_transactions.find_one(
+        {"loan_id": loan_id, "transaction_type": "loan_disbursement"}, {"_id": 0}
+    )
+    if ttx and loan.get("source_treasury_id"):
+        acc = await db.treasury_accounts.find_one({"account_id": loan["source_treasury_id"]}, {"_id": 0})
+        if acc:
+            balance_changes.append({
+                "type": "treasury",
+                "account_id": loan["source_treasury_id"],
+                "account_name": acc.get("account_name", loan["source_treasury_id"]),
+                "currency": acc.get("currency", ""),
+                "balance_before": acc.get("balance", 0),
+                "balance_after": acc.get("balance", 0) - ttx["amount"],
+                "change": -ttx["amount"],
+                "description": "Treasury restored (disbursement reversed)",
+            })
+
+    repayment_count = await db.loan_repayments.count_documents({"loan_id": loan_id, "status": "approved"})
+    affected = []
+    if repayment_count:
+        affected.append({"type": "warning", "count": repayment_count, "description": f"Warning: {repayment_count} approved repayment(s) exist on this loan"})
+
+    return {
+        "item": loan,
+        "balance_changes": balance_changes,
+        "affected_records": affected,
+        "fields_to_clear": ["approved_at", "approved_by", "approved_by_name"],
+    }
+
+
+@api_router.get("/reinstate/repayments/{repayment_id}/preview")
+async def reinstate_repayment_preview(
+    repayment_id: str,
+    user: dict = Depends(require_admin),
+):
+    repayment = await db.loan_repayments.find_one({"repayment_id": repayment_id}, {"_id": 0})
+    if not repayment:
+        raise HTTPException(status_code=404, detail="Repayment not found")
+
+    loan = await db.loans.find_one({"loan_id": repayment.get("loan_id")}, {"_id": 0})
+
+    balance_changes = []
+    ttx = await db.treasury_transactions.find_one({"repayment_id": repayment_id}, {"_id": 0})
+    if ttx and repayment.get("treasury_account_id"):
+        acc = await db.treasury_accounts.find_one({"account_id": repayment["treasury_account_id"]}, {"_id": 0})
+        if acc:
+            balance_changes.append({
+                "type": "treasury",
+                "account_id": repayment["treasury_account_id"],
+                "account_name": acc.get("account_name", repayment["treasury_account_id"]),
+                "currency": acc.get("currency", ""),
+                "balance_before": acc.get("balance", 0),
+                "balance_after": acc.get("balance", 0) - ttx["amount"],
+                "change": -ttx["amount"],
+                "description": "Treasury deducted (repayment reversed)",
+            })
+
+    loan_changes = None
+    if loan:
+        repayment_amount_in_loan_currency = repayment.get("amount_in_loan_currency", repayment["amount"])
+        new_total_repaid = max(0, loan.get("total_repaid", 0) - repayment_amount_in_loan_currency)
+        outstanding = loan["amount"] + loan.get("total_interest", 0) - new_total_repaid
+        loan_changes = {
+            "loan_id": loan["loan_id"],
+            "total_repaid_before": loan.get("total_repaid", 0),
+            "total_repaid_after": new_total_repaid,
+            "outstanding_before": loan.get("outstanding_balance", 0),
+            "outstanding_after": max(0, outstanding),
+            "repayment_count_before": loan.get("repayment_count", 0),
+            "repayment_count_after": max(0, loan.get("repayment_count", 0) - 1),
+            "currency": loan.get("currency", ""),
+        }
+
+    return {
+        "item": repayment,
+        "balance_changes": balance_changes,
+        "affected_records": [],
+        "loan_changes": loan_changes,
+        "fields_to_clear": ["approved_at", "approved_by", "approved_by_name"],
+    }
+
+
+@api_router.get("/reinstate/psp-settlements/{settlement_id}/preview")
+async def reinstate_psp_settlement_preview(
+    settlement_id: str,
+    user: dict = Depends(require_admin),
+):
+    settlement = await db.psp_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
+    if not settlement:
+        raise HTTPException(status_code=404, detail="PSP settlement not found")
+
+    balance_changes = []
+    ttx = await db.treasury_transactions.find_one({"related_settlement_id": settlement_id}, {"_id": 0})
+    treasury_amount = ttx["amount"] if ttx else settlement.get("treasury_amount", settlement["net_amount"])
+    dest_id = settlement.get("settlement_destination_id")
+    if dest_id:
+        acc = await db.treasury_accounts.find_one({"account_id": dest_id}, {"_id": 0})
+        if acc:
+            balance_changes.append({
+                "type": "treasury",
+                "account_id": dest_id,
+                "account_name": acc.get("account_name", dest_id),
+                "currency": acc.get("currency", ""),
+                "balance_before": acc.get("balance", 0),
+                "balance_after": acc.get("balance", 0) - treasury_amount,
+                "change": -treasury_amount,
+                "description": "Treasury deducted (PSP settlement reversed)",
+            })
+
+    psp = await db.psps.find_one({"psp_id": settlement.get("psp_id")}, {"_id": 0})
+    psp_changes = None
+    if psp:
+        psp_changes = {
+            "psp_name": psp.get("name", settlement.get("psp_id")),
+            "pending_settlement_before": psp.get("pending_settlement", 0),
+            "pending_settlement_after": psp.get("pending_settlement", 0) + settlement["net_amount"],
+            "total_volume_before": psp.get("total_volume", 0),
+            "total_volume_after": psp.get("total_volume", 0) - settlement.get("gross_amount", 0),
+            "currency": psp.get("currency", ""),
+        }
+
+    tx_ids = settlement.get("transaction_ids", [])
+    affected = []
+    if tx_ids:
+        affected.append({"type": "transactions", "count": len(tx_ids), "description": f"{len(tx_ids)} transaction(s) settlement data cleared"})
+
+    return {
+        "item": settlement,
+        "balance_changes": balance_changes,
+        "affected_records": affected,
+        "psp_changes": psp_changes,
+        "fields_to_clear": ["settled_at", "approved_by", "approved_by_name"],
+    }
+
+
+@api_router.post("/reinstate/transactions/{transaction_id}")
+async def reinstate_transaction(
+    request: Request,
+    transaction_id: str,
+    user: dict = Depends(require_admin),
+):
+    """Reinstate an approved transaction: reverse treasury effects and move back to pending"""
+    tx = await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if tx["status"] != TransactionStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Transaction is not approved")
+    if tx.get("settled"):
+        raise HTTPException(status_code=400, detail="Cannot reinstate a settled transaction")
+
+    now = datetime.now(timezone.utc)
+
+    if tx["transaction_type"] == TransactionType.WITHDRAWAL:
+        source_id = tx.get("source_account_id")
+        withdrawal_amount = tx.get("withdrawal_amount_in_source_currency", tx["amount"])
+        if source_id and withdrawal_amount:
+            if source_id.startswith("psp_"):
+                await db.psps.update_one(
+                    {"psp_id": source_id},
+                    {"$inc": {"current_balance": withdrawal_amount}, "$set": {"updated_at": now.isoformat()}},
+                )
+            else:
+                await db.treasury_accounts.update_one(
+                    {"account_id": source_id},
+                    {"$inc": {"balance": withdrawal_amount}, "$set": {"updated_at": now.isoformat()}},
+                )
+    elif tx["transaction_type"] == TransactionType.DEPOSIT:
+        ttx = await db.treasury_transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
+        dest_id = tx.get("destination_account_id")
+        if ttx and dest_id:
+            await db.treasury_accounts.update_one(
+                {"account_id": dest_id},
+                {"$inc": {"balance": -ttx["amount"]}, "$set": {"updated_at": now.isoformat()}},
+            )
+
+    await db.treasury_transactions.delete_many({"transaction_id": transaction_id})
+
+    await db.transactions.update_one(
+        {"transaction_id": transaction_id},
+        {
+            "$set": {
+                "status": TransactionStatus.PENDING,
+                "reinstated_at": now.isoformat(),
+                "reinstated_by": user["user_id"],
+                "reinstated_by_name": user["name"],
+            },
+            "$unset": {
+                "processed_by": "", "processed_by_name": "", "processed_at": "",
+                "source_account_id": "", "source_account_name": "", "source_type": "",
+                "source_currency": "", "withdrawal_amount_in_source_currency": "",
+                "bank_receipt_date": "", "accountant_proof_image": "", "accountant_proof_images": "",
+                "proof_uploaded_at": "", "proof_uploaded_by": "", "proof_uploaded_by_name": "",
+            },
+        },
+    )
+
+    invalidate_transaction_cache()
+    invalidate_treasury_cache()
+    await log_activity(request, user, "reinstate", "transactions", f"Reinstated transaction {transaction_id}", reference_id=transaction_id)
+    return {"message": "Transaction reinstated successfully", "transaction_id": transaction_id}
+
+
+@api_router.post("/reinstate/vendor-settlements/{settlement_id}")
+async def reinstate_vendor_settlement(
+    request: Request,
+    settlement_id: str,
+    user: dict = Depends(require_admin),
+):
+    """Reinstate an approved vendor settlement: reverse all financial effects"""
+    settlement = await db.vendor_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
+    if not settlement:
+        raise HTTPException(status_code=404, detail="Settlement not found")
+    if settlement["status"] != VendorSettlementStatus.APPROVED:
+        raise HTTPException(status_code=400, detail="Settlement is not approved")
+
+    now = datetime.now(timezone.utc)
+
+    await db.treasury_accounts.update_one(
+        {"account_id": settlement["settlement_destination_id"]},
+        {"$inc": {"balance": -settlement["settlement_amount"]}, "$set": {"updated_at": now.isoformat()}},
+    )
+
+    await db.vendors.update_one(
+        {"vendor_id": settlement["vendor_id"]},
+        {"$inc": {"total_volume": -settlement["gross_amount"], "total_commission": -settlement["commission_amount"]}},
+    )
+
+    await db.transactions.update_many(
+        {"settlement_id": settlement_id},
+        {"$set": {"settled": False, "settlement_status": None}},
+    )
+
+    ie_entry_ids = settlement.get("ie_entry_ids", [])
+    if ie_entry_ids:
+        await db.income_expenses.update_many(
+            {"entry_id": {"$in": ie_entry_ids}},
+            {"$set": {"settled": False, "settlement_status": None}},
+        )
+
+    loan_tx_ids = settlement.get("loan_tx_ids", [])
+    if loan_tx_ids:
+        await db.loan_transactions.update_many(
+            {"transaction_id": {"$in": loan_tx_ids}},
+            {"$set": {"settled": False, "settlement_status": None}},
+        )
+
+    await db.treasury_transactions.delete_many({"settlement_id": settlement_id})
+
+    await db.vendor_settlements.update_one(
+        {"settlement_id": settlement_id},
+        {
+            "$set": {
+                "status": VendorSettlementStatus.PENDING,
+                "reinstated_at": now.isoformat(),
+                "reinstated_by": user["user_id"],
+                "reinstated_by_name": user["name"],
+            },
+            "$unset": {"approved_at": "", "approved_by": "", "approved_by_name": "", "settled_at": "", "approval_date": ""},
+        },
+    )
+
+    invalidate_treasury_cache()
+    await log_activity(request, user, "reinstate", "exchangers", f"Reinstated vendor settlement {settlement_id}", reference_id=settlement_id)
+    return {"message": "Vendor settlement reinstated successfully", "settlement_id": settlement_id}
+
+
+@api_router.post("/reinstate/income-expenses/{entry_id}")
+async def reinstate_income_expense_entry(
+    request: Request,
+    entry_id: str,
+    user: dict = Depends(require_admin),
+):
+    """Reinstate an approved income/expense entry: reverse treasury effects"""
+    entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if entry.get("status") != "approved":
+        raise HTTPException(status_code=400, detail="Entry is not approved")
+    if entry.get("settled"):
+        raise HTTPException(status_code=400, detail="Cannot reinstate a settled entry")
+
+    now = datetime.now(timezone.utc)
+
+    ttx = await db.treasury_transactions.find_one({"income_expense_id": entry_id}, {"_id": 0})
+    treasury_account_id = entry.get("treasury_account_id")
+    if ttx and treasury_account_id:
+        await db.treasury_accounts.update_one(
+            {"account_id": treasury_account_id},
+            {"$inc": {"balance": -ttx["amount"]}, "$set": {"updated_at": now.isoformat()}},
+        )
+
+    await db.treasury_transactions.delete_many({"income_expense_id": entry_id})
+
+    await db.income_expenses.update_one(
+        {"entry_id": entry_id},
+        {
+            "$set": {
+                "status": "pending",
+                "reinstated_at": now.isoformat(),
+                "reinstated_by": user["user_id"],
+                "reinstated_by_name": user["name"],
+            },
+            "$unset": {"approved_at": "", "approved_by": "", "approved_by_name": "", "approval_date": ""},
+        },
+    )
+
+    invalidate_treasury_cache()
+    await log_activity(request, user, "reinstate", "income_expenses", f"Reinstated I&E entry {entry_id}", reference_id=entry_id)
+    return {"message": "Income/Expense entry reinstated successfully", "entry_id": entry_id}
+
+
+@api_router.post("/reinstate/loans/{loan_id}")
+async def reinstate_loan(
+    request: Request,
+    loan_id: str,
+    user: dict = Depends(require_admin),
+):
+    """Reinstate an approved loan disbursement: reverse treasury deduction"""
+    loan = await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    if loan.get("status") != LoanStatus.ACTIVE:
+        raise HTTPException(status_code=400, detail="Loan is not in active state")
+
+    now = datetime.now(timezone.utc)
+
+    ttx = await db.treasury_transactions.find_one(
+        {"loan_id": loan_id, "transaction_type": "loan_disbursement"}, {"_id": 0}
+    )
+    if ttx and loan.get("source_treasury_id"):
+        await db.treasury_accounts.update_one(
+            {"account_id": loan["source_treasury_id"]},
+            {"$inc": {"balance": -ttx["amount"]}, "$set": {"updated_at": now.isoformat()}},
+        )
+
+    await db.treasury_transactions.delete_many({"loan_id": loan_id, "transaction_type": "loan_disbursement"})
+
+    await db.loans.update_one(
+        {"loan_id": loan_id},
+        {
+            "$set": {
+                "status": "pending_approval",
+                "reinstated_at": now.isoformat(),
+                "reinstated_by": user["user_id"],
+                "reinstated_by_name": user["name"],
+            },
+            "$unset": {"approved_at": "", "approved_by": "", "approved_by_name": "", "approval_date": ""},
+        },
+    )
+
+    await db.loan_transactions.update_one(
+        {"loan_id": loan_id, "transaction_type": LoanTransactionType.DISBURSEMENT, "status": "completed"},
+        {"$set": {"status": "pending_approval"}},
+    )
+
+    invalidate_treasury_cache()
+    await log_activity(request, user, "reinstate", "loans", f"Reinstated loan disbursement {loan_id}", reference_id=loan_id)
+    return {"message": "Loan reinstated successfully", "loan_id": loan_id}
+
+
+@api_router.post("/reinstate/repayments/{repayment_id}")
+async def reinstate_repayment(
+    request: Request,
+    repayment_id: str,
+    user: dict = Depends(require_admin),
+):
+    """Reinstate an approved loan repayment: reverse treasury credit and loan totals"""
+    repayment = await db.loan_repayments.find_one({"repayment_id": repayment_id}, {"_id": 0})
+    if not repayment:
+        raise HTTPException(status_code=404, detail="Repayment not found")
+    if repayment.get("status") != "approved":
+        raise HTTPException(status_code=400, detail="Repayment is not approved")
+
+    loan = await db.loans.find_one({"loan_id": repayment["loan_id"]}, {"_id": 0})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Associated loan not found")
+
+    now = datetime.now(timezone.utc)
+
+    ttx = await db.treasury_transactions.find_one({"repayment_id": repayment_id}, {"_id": 0})
+    if ttx and repayment.get("treasury_account_id"):
+        await db.treasury_accounts.update_one(
+            {"account_id": repayment["treasury_account_id"]},
+            {"$inc": {"balance": -ttx["amount"]}, "$set": {"updated_at": now.isoformat()}},
+        )
+
+    await db.treasury_transactions.delete_many({"repayment_id": repayment_id})
+
+    repayment_amount_in_loan_currency = repayment.get("amount_in_loan_currency", repayment["amount"])
+    new_total_repaid = max(0, loan.get("total_repaid", 0) - repayment_amount_in_loan_currency)
+    outstanding = loan["amount"] + loan.get("total_interest", 0) - new_total_repaid
+    loan_status = LoanStatus.ACTIVE if new_total_repaid <= 0 else LoanStatus.PARTIALLY_PAID
+
+    await db.loans.update_one(
+        {"loan_id": repayment["loan_id"]},
+        {
+            "$set": {
+                "total_repaid": new_total_repaid,
+                "outstanding_balance": max(0, outstanding),
+                "status": loan_status,
+                "updated_at": now.isoformat(),
+            },
+            "$inc": {"repayment_count": -1},
+        },
+    )
+
+    await db.loan_repayments.update_one(
+        {"repayment_id": repayment_id},
+        {
+            "$set": {
+                "status": "pending_approval",
+                "reinstated_at": now.isoformat(),
+                "reinstated_by": user["user_id"],
+                "reinstated_by_name": user["name"],
+            },
+            "$unset": {"approved_at": "", "approved_by": "", "approved_by_name": "", "approval_date": ""},
+        },
+    )
+
+    await db.loan_transactions.update_one(
+        {"loan_id": repayment["loan_id"], "transaction_type": LoanTransactionType.REPAYMENT, "status": "completed"},
+        {"$set": {"status": "pending_approval"}},
+    )
+
+    invalidate_treasury_cache()
+    await log_activity(request, user, "reinstate", "loans", f"Reinstated loan repayment {repayment_id}", reference_id=repayment_id)
+    return {"message": "Loan repayment reinstated successfully", "repayment_id": repayment_id}
+
+
+@api_router.post("/reinstate/psp-settlements/{settlement_id}")
+async def reinstate_psp_settlement(
+    request: Request,
+    settlement_id: str,
+    user: dict = Depends(require_admin),
+):
+    """Reinstate a completed PSP settlement: reverse treasury credit and PSP stats"""
+    settlement = await db.psp_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
+    if not settlement:
+        raise HTTPException(status_code=404, detail="PSP settlement not found")
+    if settlement["status"] != PSPSettlementStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="PSP settlement is not completed")
+
+    now = datetime.now(timezone.utc)
+
+    ttx = await db.treasury_transactions.find_one({"related_settlement_id": settlement_id}, {"_id": 0})
+    treasury_amount = ttx["amount"] if ttx else settlement.get("treasury_amount", settlement["net_amount"])
+    await db.treasury_accounts.update_one(
+        {"account_id": settlement["settlement_destination_id"]},
+        {"$inc": {"balance": -treasury_amount}, "$set": {"updated_at": now.isoformat()}},
+    )
+
+    await db.treasury_transactions.delete_many({"related_settlement_id": settlement_id})
+
+    await db.psps.update_one(
+        {"psp_id": settlement["psp_id"]},
+        {
+            "$inc": {
+                "pending_settlement": settlement["net_amount"],
+                "total_volume": -settlement.get("gross_amount", 0),
+                "total_commission": -settlement.get("commission_amount", 0),
+            }
+        },
+    )
+
+    tx_ids = settlement.get("transaction_ids", [])
+    if tx_ids:
+        await db.transactions.update_many(
+            {"transaction_id": {"$in": tx_ids}},
+            {"$unset": {"settlement_id": "", "settlement_status": "", "settled": "", "settled_at": "", "settled_by": "", "settled_by_name": "", "settlement_destination_id": "", "settlement_destination_name": ""}},
+        )
+
+    await db.psp_settlements.update_one(
+        {"settlement_id": settlement_id},
+        {
+            "$set": {
+                "status": PSPSettlementStatus.PENDING,
+                "reinstated_at": now.isoformat(),
+                "reinstated_by": user["user_id"],
+                "reinstated_by_name": user["name"],
+            },
+            "$unset": {"settled_at": "", "approved_by": "", "approved_by_name": "", "approval_date": ""},
+        },
+    )
+
+    invalidate_transaction_cache()
+    invalidate_treasury_cache()
+    await log_activity(request, user, "reinstate", "psp", f"Reinstated PSP settlement {settlement_id}", reference_id=settlement_id)
+    return {"message": "PSP settlement reinstated successfully", "settlement_id": settlement_id}
+
+
 # Include router
 app.include_router(api_router)
 
