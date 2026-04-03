@@ -203,6 +203,7 @@ class Modules:
     MESSAGES = "messages"
     APPROVALS = "approvals"
     TRANSACTION_REQUESTS = "transaction_requests"
+    REINSTATE = "reinstate"
 
 
 # Standard actions
@@ -237,6 +238,7 @@ ALL_MODULES = [
     Modules.MESSAGES,
     Modules.APPROVALS,
     Modules.TRANSACTION_REQUESTS,
+    Modules.REINSTATE,
 ]
 
 # All actions list
@@ -271,6 +273,7 @@ MODULE_DISPLAY_NAMES = {
     Modules.MESSAGES: "Messages",
     Modules.APPROVALS: "Pending Approvals",
     Modules.TRANSACTION_REQUESTS: "Transaction Requests",
+    Modules.REINSTATE: "Reinstate Center",
 }
 
 
@@ -22746,10 +22749,16 @@ async def get_impersonation_logs(
 async def reinstate_list_transactions(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    search: str = Query(None),
     user: dict = Depends(require_admin),
 ):
-    """List all approved unsettled transactions available for reinstatement"""
     query = {"status": TransactionStatus.APPROVED, "settled": {"$ne": True}}
+    if search:
+        query["$or"] = [
+            {"transaction_id": {"$regex": search, "$options": "i"}},
+            {"reference_id": {"$regex": search, "$options": "i"}},
+            {"client_name": {"$regex": search, "$options": "i"}},
+        ]
     return await paginate_query(db.transactions, query, page, page_size)
 
 
@@ -22757,10 +22766,16 @@ async def reinstate_list_transactions(
 async def reinstate_list_vendor_settlements(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    search: str = Query(None),
     user: dict = Depends(require_admin),
 ):
-    """List all approved vendor settlements available for reinstatement"""
     query = {"status": VendorSettlementStatus.APPROVED}
+    if search:
+        query["$or"] = [
+            {"settlement_id": {"$regex": search, "$options": "i"}},
+            {"vendor_name": {"$regex": search, "$options": "i"}},
+            {"vendor_id": {"$regex": search, "$options": "i"}},
+        ]
     return await paginate_query(db.vendor_settlements, query, page, page_size)
 
 
@@ -22768,10 +22783,16 @@ async def reinstate_list_vendor_settlements(
 async def reinstate_list_income_expenses(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    search: str = Query(None),
     user: dict = Depends(require_admin),
 ):
-    """List all approved unsettled income/expense entries available for reinstatement"""
     query = {"status": "approved", "settled": {"$ne": True}}
+    if search:
+        query["$or"] = [
+            {"entry_id": {"$regex": search, "$options": "i"}},
+            {"description": {"$regex": search, "$options": "i"}},
+            {"reference_id": {"$regex": search, "$options": "i"}},
+        ]
     return await paginate_query(db.income_expenses, query, page, page_size)
 
 
@@ -22779,10 +22800,16 @@ async def reinstate_list_income_expenses(
 async def reinstate_list_loans(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    search: str = Query(None),
     user: dict = Depends(require_admin),
 ):
-    """List all active loans (approved disbursements) available for reinstatement"""
     query = {"status": LoanStatus.ACTIVE}
+    if search:
+        query["$or"] = [
+            {"loan_id": {"$regex": search, "$options": "i"}},
+            {"borrower_name": {"$regex": search, "$options": "i"}},
+            {"client_name": {"$regex": search, "$options": "i"}},
+        ]
     return await paginate_query(db.loans, query, page, page_size)
 
 
@@ -22790,10 +22817,15 @@ async def reinstate_list_loans(
 async def reinstate_list_repayments(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    search: str = Query(None),
     user: dict = Depends(require_admin),
 ):
-    """List all approved loan repayments available for reinstatement"""
     query = {"status": "approved"}
+    if search:
+        query["$or"] = [
+            {"repayment_id": {"$regex": search, "$options": "i"}},
+            {"loan_id": {"$regex": search, "$options": "i"}},
+        ]
     return await paginate_query(db.loan_repayments, query, page, page_size)
 
 
@@ -22801,10 +22833,16 @@ async def reinstate_list_repayments(
 async def reinstate_list_psp_settlements(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    search: str = Query(None),
     user: dict = Depends(require_admin),
 ):
-    """List all completed PSP settlements available for reinstatement"""
     query = {"status": PSPSettlementStatus.COMPLETED}
+    if search:
+        query["$or"] = [
+            {"settlement_id": {"$regex": search, "$options": "i"}},
+            {"psp_name": {"$regex": search, "$options": "i"}},
+            {"psp_id": {"$regex": search, "$options": "i"}},
+        ]
     return await paginate_query(db.psp_settlements, query, page, page_size)
 
 
