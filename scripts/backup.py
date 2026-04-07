@@ -9,7 +9,6 @@ Usage:
 """
 
 import asyncio
-import gzip
 import json
 import logging
 import os
@@ -100,31 +99,38 @@ def _serialize(obj):
 
 
 async def export_collection(db, name: str, run_dir: Path) -> Path:
-    """Dump a single collection to a gzipped JSON file."""
-    docs = await db[name].find({}, {"_id": 1}).to_list(None)
-    # fetch full docs without _id serialization issue
+    """Dump a single collection to a JSON file."""
     docs = await db[name].find().to_list(None)
-    json_bytes = json.dumps(docs, default=_serialize, ensure_ascii=False, indent=2).encode()
-    gz_path = run_dir / f"{name}.json.gz"
-    with gzip.open(gz_path, "wb") as f:
-        f.write(json_bytes)
-    size_kb = gz_path.stat().st_size / 1024
-    logger.info(f"  ✓ {name}: {len(docs)} docs → {size_kb:.1f} KB (gzipped)")
-    return gz_path
+    json_str = json.dumps(docs, default=_serialize, ensure_ascii=False, indent=2)
+    json_path = run_dir / f"{name}.json"
+    json_path.write_text(json_str, encoding="utf-8")
+    size_kb = json_path.stat().st_size / 1024
+    logger.info(f"  ✓ {name}: {len(docs)} docs → {size_kb:.1f} KB")
+    return json_path
 
 
-async def send_to_telegram(file_path: Path, caption: str):
-    """Send a file to the Telegram backup group."""
+async def send_to_telegram(file_path: Path, caption: str, max_retries: int = 5):
+    """Send a file to the Telegram backup group, retrying on rate limit."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-    async with httpx.AsyncClient(timeout=120) as client:
-        with open(file_path, "rb") as f:
-            response = await client.post(
-                url,
-                data={"chat_id": CHAT_ID, "caption": caption},
-                files={"document": (file_path.name, f, "application/gzip")},
-            )
-    if not response.json().get("ok"):
-        raise RuntimeError(f"Telegram error: {response.text}")
+    for attempt in range(1, max_retries + 1):
+        async with httpx.AsyncClient(timeout=120) as client:
+            with open(file_path, "rb") as f:
+                response = await client.post(
+                    url,
+                    data={"chat_id": CHAT_ID, "caption": caption},
+                    files={"document": (file_path.name, f, "application/json")},
+                )
+        result = response.json()
+        if result.get("ok"):
+            return
+        error_code = result.get("error_code")
+        retry_after = result.get("parameters", {}).get("retry_after", 15)
+        if error_code == 429:
+            logger.warning(f"    Rate limited. Waiting {retry_after}s before retry {attempt}/{max_retries}...")
+            await asyncio.sleep(retry_after + 1)
+        else:
+            raise RuntimeError(f"Telegram error: {response.text}")
+    raise RuntimeError(f"Failed to send {file_path.name} after {max_retries} retries")
 
 
 async def send_message_to_telegram(text: str):
@@ -151,9 +157,9 @@ async def run_backup():
 
     for name in COLLECTIONS:
         try:
-            gz_path = await export_collection(db, name, run_dir)
+            json_path = await export_collection(db, name, run_dir)
             caption = f"📦 `{DB_NAME}` › `{name}` — {timestamp}"
-            await send_to_telegram(gz_path, caption)
+            await send_to_telegram(json_path, caption)
             success.append(name)
         except Exception as e:
             logger.error(f"  ✗ {name}: {e}")
