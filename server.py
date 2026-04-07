@@ -23606,6 +23606,17 @@ app.add_middleware(
 )
 
 
+async def _run_backup_job():
+    """Wrapper called by APScheduler to run the backup."""
+    try:
+        import sys, os
+        sys.path.insert(0, os.path.dirname(__file__))
+        from scripts.backup import run_backup
+        await run_backup()
+    except Exception as e:
+        logger.error(f"Backup job failed: {e}")
+
+
 @app.on_event("startup")
 async def startup_db_indexes():
     """Create database indexes and start scheduler"""
@@ -23732,6 +23743,13 @@ async def startup_db_indexes():
         _scheduler_started = True
         await reschedule_daily_report()
         await reschedule_audit_scan()
+        # Schedule database backup every 12 hours (2 AM & 2 PM UTC)
+        scheduler.add_job(
+            _run_backup_job,
+            CronTrigger(hour="2,14", minute=0),
+            id="db_backup",
+            replace_existing=True,
+        )
         logger.info("Scheduler started successfully")
     except Exception as e:
         logger.error(f"Failed to start scheduler: {e}")
