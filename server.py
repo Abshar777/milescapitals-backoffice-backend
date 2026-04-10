@@ -23617,6 +23617,29 @@ async def _run_backup_job():
         logger.error(f"Backup job failed: {e}")
 
 
+@app.get("/admin/backup/status")
+async def backup_status(user=Depends(require_admin)):
+    """Check scheduler status and next backup run time."""
+    job = scheduler.get_job("db_backup")
+    if not job:
+        return {"scheduler_running": scheduler.running, "job": None}
+    return {
+        "scheduler_running": scheduler.running,
+        "job": {
+            "id": job.id,
+            "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
+            "trigger": str(job.trigger),
+        },
+    }
+
+
+@app.post("/admin/backup/run")
+async def trigger_backup_now(background_tasks: BackgroundTasks, user=Depends(require_admin)):
+    """Manually trigger a backup immediately (runs in background)."""
+    background_tasks.add_task(_run_backup_job)
+    return {"message": "Backup started in background. Check Telegram for progress."}
+
+
 @app.on_event("startup")
 async def startup_db_indexes():
     """Create database indexes and start scheduler"""
