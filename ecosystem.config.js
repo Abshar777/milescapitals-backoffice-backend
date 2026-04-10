@@ -7,7 +7,7 @@ module.exports = {
     {
       name: "miles-backend",
       script: "venv/bin/uvicorn",
-      args: "server:app --host 0.0.0.0 --port 8000 --workers 1",
+      args: "server:app --host 0.0.0.0 --port 8001 --workers 1",
       cwd: __dirname,
       interpreter: "none",
       watch: false,
