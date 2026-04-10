@@ -23618,7 +23618,7 @@ async def _run_backup_job():
 
 
 @app.get("/admin/backup/status")
-async def backup_status(user=Depends(require_admin)):
+async def backup_status():
     """Check scheduler status and next backup run time."""
     job = scheduler.get_job("db_backup")
     if not job:
@@ -23634,7 +23634,7 @@ async def backup_status(user=Depends(require_admin)):
 
 
 @app.post("/admin/backup/run")
-async def trigger_backup_now(background_tasks: BackgroundTasks, user=Depends(require_admin)):
+async def trigger_backup_now(background_tasks: BackgroundTasks):
     """Manually trigger a backup immediately (runs in background)."""
     background_tasks.add_task(_run_backup_job)
     return {"message": "Backup started in background. Check Telegram for progress."}
