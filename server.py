@@ -14515,7 +14515,6 @@ async def get_vendor_borrowers(
 async def get_loans(
     status: Optional[str] = None,
     borrower: Optional[str] = None,
-    vendor_id: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW)),
@@ -14526,8 +14525,6 @@ async def get_loans(
         query["status"] = status
     if borrower:
         query["borrower_name"] = {"$regex": borrower, "$options": "i"}
-    if vendor_id:
-        query["vendor_id"] = vendor_id
 
     skip = (page - 1) * page_size
     total = await db.loans.count_documents(query)
@@ -15376,7 +15373,6 @@ async def export_loans_csv(
 
 @api_router.get("/loans/export/excel")
 async def export_loans_excel(
-    vendor_id: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.LOANS, Actions.EXPORT))
 ):
     """Export all loans as Excel"""
@@ -15384,10 +15380,7 @@ async def export_loans_excel(
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from io import BytesIO
 
-    query = {}
-    if vendor_id:
-        query["vendor_id"] = vendor_id
-    loans = await db.loans.find(query, {"_id": 0}).sort("loan_date", -1).to_list(50000)
+    loans = await db.loans.find({}, {"_id": 0}).sort("loan_date", -1).to_list(50000)
 
     wb = Workbook()
     ws = wb.active
@@ -15474,7 +15467,6 @@ async def export_loans_excel(
 
 @api_router.get("/loans/export/pdf")
 async def export_loans_pdf(
-    vendor_id: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.LOANS, Actions.EXPORT))
 ):
     """Export all loans as PDF"""
@@ -15490,10 +15482,7 @@ async def export_loans_pdf(
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from io import BytesIO
 
-    query = {}
-    if vendor_id:
-        query["vendor_id"] = vendor_id
-    loans = await db.loans.find(query, {"_id": 0}).sort("loan_date", -1).to_list(50000)
+    loans = await db.loans.find({}, {"_id": 0}).sort("loan_date", -1).to_list(50000)
 
     buffer = BytesIO()
     doc = SimpleDocTemplate(
