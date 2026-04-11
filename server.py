@@ -14570,6 +14570,10 @@ async def get_loans(
         loan["outstanding_balance"] = (
             loan["amount"] + loan.get("total_interest", 0) - loan.get("total_repaid", 0)
         )
+        # USD equivalent of outstanding balance
+        loan["outstanding_balance_usd"] = convert_to_usd(
+            max(0, loan["outstanding_balance"]), loan.get("currency", "USD")
+        )
 
         # Check if overdue
         if loan["status"] == LoanStatus.ACTIVE:
