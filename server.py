@@ -23008,7 +23008,9 @@ async def reinstate_list_transactions(
         query["$or"] = [
             {"transaction_id": {"$regex": search, "$options": "i"}},
             {"reference_id": {"$regex": search, "$options": "i"}},
+            {"reference": {"$regex": search, "$options": "i"}},
             {"client_name": {"$regex": search, "$options": "i"}},
+            {"crm_reference": {"$regex": search, "$options": "i"}},
         ]
     return await paginate_query(db.transactions, query, page, page_size)
 
