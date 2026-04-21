@@ -11077,8 +11077,14 @@ async def approve_transaction(
                 tx_currency = tx.get("currency", "USD")
                 withdrawal_amount = tx["amount"]
 
-                # PRIORITY: Use manual base_amount if source currency matches base_currency
-                if tx.get("base_currency") == source_currency and tx.get("base_amount"):
+                if tx_currency == source_currency:
+                    # Same currency — always use the transaction amount directly.
+                    # Never override with base_amount here; base_amount may represent
+                    # an equivalent in a different currency (e.g. AED) and using it
+                    # against a same-currency treasury would deduct the wrong value.
+                    withdrawal_amount = tx["amount"]
+                elif tx.get("base_currency") == source_currency and tx.get("base_amount"):
+                    # base_amount was manually entered in the source account's currency
                     withdrawal_amount = tx["base_amount"]
                 elif tx_currency == "USD" and source_currency != "USD":
                     if (
