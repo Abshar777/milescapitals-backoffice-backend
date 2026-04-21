@@ -9364,6 +9364,138 @@ async def reject_psp_settlement(request: Request, settlement_id: str, reason: st
 
 
 
+@api_router.get("/transactions/export")
+async def export_transactions(
+    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.VIEW)),
+    client_id: Optional[str] = None,
+    client_email: Optional[str] = None,
+    transaction_type: Optional[str] = None,
+    status: Optional[str] = None,
+    destination_type: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    client_tag: Optional[str] = None,
+):
+    """Export ALL transactions matching the given filters — no pagination cap."""
+    # Resolve client_email → client_id(s)
+    email_client_ids = None
+    if client_email:
+        matched_clients = await db.clients.find(
+            {"email": {"$regex": client_email, "$options": "i"}},
+            {"_id": 0, "client_id": 1},
+        ).to_list(200)
+        email_client_ids = [c["client_id"] for c in matched_clients]
+
+    # Build query (identical logic to get_transactions)
+    query = {}
+    and_clauses = []
+
+    if client_id:
+        query["client_id"] = client_id
+    elif email_client_ids is not None:
+        query["client_id"] = {"$in": email_client_ids}
+    if transaction_type:
+        query["transaction_type"] = transaction_type
+    if status:
+        query["status"] = status
+    if destination_type:
+        query["destination_type"] = destination_type
+    if client_tag:
+        query["client_tags"] = client_tag
+
+    if date_from or date_to:
+        tx_date_q = {}
+        ca_q = {}
+        if date_from:
+            tx_date_q["$gte"] = date_from
+            ca_q["$gte"] = date_from
+        if date_to:
+            tx_date_q["$lte"] = date_to
+            ca_q["$lte"] = date_to + "T23:59:59.999"
+        and_clauses.append({
+            "$or": [
+                {"transaction_date": tx_date_q},
+                {"transaction_date": {"$exists": False}, "created_at": ca_q},
+            ]
+        })
+
+    if search:
+        and_clauses.append({
+            "$or": [
+                {"reference": {"$regex": search, "$options": "i"}},
+                {"crm_reference": {"$regex": search, "$options": "i"}},
+                {"client_name": {"$regex": search, "$options": "i"}},
+                {"transaction_id": {"$regex": search, "$options": "i"}},
+            ]
+        })
+
+    if and_clauses:
+        query["$and"] = and_clauses
+
+    # Fetch ALL matching records — no limit
+    transactions = (
+        await db.transactions.find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .to_list(None)
+    )
+    total = len(transactions)
+
+    # Enrich: client email
+    client_ids_list = list(set(tx.get("client_id") for tx in transactions if tx.get("client_id")))
+    clients_map = {}
+    if client_ids_list:
+        clients = await db.clients.find(
+            {"client_id": {"$in": client_ids_list}},
+            {"_id": 0, "client_id": 1, "email": 1},
+        ).to_list(len(client_ids_list))
+        clients_map = {c["client_id"]: c.get("email", "") for c in clients}
+
+    # Enrich: PSP names
+    psp_ids = list(set(tx.get("psp_id") for tx in transactions if tx.get("psp_id") and not tx.get("psp_name")))
+    psps_map = {}
+    if psp_ids:
+        psps_list = await db.psps.find(
+            {"psp_id": {"$in": psp_ids}}, {"_id": 0, "psp_id": 1, "psp_name": 1}
+        ).to_list(len(psp_ids))
+        psps_map = {p["psp_id"]: p["psp_name"] for p in psps_list}
+
+    # Enrich: treasury / USDT destination names
+    treasury_ids = list(set(
+        tx.get("destination_account_id") for tx in transactions
+        if tx.get("destination_account_id") and not tx.get("destination_account_name")
+        and tx.get("destination_type") in ["treasury", "usdt"]
+    ))
+    treasury_map = {}
+    if treasury_ids:
+        treasury_list = await db.treasury_accounts.find(
+            {"account_id": {"$in": treasury_ids}},
+            {"_id": 0, "account_id": 1, "account_name": 1},
+        ).to_list(len(treasury_ids))
+        treasury_map = {t["account_id"]: t["account_name"] for t in treasury_list}
+
+    # Enrich: vendor names
+    vendor_ids = list(set(tx.get("vendor_id") for tx in transactions if tx.get("vendor_id") and not tx.get("vendor_name")))
+    vendors_map = {}
+    if vendor_ids:
+        vendors_list = await db.vendors.find(
+            {"vendor_id": {"$in": vendor_ids}},
+            {"_id": 0, "vendor_id": 1, "vendor_name": 1},
+        ).to_list(len(vendor_ids))
+        vendors_map = {v["vendor_id"]: v["vendor_name"] for v in vendors_list}
+
+    for tx in transactions:
+        tx["client_email"] = clients_map.get(tx.get("client_id"), "")
+        if tx.get("psp_id") and not tx.get("psp_name"):
+            tx["psp_name"] = psps_map.get(tx["psp_id"])
+        if tx.get("destination_account_id") and not tx.get("destination_account_name") and tx.get("destination_type") in ["treasury", "usdt"]:
+            tx["destination_account_name"] = treasury_map.get(tx["destination_account_id"])
+        if tx.get("vendor_id") and not tx.get("vendor_name"):
+            tx["vendor_name"] = vendors_map.get(tx["vendor_id"])
+
+    return {"items": transactions, "total": total}
+
+
 @api_router.get("/transactions/form-data")
 async def get_transaction_form_data(
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.VIEW))
