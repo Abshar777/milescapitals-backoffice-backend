@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Transaction Confirmed</title>
+</head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 16px;">
+  <tr><td align="center">
+    <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+
+      <!-- Header -->
+      <tr>
+        <td style="background:#4f46e5;padding:20px 32px;border-radius:8px 8px 0 0;">
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td>
+                <span style="font-size:18px;font-weight:700;color:#ffffff;letter-spacing:-0.02em;">Miles Capitals</span>
+              </td>
+              <td align="right">
+                <span style="background:#16a34a;color:#ffffff;font-size:11px;font-weight:600;padding:4px 12px;border-radius:4px;letter-spacing:0.05em;">CONFIRMED</span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Blue accent bar -->
+      <tr><td style="background:#4f46e5;height:3px;"></td></tr>
+
+      <!-- Body -->
+      <tr>
+        <td style="background:#ffffff;padding:32px;">
+
+          <p style="margin:0 0 4px;font-size:13px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;">Transaction Confirmed</p>
+          <h1 style="margin:0 0 24px;font-size:28px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;">{{direction}}{{amount}} {{currency}}</h1>
+
+          <p style="margin:0 0 20px;font-size:14px;color:#475569;line-height:1.6;">
+            Hi <strong style="color:#0f172a;">{{client_name}}</strong>, your transaction has been successfully processed.
+          </p>
+
+          <!-- Details table -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;margin-bottom:24px;">
+            <tr style="background:#f8fafc;">
+              <td style="padding:10px 16px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;">Details</td>
+              <td style="padding:10px 16px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;text-align:right;"></td>
+            </tr>
+            <tr>
+              <td style="padding:12px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Reference</td>
+              <td style="padding:12px 16px;font-size:13px;font-weight:600;color:#0f172a;text-align:right;border-bottom:1px solid #f1f5f9;font-family:monospace;">{{reference}}</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Type</td>
+              <td style="padding:12px 16px;font-size:13px;font-weight:600;color:#0f172a;text-align:right;border-bottom:1px solid #f1f5f9;">{{transaction_type}}</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Date & Time</td>
+              <td style="padding:12px 16px;font-size:13px;font-weight:600;color:#0f172a;text-align:right;border-bottom:1px solid #f1f5f9;">{{datetime}}</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Account</td>
+              <td style="padding:12px 16px;font-size:13px;font-weight:600;color:#0f172a;text-align:right;border-bottom:1px solid #f1f5f9;">{{account_name}}</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 16px;font-size:13px;color:#64748b;">Amount</td>
+              <td style="padding:12px 16px;font-size:14px;font-weight:700;color:#16a34a;text-align:right;">{{direction}}{{amount}} {{currency}}</td>
+            </tr>
+          </table>
+
+          <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.6;">
+            If you did not initiate this transaction, please contact us immediately at
+            <a href="mailto:support@milescapitals.com" style="color:#4f46e5;text-decoration:none;">support@milescapitals.com</a>
+          </p>
+        </td>
+      </tr>
+
+      <!-- Footer -->
+      <tr>
+        <td style="background:#f8fafc;padding:20px 32px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;">
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="font-size:11px;color:#94a3b8;">© 2026 Miles Capitals. All rights reserved.</td>
+              <td align="right" style="font-size:11px;color:#94a3b8;">This is an automated message.</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>
