@@ -21024,7 +21024,7 @@ async def generate_daily_report_html():
             total_broker_lp_pnl += lp_pnl
 
             pnl_color = "green" if lp_pnl >= 0 else "red"
-            lp_rows += f"<tr><td>{lp_name}</td><td>${lp_booked:,.0f}</td><td>${lp_floating:,.0f}</td><td class='{pnl_color}'>${lp_pnl:+,.0f}</td></tr>"
+            lp_rows += f"<tr><td>{lp_name}</td><td>${lp_booked:,.0f}</td><td>${lp_floating:,.0f}</td><td class='stat-value {pnl_color}' style='font-size:13px;font-weight:600;padding:10px 12px;'>${lp_pnl:+,.0f}</td></tr>"
 
         total_dealing_pnl = broker_mt5_pnl + total_broker_lp_pnl
         total_color = "green" if total_dealing_pnl >= 0 else "red"
@@ -21034,14 +21034,14 @@ async def generate_daily_report_html():
         dealing_pnl_html = f'''
                 <!-- Dealing P&L Section -->
                 <div class="section">
-                    <div class="section-title">📈 Today's Dealing P&L</div>
+                    <div class="section-title">📈 Today&#39;s Dealing P&amp;L</div>
                     <div class="stat-grid">
                         <div class="stat-box">
-                            <div class="stat-label">MT5 Broker P&L</div>
+                            <div class="stat-label">MT5 Broker P&amp;L</div>
                             <div class="stat-value {mt5_color}">${broker_mt5_pnl:+,.0f}</div>
                         </div>
                         <div class="stat-box">
-                            <div class="stat-label">LP Hedging P&L</div>
+                            <div class="stat-label">LP Hedging P&amp;L</div>
                             <div class="stat-value {lp_color}">${total_broker_lp_pnl:+,.0f}</div>
                         </div>
                         <div class="stat-box">
@@ -21053,11 +21053,11 @@ async def generate_daily_report_html():
                             <div class="stat-value">${mt5_floating:,.0f}</div>
                         </div>
                     </div>
-                    <div style="background-color: #ffffff; border-radius: 6px; padding: 20px; margin-top: 15px; text-align: center;">
-                        <div class="stat-label">TOTAL DEALING P&L</div>
-                        <div class="stat-value {total_color}" style="font-size: 32px;">${total_dealing_pnl:+,.0f} USD</div>
+                    <div class="pnl-total-box">
+                        <p class="pnl-total-label">Total Dealing P&amp;L</p>
+                        <p class="pnl-total-value {total_color}">${total_dealing_pnl:+,.0f} USD</p>
                     </div>
-                    {f"""<h4 style="color: #4f46e5; margin-top: 20px; font-size: 12px;">LP BREAKDOWN</h4>
+                    {f"""<h4 style="color:#4f46e5;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;margin:16px 0 0;">LP Breakdown</h4>
                     <table>
                         <tr><th>LP Name</th><th>Booked</th><th>Floating</th><th>P&L</th></tr>
                         {lp_rows}
@@ -21067,8 +21067,8 @@ async def generate_daily_report_html():
     else:
         dealing_pnl_html = """
                 <div class="section">
-                    <div class="section-title">📈 Today's Dealing P&L</div>
-                    <p style="color: #64748b; text-align: center; padding: 15px;">No dealing P&L record for today</p>
+                    <div class="section-title">📈 Today&#39;s Dealing P&amp;L</div>
+                    <p style="color:#64748b;text-align:center;padding:20px 0;font-size:13px;">No dealing P&L record for today.</p>
                 </div>
         """
 
@@ -21117,8 +21117,8 @@ async def generate_daily_report_html():
     if total_recon_batches > 0:
         recon_rows = ""
         for b in today_recon_batches[:10]:
-            status_color = "#4ade80" if b.get("status") == "completed" else "#fbbf24"
-            recon_rows += f"<tr><td>{b.get('account_name', '-')}</td><td>{b.get('filename', '-')}</td><td>{b.get('total_rows', 0)}</td><td style='color:#4ade80'>{b.get('matched', 0)}</td><td style='color:#f87171'>{b.get('unmatched', 0)}</td><td style='color:{status_color}'>{b.get('status', '-').upper()}</td></tr>"
+            status_color = "#16a34a" if b.get("status") == "completed" else "#d97706"
+            recon_rows += f"<tr><td>{b.get('account_name', '-')}</td><td>{b.get('filename', '-')}</td><td>{b.get('total_rows', 0)}</td><td style='color:#16a34a;font-weight:600;'>{b.get('matched', 0)}</td><td style='color:#dc2626;font-weight:600;'>{b.get('unmatched', 0)}</td><td style='color:{status_color};font-weight:600;'>{b.get('status', '-').upper()}</td></tr>"
         recon_section_html += f"""
                     <table>
                         <tr><th>Account</th><th>File</th><th>Rows</th><th>Matched</th><th>Unmatched</th><th>Status</th></tr>
@@ -21134,40 +21134,50 @@ async def generate_daily_report_html():
     <html>
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5; }}
-            .container {{ max-width: 700px; margin: 0 auto; background-color: #ffffff; color: white; }}
-            .header {{ background: #4f46e5; padding: 30px; text-align: center; border-bottom: 3px solid #4f46e5; }}
-            .header h1 {{ color: #4f46e5; margin: 0; font-size: 28px; letter-spacing: 2px; }}
-            .header p {{ color: #64748b; margin: 10px 0 0; font-size: 14px; }}
-            .content {{ padding: 30px; }}
-            .section {{ background-color: #f8fafc; border-radius: 8px; padding: 20px; margin-bottom: 20px; }}
-            .section-title {{ color: #4f46e5; font-size: 16px; font-weight: bold; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #4f46e5; padding-bottom: 10px; }}
-            .stat-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }}
-            .stat-box {{ background-color: #ffffff; border-radius: 6px; padding: 15px; }}
-            .stat-label {{ color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }}
-            .stat-value {{ color: white; font-size: 24px; font-weight: bold; margin-top: 5px; }}
-            .stat-value.green {{ color: #4ade80; }}
-            .stat-value.red {{ color: #f87171; }}
+            body {{ font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 20px 16px; background-color: #f1f5f9; }}
+            .container {{ max-width: 680px; margin: 0 auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08); }}
+            .header {{ background: #4f46e5; padding: 22px 32px; }}
+            .header-row {{ display: flex; justify-content: space-between; align-items: center; }}
+            .header h1 {{ color: #ffffff; margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.02em; }}
+            .header-badge {{ background: rgba(255,255,255,0.2); color: #ffffff; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 4px; letter-spacing: 0.05em; }}
+            .header p {{ color: #c7d2fe; margin: 6px 0 0; font-size: 13px; }}
+            .accent-bar {{ background: #4338ca; height: 3px; }}
+            .content {{ padding: 24px 32px; }}
+            .section {{ background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin-bottom: 16px; }}
+            .section-title {{ color: #0f172a; font-size: 12px; font-weight: 700; margin: 0 0 14px 0; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; }}
+            .stat-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }}
+            .stat-box {{ background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px 16px; }}
+            .stat-label {{ color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }}
+            .stat-value {{ color: #0f172a; font-size: 22px; font-weight: 700; margin-top: 4px; }}
+            .stat-value.green {{ color: #16a34a; }}
+            .stat-value.red {{ color: #dc2626; }}
             .stat-value.cyan {{ color: #4f46e5; }}
-            .stat-value.yellow {{ color: #fbbf24; }}
-            .alert {{ background-color: #7f1d1d; border-left: 4px solid #ef4444; padding: 15px; margin-bottom: 20px; border-radius: 0 8px 8px 0; }}
-            .alert-title {{ color: #fca5a5; font-weight: bold; margin-bottom: 5px; }}
-            .alert-text {{ color: #fecaca; font-size: 14px; }}
-            .footer {{ background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; }}
-            .footer p {{ color: #64748b; font-size: 12px; margin: 0; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-            th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #e2e8f0; }}
-            th {{ color: #4f46e5; font-size: 11px; text-transform: uppercase; }}
-            td {{ color: white; font-size: 13px; }}
+            .stat-value.yellow {{ color: #d97706; }}
+            .alert {{ background-color: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #ef4444; padding: 14px 16px; margin-bottom: 16px; border-radius: 0 8px 8px 0; }}
+            .alert-title {{ color: #991b1b; font-weight: 700; margin-bottom: 4px; font-size: 13px; }}
+            .alert-text {{ color: #7f1d1d; font-size: 13px; }}
+            .footer {{ background-color: #f8fafc; padding: 20px 32px; text-align: center; border-top: 1px solid #e2e8f0; }}
+            .footer p {{ color: #94a3b8; font-size: 11px; margin: 4px 0; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
+            th {{ padding: 9px 12px; text-align: left; font-size: 10px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+            td {{ padding: 10px 12px; font-size: 13px; color: #0f172a; border-bottom: 1px solid #f1f5f9; }}
+            .pnl-total-box {{ background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 6px; padding: 18px; margin-top: 14px; text-align: center; }}
+            .pnl-total-label {{ color: #4338ca; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 4px; }}
+            .pnl-total-value {{ font-size: 30px; font-weight: 700; margin: 0; }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
-                <h1>MILES CAPITALS</h1>
-                <p>Daily Business Report - {now.strftime('%B %d, %Y')}</p>
+                <div class="header-row">
+                    <h1>Miles Capitals</h1>
+                    <span class="header-badge">DAILY REPORT</span>
+                </div>
+                <p>Daily Business Report &mdash; {now.strftime('%B %d, %Y')}</p>
             </div>
+            <div class="accent-bar"></div>
             
             <div class="content">
                 <!-- Alerts Section -->
@@ -21276,7 +21286,7 @@ async def generate_daily_report_html():
                     {"" if len(today_loan_txs) == 0 else f'''
                     <table>
                         <tr><th>Type</th><th>Borrower</th><th>Amount</th><th>Currency</th></tr>
-                        {"".join(f"<tr><td style='color: {'#4ade80' if lt.get('transaction_type') == 'repayment' else '#f87171'}'>{lt.get('transaction_type', 'N/A').upper()}</td><td>{loans_dict.get(lt.get('loan_id'), dict()).get('borrower_name', 'N/A')}</td><td>${lt.get('amount', 0):,.2f}</td><td>{lt.get('currency', 'USD')}</td></tr>" for lt in today_loan_txs[:10])}
+                        {"".join(f"<tr><td style='color: {'#16a34a' if lt.get('transaction_type') == 'repayment' else '#dc2626'};font-weight:600;'>{lt.get('transaction_type', 'N/A').upper()}</td><td>{loans_dict.get(lt.get('loan_id'), dict()).get('borrower_name', 'N/A')}</td><td>${lt.get('amount', 0):,.2f}</td><td>{lt.get('currency', 'USD')}</td></tr>" for lt in today_loan_txs[:10])}
                     </table>
                     {f"<p style='color: #64748b; font-size: 11px; margin-top: 10px;'>Showing 10 of {len(today_loan_txs)} transactions</p>" if len(today_loan_txs) > 10 else ""}
                     '''}
@@ -21306,7 +21316,7 @@ async def generate_daily_report_html():
                     {"" if len(vendor_summaries) == 0 else f'''
                     <table>
                         <tr><th>Exchanger</th><th>Deposits</th><th>Withdrawals</th><th>Commission</th><th>I&E</th><th>Loans</th><th>Balance</th></tr>
-                        {"".join(f"<tr><td>{v['name']}</td><td style='color: #4ade80'>${v['pending_deposits']:,.0f}</td><td style='color: #f87171'>${v['pending_withdrawals']:,.0f}</td><td>${v['commission']:,.0f}</td><td>${v['ie_balance']:,.0f}</td><td>${v['loan_balance']:,.0f}</td><td style='color: {'#f87171' if v['settlement_balance'] > 0 else '#4ade80' if v['settlement_balance'] < 0 else 'white'}'>${v['settlement_balance']:+,.0f}</td></tr>" for v in vendor_summaries[:10])}
+                        {"".join(f"<tr><td style='font-weight:600;'>{v['name']}</td><td style='color:#16a34a;'>${v['pending_deposits']:,.0f}</td><td style='color:#dc2626;'>${v['pending_withdrawals']:,.0f}</td><td>${v['commission']:,.0f}</td><td>${v['ie_balance']:,.0f}</td><td>${v['loan_balance']:,.0f}</td><td style='color: {'#dc2626' if v['settlement_balance'] > 0 else '#16a34a' if v['settlement_balance'] < 0 else '#0f172a'};font-weight:600;'>${v['settlement_balance']:+,.0f}</td></tr>" for v in vendor_summaries[:10])}
                     </table>
                     {f"<p style='color: #64748b; font-size: 11px; margin-top: 10px;'>Showing 10 of {len(vendor_summaries)} exchangers</p>" if len(vendor_summaries) > 10 else ""}
                     <p style='color: #64748b; font-size: 10px; margin-top: 5px;'>* Positive balance = We owe them | Negative balance = They owe us</p>
@@ -21333,8 +21343,8 @@ async def generate_daily_report_html():
             </div>
             
             <div class="footer">
-                <p>This is an automated report from Miles Capitals Back Office</p>
-                <p>Generated at {now.strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                <p>Miles Capitals &mdash; Daily Business Report</p>
+                <p>Generated at {now.strftime('%B %d, %Y at %H:%M UTC')} &bull; This is an automated message.</p>
             </div>
         </div>
     </body>
