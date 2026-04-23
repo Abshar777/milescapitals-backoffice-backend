@@ -10899,6 +10899,21 @@ async def update_transaction(
         {"transaction_id": transaction_id}, {"$set": updates}
     )
 
+    # Sync shared fields back to the originating transaction request (if any)
+    request_id = tx.get("request_id")
+    if request_id:
+        REQUEST_SYNC_FIELDS = {
+            "amount", "base_amount", "base_currency", "exchange_rate",
+            "reference", "crm_reference", "description", "transaction_date",
+        }
+        request_sync = {k: v for k, v in updates.items() if k in REQUEST_SYNC_FIELDS}
+        if request_sync:
+            request_sync["updated_at"] = now.isoformat()
+            await db.transaction_requests.update_one(
+                {"request_id": request_id},
+                {"$set": request_sync},
+            )
+
     await log_activity(request, user, "edit", "transactions", "Updated transaction")
 
     return await db.transactions.find_one(
