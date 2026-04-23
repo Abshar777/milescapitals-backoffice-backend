@@ -3934,7 +3934,7 @@ async def send_dealing_pnl_email(
         total_broker_lp_pnl += lp_pnl
 
         pnl_color = "#4ade80" if lp_pnl >= 0 else "#f87171"
-        lp_rows += f"<tr><td style='padding:8px;border-bottom:1px solid #333;color:white;'>{lp_name}</td><td style='padding:8px;border-bottom:1px solid #333;color:white;text-align:right;'>${lp_booked:,.0f}</td><td style='padding:8px;border-bottom:1px solid #333;color:white;text-align:right;'>${lp_floating:,.0f}</td><td style='padding:8px;border-bottom:1px solid #333;color:{pnl_color};text-align:right;font-weight:bold;'>${lp_pnl:+,.0f}</td></tr>"
+        lp_rows += f"<tr><td style='padding:11px 16px;font-size:13px;color:#0f172a;border-bottom:1px solid #f1f5f9;'>{lp_name}</td><td style='padding:11px 16px;font-size:13px;color:#0f172a;text-align:right;border-bottom:1px solid #f1f5f9;'>${lp_booked:,.0f}</td><td style='padding:11px 16px;font-size:13px;color:#0f172a;text-align:right;border-bottom:1px solid #f1f5f9;'>${lp_floating:,.0f}</td><td style='padding:11px 16px;font-size:13px;font-weight:700;color:{pnl_color};text-align:right;border-bottom:1px solid #f1f5f9;'>${lp_pnl:+,.0f}</td></tr>"
 
     total_dealing_pnl = broker_mt5_pnl + total_broker_lp_pnl
     total_color = "#4ade80" if total_dealing_pnl >= 0 else "#f87171"
@@ -3947,76 +3947,116 @@ async def send_dealing_pnl_email(
     <html>
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1.0">
     </head>
-    <body style="margin:0;padding:0;background-color:#f5f5f5;font-family:'Segoe UI',Arial,sans-serif;">
-        <div style="max-width:600px;margin:0 auto;background-color:#0B0C10;color:white;">
-            <div style="background:linear-gradient(135deg,#1F2833 0%,#0B0C10 100%);padding:30px;text-align:center;border-bottom:3px solid #66FCF1;">
-                <h1 style="color:#66FCF1;margin:0;font-size:24px;letter-spacing:2px;">MILES CAPITALS</h1>
-                <p style="color:#C5C6C7;margin:10px 0 0;font-size:14px;">Dealing P&L Report - {date}</p>
-            </div>
-            
-            <div style="padding:30px;">
-                <div style="background-color:#1F2833;border-radius:8px;padding:20px;margin-bottom:20px;">
-                    <h2 style="color:#66FCF1;font-size:16px;margin:0 0 20px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #66FCF1;padding-bottom:10px;">📈 Daily Dealing P&L</h2>
-                    
-                    <div style="text-align:center;background-color:#0B0C10;border-radius:6px;padding:25px;margin-bottom:20px;">
-                        <div style="color:#C5C6C7;font-size:11px;text-transform:uppercase;letter-spacing:1px;">TOTAL DEALING P&L</div>
-                        <div style="color:{total_color};font-size:42px;font-weight:bold;margin-top:5px;">${total_dealing_pnl:+,.0f}</div>
-                        <div style="color:#C5C6C7;font-size:12px;margin-top:5px;">USD</div>
-                    </div>
-                    
-                    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
-                        <tr>
-                            <td style="width:50%;padding:15px;background-color:#0B0C10;border-radius:6px;">
-                                <div style="color:#C5C6C7;font-size:11px;text-transform:uppercase;">MT5 Broker P&L</div>
-                                <div style="color:{mt5_color};font-size:24px;font-weight:bold;margin-top:5px;">${broker_mt5_pnl:+,.0f}</div>
-                            </td>
-                            <td style="width:10px;"></td>
-                            <td style="width:50%;padding:15px;background-color:#0B0C10;border-radius:6px;">
-                                <div style="color:#C5C6C7;font-size:11px;text-transform:uppercase;">LP Hedging P&L</div>
-                                <div style="color:{lp_color};font-size:24px;font-weight:bold;margin-top:5px;">${total_broker_lp_pnl:+,.0f}</div>
-                            </td>
-                        </tr>
-                    </table>
-                    
-                    <div style="background-color:#0B0C10;border-radius:6px;padding:15px;margin-bottom:15px;">
-                        <h4 style="color:#66FCF1;font-size:12px;margin:0 0 10px;text-transform:uppercase;">MT5 Details</h4>
-                        <table style="width:100%;border-collapse:collapse;">
-                            <tr>
-                                <td style="color:#C5C6C7;font-size:12px;padding:5px 0;">Client Booked P&L:</td>
-                                <td style="color:white;font-size:14px;text-align:right;">${mt5_booked:+,.0f}</td>
-                            </tr>
-                            <tr>
-                                <td style="color:#C5C6C7;font-size:12px;padding:5px 0;">Running Floating:</td>
-                                <td style="color:white;font-size:14px;text-align:right;">${mt5_floating:,.0f}</td>
-                            </tr>
-                            <tr>
-                                <td style="color:#C5C6C7;font-size:12px;padding:5px 0;">Floating Change:</td>
-                                <td style="color:white;font-size:14px;text-align:right;">${mt5_floating_change:+,.0f}</td>
-                            </tr>
-                        </table>
-                    </div>
-                    
-                    {f'''<div style="background-color:#0B0C10;border-radius:6px;padding:15px;">
-                        <h4 style="color:#66FCF1;font-size:12px;margin:0 0 10px;text-transform:uppercase;">LP Breakdown</h4>
-                        <table style="width:100%;border-collapse:collapse;">
-                            <tr>
-                                <th style="padding:8px;border-bottom:1px solid #333;color:#66FCF1;font-size:11px;text-align:left;">LP</th>
-                                <th style="padding:8px;border-bottom:1px solid #333;color:#66FCF1;font-size:11px;text-align:right;">Booked</th>
-                                <th style="padding:8px;border-bottom:1px solid #333;color:#66FCF1;font-size:11px;text-align:right;">Floating</th>
-                                <th style="padding:8px;border-bottom:1px solid #333;color:#66FCF1;font-size:11px;text-align:right;">P&L</th>
-                            </tr>
-                            {lp_rows}
-                        </table>
-                    </div>''' if lp_rows else ''}
-                </div>
-            </div>
-            
-            <div style="background-color:#1F2833;padding:20px;text-align:center;border-top:1px solid #333;">
-                <p style="color:#C5C6C7;font-size:12px;margin:0;">This is an automated Dealing P&L report from Miles Capitals</p>
-                <p style="color:#C5C6C7;font-size:12px;margin:5px 0 0;">Submitted by: {user.get('name', 'Unknown')}</p>
-            </div>
-        </div>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 16px;">
+      <tr><td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:#4f46e5;padding:24px 32px;border-radius:8px 8px 0 0;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>
+                    <span style="font-size:20px;font-weight:700;color:#ffffff;letter-spacing:-0.02em;">Miles Capitals</span>
+                    <p style="margin:4px 0 0;font-size:12px;color:#c7d2fe;">Financial Management Platform</p>
+                  </td>
+                  <td align="right">
+                    <span style="background:#ffffff;color:#4f46e5;font-size:11px;font-weight:700;padding:4px 12px;border-radius:4px;letter-spacing:0.05em;">DAILY REPORT</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Indigo accent bar -->
+          <tr><td style="background:#4f46e5;height:3px;"></td></tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="background:#ffffff;padding:32px;">
+
+              <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;">Dealing P&amp;L Report</p>
+              <h1 style="margin:0 0 6px;font-size:24px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;">Daily Dealing P&amp;L</h1>
+              <p style="margin:0 0 24px;font-size:13px;color:#64748b;">{date} &nbsp;·&nbsp; Submitted by {user.get('name', 'Unknown')}</p>
+
+              <!-- Total P&L highlight -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;margin-bottom:24px;">
+                <tr>
+                  <td style="padding:24px;text-align:center;">
+                    <p style="margin:0 0 6px;font-size:11px;font-weight:600;color:#4338ca;text-transform:uppercase;letter-spacing:0.08em;">Total Dealing P&amp;L</p>
+                    <p style="margin:0;font-size:42px;font-weight:700;color:{total_color};">${total_dealing_pnl:+,.0f}</p>
+                    <p style="margin:6px 0 0;font-size:12px;color:#6366f1;">USD</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- MT5 & LP summary cards -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+                <tr>
+                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;">
+                    <p style="margin:0 0 6px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;">MT5 Broker P&amp;L</p>
+                    <p style="margin:0;font-size:26px;font-weight:700;color:{mt5_color};">${broker_mt5_pnl:+,.0f}</p>
+                  </td>
+                  <td width="4%"></td>
+                  <td width="48%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;">
+                    <p style="margin:0 0 6px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;">LP Hedging P&amp;L</p>
+                    <p style="margin:0;font-size:26px;font-weight:700;color:{lp_color};">${total_broker_lp_pnl:+,.0f}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- MT5 Details -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:20px;">
+                <tr style="background:#f8fafc;">
+                  <td colspan="2" style="padding:10px 16px;font-size:11px;font-weight:600;color:#4f46e5;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;">MT5 Details</td>
+                </tr>
+                <tr>
+                  <td style="padding:11px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Client Booked P&amp;L</td>
+                  <td style="padding:11px 16px;font-size:13px;font-weight:600;color:#0f172a;text-align:right;border-bottom:1px solid #f1f5f9;">${mt5_booked:+,.0f}</td>
+                </tr>
+                <tr>
+                  <td style="padding:11px 16px;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;">Running Floating</td>
+                  <td style="padding:11px 16px;font-size:13px;font-weight:600;color:#0f172a;text-align:right;border-bottom:1px solid #f1f5f9;">${mt5_floating:,.0f}</td>
+                </tr>
+                <tr>
+                  <td style="padding:11px 16px;font-size:13px;color:#64748b;">Floating Change</td>
+                  <td style="padding:11px 16px;font-size:13px;font-weight:600;color:#0f172a;text-align:right;">${mt5_floating_change:+,.0f}</td>
+                </tr>
+              </table>
+
+              <!-- LP Breakdown -->
+              {f'''<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:20px;">
+                <tr style="background:#f8fafc;">
+                  <td style="padding:10px 16px;font-size:11px;font-weight:600;color:#4f46e5;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;">LP</td>
+                  <td style="padding:10px 16px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;text-align:right;">Booked</td>
+                  <td style="padding:10px 16px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;text-align:right;">Floating</td>
+                  <td style="padding:10px 16px;font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #e2e8f0;text-align:right;">P&amp;L</td>
+                </tr>
+                {lp_rows}
+              </table>''' if lp_rows else ''}
+
+              <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">This is an automated Dealing P&amp;L report from Miles Capitals.</p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8fafc;padding:18px 32px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-size:11px;color:#94a3b8;">© 2026 Miles Capitals. All rights reserved.</td>
+                  <td align="right" style="font-size:11px;color:#94a3b8;">This is an automated message.</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+      </td></tr>
+    </table>
     </body>
     </html>
     """
@@ -18317,112 +18357,161 @@ async def upload_statement_for_reconciliation(
     account_type: str = Form(...),
     account_id: str = Form(...),
     date: str = Form(...),
-    statement_type: str = Form(default="auto"),  # auto, bank, or psp
+    statement_type: str = Form(default="auto"),
     user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.CREATE)),
 ):
-    """Upload and parse a statement file for reconciliation.
-    Supports:
-    - Banks: Emirates NBD, ADCB, FAB, Mashreq, RAK Bank, DIB, CBD, and more
-    - PSPs: PayTabs, Telr, Network International, Stripe, PayPal, and more
-    """
-    from bank_parsers import (
-        parse_bank_statement_pdf,
-        parse_bank_statement_csv,
-        parse_bank_statement_excel,
-        parse_psp_statement_pdf,
-        parse_psp_statement_csv,
-        detect_statement_type,
-        SUPPORTED_BANKS,
-        SUPPORTED_PSPS,
-    )
-
+    """Upload a statement file — saves file for preview/download without parsing."""
     content = await file.read()
-    filename = file.filename.lower() if file.filename else ""
 
-    parsed_entries = []
-    detected_source = "unknown"
-    source_type = "unknown"
+    # Validate file type
+    original_name = file.filename or ""
+    lower_name = original_name.lower()
+    allowed_exts = (".pdf", ".xlsx", ".xls", ".csv", ".txt", ".png", ".jpg", ".jpeg")
+    if not any(lower_name.endswith(ext) for ext in allowed_exts):
+        raise HTTPException(status_code=400, detail="Unsupported file type. Use PDF, XLSX, CSV, TXT, or image.")
 
-    try:
-        # Auto-detect statement type if not specified
-        if statement_type == "auto":
-            # Try to detect from filename first
-            if filename.endswith(".pdf"):
-                # Need to read content for detection
-                try:
-                    from pdf2image import convert_from_bytes
-                    import pytesseract
+    # Save statement record to DB (file stored as base64)
+    statement_id = str(uuid.uuid4())
+    file_b64 = base64.b64encode(content).decode("utf-8")
+    statement_doc = {
+        "statement_id": statement_id,
+        "account_id": account_id,
+        "account_type": account_type,
+        "filename": original_name,
+        "statement_date": date,
+        "status": "pending",
+        "file_content": file_b64,
+        "file_content_type": file.content_type or "application/octet-stream",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": user.get("email", ""),
+    }
+    await db.reconciliation_statements.insert_one(statement_doc)
 
-                    images = convert_from_bytes(
-                        content, dpi=100, first_page=1, last_page=1
-                    )
-                    sample_text = (
-                        pytesseract.image_to_string(images[0]) if images else ""
-                    )
-                    detected_type, detected_name = detect_statement_type(
-                        sample_text, filename
-                    )
-                    statement_type = (
-                        detected_type if detected_type != "unknown" else "bank"
-                    )
-                except:
-                    statement_type = "bank"  # Default to bank
-            else:
-                statement_type = "bank"  # Default for non-PDF
-
-        if filename.endswith(".csv"):
-            decoded = content.decode("utf-8")
-            if statement_type == "psp":
-                parsed_entries, detected_source = parse_psp_statement_csv(
-                    decoded, filename
-                )
-                source_type = "psp"
-            else:
-                parsed_entries, detected_source = parse_bank_statement_csv(
-                    decoded, filename
-                )
-                source_type = "bank"
-
-        elif filename.endswith((".xlsx", ".xls")):
-            parsed_entries, detected_source = parse_bank_statement_excel(
-                content, filename
-            )
-            source_type = "bank"
-
-        elif filename.endswith(".pdf"):
-            if statement_type == "psp":
-                parsed_entries, detected_source = parse_psp_statement_pdf(
-                    content, filename, date
-                )
-                source_type = "psp"
-            else:
-                parsed_entries, detected_source = parse_bank_statement_pdf(
-                    content, filename, date
-                )
-                source_type = "bank"
-
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Unsupported file format. Use CSV, XLSX, or PDF.",
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Statement parse error: {e}")
-        raise HTTPException(
-            status_code=400, detail=f"Failed to parse statement: {str(e)}"
-        )
+    await log_activity(request, user, "create", "reconciliation", f"Uploaded statement: {original_name}")
 
     return {
-        "entries": parsed_entries,
-        "count": len(parsed_entries),
-        "detected_source": detected_source,
-        "source_type": source_type,
-        "supported_banks": [b["name"] for b in SUPPORTED_BANKS],
-        "supported_psps": [p["name"] for p in SUPPORTED_PSPS],
+        "statement_id": statement_id,
+        "filename": original_name,
+        "account_id": account_id,
+        "account_type": account_type,
+        "statement_date": date,
+        "status": "pending",
     }
+
+
+@api_router.get("/reconciliation/statements")
+async def list_reconciliation_statements(
+    account_id: Optional[str] = None,
+    account_type: Optional[str] = None,
+    status: Optional[str] = None,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW)),
+):
+    """List uploaded statements for an account"""
+    query = {}
+    if account_id:
+        query["account_id"] = account_id
+    if account_type:
+        query["account_type"] = account_type
+    if status:
+        query["status"] = status
+
+    docs = (
+        await db.reconciliation_statements.find(query, {"_id": 0, "file_content": 0})
+        .sort("created_at", -1)
+        .to_list(500)
+    )
+    return {"statements": docs}
+
+
+@api_router.post("/reconciliation/statements/{statement_id}/mark-done")
+async def mark_statement_done(
+    statement_id: str,
+    request: Request,
+    body: dict = Body(default={}),
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.EDIT)),
+):
+    """Mark a statement as reconciled"""
+    stmt = await db.reconciliation_statements.find_one({"statement_id": statement_id})
+    if not stmt:
+        raise HTTPException(status_code=404, detail="Statement not found")
+
+    reconciliation_date = body.get("reconciliation_date") or datetime.now(timezone.utc).date().isoformat()
+    notes = body.get("notes", "")
+
+    await db.reconciliation_statements.update_one(
+        {"statement_id": statement_id},
+        {"$set": {
+            "status": "completed",
+            "reconciliation_date": reconciliation_date,
+            "notes": notes,
+            "done_by": user.get("email", ""),
+            "done_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+
+    # Also insert into reconciliations history
+    recon_doc = {
+        "recon_id": str(uuid.uuid4()),
+        "statement_id": statement_id,
+        "account_id": stmt.get("account_id"),
+        "account_type": stmt.get("account_type"),
+        "filename": stmt.get("filename"),
+        "statement_date": stmt.get("statement_date"),
+        "reconciliation_date": reconciliation_date,
+        "status": "completed",
+        "remarks": notes,
+        "done_by": user.get("email", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.reconciliations.insert_one(recon_doc)
+
+    await log_activity(request, user, "update", "reconciliation", f"Marked statement {statement_id} as done")
+    return {"success": True}
+
+
+@api_router.patch("/reconciliation/statements/{statement_id}/date")
+async def update_statement_date(
+    statement_id: str,
+    body: dict = Body(...),
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.EDIT)),
+):
+    """Update the statement date"""
+    stmt = await db.reconciliation_statements.find_one({"statement_id": statement_id})
+    if not stmt:
+        raise HTTPException(status_code=404, detail="Statement not found")
+
+    new_date = body.get("statement_date")
+    if not new_date:
+        raise HTTPException(status_code=400, detail="statement_date required")
+
+    await db.reconciliation_statements.update_one(
+        {"statement_id": statement_id},
+        {"$set": {"statement_date": new_date}},
+    )
+    return {"success": True}
+
+
+@api_router.get("/reconciliation/statements/{statement_id}/file")
+async def download_statement_file(
+    statement_id: str,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW)),
+):
+    """Download the original uploaded statement file"""
+    from fastapi.responses import Response
+
+    stmt = await db.reconciliation_statements.find_one({"statement_id": statement_id})
+    if not stmt or not stmt.get("file_content"):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_bytes = base64.b64decode(stmt["file_content"])
+    content_type = stmt.get("file_content_type", "application/octet-stream")
+    filename = stmt.get("filename", "statement")
+
+    return Response(
+        content=file_bytes,
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @api_router.get("/reconciliation/supported-banks")
