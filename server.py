@@ -1490,13 +1490,13 @@ async def login(credentials: UserLogin, request: Request):
 
         if smtp_email and smtp_password:
             try:
-                otp_html = f"""<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
-                    <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
-                    <p style="color:#C5C6C7;text-align:center;">Your login verification code:</p>
-                    <div style="background:#1F2833;padding:20px;border-radius:8px;text-align:center;margin:20px 0;">
-                        <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#66FCF1;">{otp_code}</span>
+                otp_html = f"""<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:30px;background:#ffffff;color:#0f172a;border-radius:8px;">
+                    <h2 style="color:#4f46e5;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+                    <p style="color:#64748b;text-align:center;">Your login verification code:</p>
+                    <div style="background:#f8fafc;padding:20px;border-radius:8px;text-align:center;margin:20px 0;">
+                        <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#4f46e5;">{otp_code}</span>
                     </div>
-                    <p style="color:#C5C6C7;text-align:center;font-size:12px;">This code expires in 5 minutes. Do not share it.</p></div>"""
+                    <p style="color:#64748b;text-align:center;font-size:12px;">This code expires in 5 minutes. Do not share it.</p></div>"""
                 await send_email(
                     to_emails=[user["email"]],
                     subject="Miles Capitals - Login Verification Code",
@@ -1752,13 +1752,13 @@ async def forgot_password(data: dict = Body(...)):
 
     if smtp_email and smtp_password:
         try:
-            reset_html = f"""<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
-                <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
-                <p style="color:#C5C6C7;text-align:center;">Password Reset Code</p>
-                <div style="background:#1F2833;padding:20px;border-radius:8px;text-align:center;margin:20px 0;">
-                    <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#66FCF1;">{otp_code}</span>
+            reset_html = f"""<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:30px;background:#ffffff;color:#0f172a;border-radius:8px;">
+                <h2 style="color:#4f46e5;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+                <p style="color:#64748b;text-align:center;">Password Reset Code</p>
+                <div style="background:#f8fafc;padding:20px;border-radius:8px;text-align:center;margin:20px 0;">
+                    <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#4f46e5;">{otp_code}</span>
                 </div>
-                <p style="color:#C5C6C7;text-align:center;font-size:12px;">This code expires in 10 minutes. If you didn't request this, ignore this email.</p></div>"""
+                <p style="color:#64748b;text-align:center;font-size:12px;">This code expires in 10 minutes. If you didn't request this, ignore this email.</p></div>"""
             await send_email(
                 to_emails=[email],
                 subject="Miles Capitals - Password Reset Code",
@@ -20253,37 +20253,37 @@ async def send_approval_notification(notification_type: str, details: dict):
 
         if notification_type == "transaction":
             subject = f"Miles Capitals - New Transaction Pending Approval"
-            html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
-                <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
-                <div style="background:#1F2833;padding:20px;border-radius:8px;margin:15px 0;">
+            html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#ffffff;color:#0f172a;border-radius:8px;">
+                <h2 style="color:#4f46e5;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+                <div style="background:#f8fafc;padding:20px;border-radius:8px;margin:15px 0;">
                     <h3 style="color:#fbbf24;margin:0 0 15px;">New Transaction Pending Approval</h3>
-                    <table style="width:100%;font-size:13px;color:#C5C6C7;">
-                        <tr><td style="padding:4px 0;color:#888;">Reference</td><td style="padding:4px 0;font-family:monospace;">{details.get('reference', '-')}</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Type</td><td style="padding:4px 0;text-transform:capitalize;color:{'#4ade80' if details.get('type') == 'deposit' else '#f87171'}">{details.get('type', '-')}</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Client</td><td style="padding:4px 0;">{details.get('client', '-')}</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">${details.get('amount', 0):,.2f} USD</td></tr>
-                        {f'<tr><td style="padding:4px 0;color:#888;">Base Amount</td><td style="padding:4px 0;">{details.get("base_amount", 0):,.2f} {details.get("base_currency", "")}</td></tr>' if details.get('base_currency') and details.get('base_currency') != 'USD' else ''}
-                        <tr><td style="padding:4px 0;color:#888;">Destination</td><td style="padding:4px 0;">{details.get('destination', '-')}</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Created By</td><td style="padding:4px 0;">{details.get('created_by', '-')}</td></tr>
+                    <table style="width:100%;font-size:13px;color:#64748b;">
+                        <tr><td style="padding:4px 0;color:#64748b;">Reference</td><td style="padding:4px 0;font-family:monospace;">{details.get('reference', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Type</td><td style="padding:4px 0;text-transform:capitalize;color:{'#4ade80' if details.get('type') == 'deposit' else '#f87171'}">{details.get('type', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Client</td><td style="padding:4px 0;">{details.get('client', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">${details.get('amount', 0):,.2f} USD</td></tr>
+                        {f'<tr><td style="padding:4px 0;color:#64748b;">Base Amount</td><td style="padding:4px 0;">{details.get("base_amount", 0):,.2f} {details.get("base_currency", "")}</td></tr>' if details.get('base_currency') and details.get('base_currency') != 'USD' else ''}
+                        <tr><td style="padding:4px 0;color:#64748b;">Destination</td><td style="padding:4px 0;">{details.get('destination', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Created By</td><td style="padding:4px 0;">{details.get('created_by', '-')}</td></tr>
                     </table>
                 </div>
-                <p style="color:#C5C6C7;text-align:center;font-size:12px;">Please review and approve/reject this transaction in the Back Office.</p></div>"""
+                <p style="color:#64748b;text-align:center;font-size:12px;">Please review and approve/reject this transaction in the Back Office.</p></div>"""
 
         elif notification_type == "settlement":
-            html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
-                <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
-                <div style="background:#1F2833;padding:20px;border-radius:8px;margin:15px 0;">
+            html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#ffffff;color:#0f172a;border-radius:8px;">
+                <h2 style="color:#4f46e5;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+                <div style="background:#f8fafc;padding:20px;border-radius:8px;margin:15px 0;">
                     <h3 style="color:#fbbf24;margin:0 0 15px;">New Settlement Pending Approval</h3>
-                    <table style="width:100%;font-size:13px;color:#C5C6C7;">
-                        <tr><td style="padding:4px 0;color:#888;">Settlement ID</td><td style="padding:4px 0;font-family:monospace;">{details.get('settlement_id', '-')}</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Exchanger</td><td style="padding:4px 0;">{details.get('vendor_name', '-')}</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Gross Amount</td><td style="padding:4px 0;font-weight:bold;">{details.get('gross_amount', 0):,.2f} {details.get('currency', 'USD')}</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Net Settlement</td><td style="padding:4px 0;font-weight:bold;font-size:16px;color:#66FCF1;">{details.get('net_amount', 0):,.2f} {details.get('dest_currency', 'USD')}</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Transactions</td><td style="padding:4px 0;">{details.get('tx_count', 0)} entries</td></tr>
-                        <tr><td style="padding:4px 0;color:#888;">Created By</td><td style="padding:4px 0;">{details.get('created_by', '-')}</td></tr>
+                    <table style="width:100%;font-size:13px;color:#64748b;">
+                        <tr><td style="padding:4px 0;color:#64748b;">Settlement ID</td><td style="padding:4px 0;font-family:monospace;">{details.get('settlement_id', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Exchanger</td><td style="padding:4px 0;">{details.get('vendor_name', '-')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Gross Amount</td><td style="padding:4px 0;font-weight:bold;">{details.get('gross_amount', 0):,.2f} {details.get('currency', 'USD')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Net Settlement</td><td style="padding:4px 0;font-weight:bold;font-size:16px;color:#4f46e5;">{details.get('net_amount', 0):,.2f} {details.get('dest_currency', 'USD')}</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Transactions</td><td style="padding:4px 0;">{details.get('tx_count', 0)} entries</td></tr>
+                        <tr><td style="padding:4px 0;color:#64748b;">Created By</td><td style="padding:4px 0;">{details.get('created_by', '-')}</td></tr>
                     </table>
                 </div>
-                <p style="color:#C5C6C7;text-align:center;font-size:12px;">Please review and approve/reject this settlement in the Back Office.</p></div>"""
+                <p style="color:#64748b;text-align:center;font-size:12px;">Please review and approve/reject this settlement in the Back Office.</p></div>"""
             subject = f"Miles Capitals - Settlement Pending Approval ({details.get('vendor_name', '')})"
         else:
             return
@@ -20357,45 +20357,45 @@ async def send_exchanger_notification(
             subject = f"Miles Capitals - New Transaction Assigned"
             title = "New Transaction Assigned to You"
             color = "#4ade80" if details.get("type") == "deposit" else "#f87171"
-            rows = f"""<tr><td style="padding:4px 0;color:#888;">Reference</td><td style="padding:4px 0;font-family:monospace;">{details.get('reference', '-')}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Type</td><td style="padding:4px 0;color:{color};text-transform:capitalize;">{details.get('type', '-')}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Client</td><td style="padding:4px 0;">{details.get('client', '-')}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
+            rows = f"""<tr><td style="padding:4px 0;color:#64748b;">Reference</td><td style="padding:4px 0;font-family:monospace;">{details.get('reference', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Type</td><td style="padding:4px 0;color:{color};text-transform:capitalize;">{details.get('type', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Client</td><td style="padding:4px 0;">{details.get('client', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
         elif notification_type == "ie":
             subject = f"Miles Capitals - New I&E Entry Assigned"
             title = "New Income/Expense Entry Assigned"
             is_income = details.get("entry_type") == "income"
             color = "#4ade80" if is_income else "#f87171"
-            rows = f"""<tr><td style="padding:4px 0;color:#888;">Type</td><td style="padding:4px 0;color:{color};">{'Income (IN)' if is_income else 'Expense (OUT)'}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Category</td><td style="padding:4px 0;">{details.get('category', '-')}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
+            rows = f"""<tr><td style="padding:4px 0;color:#64748b;">Type</td><td style="padding:4px 0;color:{color};">{'Income (IN)' if is_income else 'Expense (OUT)'}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Category</td><td style="padding:4px 0;">{details.get('category', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
         elif notification_type == "loan":
             subject = f"Miles Capitals - Loan Transaction Assigned"
             title = "New Loan Transaction Assigned"
             is_in = details.get("loan_type") == "repayment"
             color = "#4ade80" if is_in else "#f87171"
-            rows = f"""<tr><td style="padding:4px 0;color:#888;">Type</td><td style="padding:4px 0;color:{color};">{'Loan Repayment (IN)' if is_in else 'Loan Disbursement (OUT)'}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Borrower</td><td style="padding:4px 0;">{details.get('borrower', '-')}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
+            rows = f"""<tr><td style="padding:4px 0;color:#64748b;">Type</td><td style="padding:4px 0;color:{color};">{'Loan Repayment (IN)' if is_in else 'Loan Disbursement (OUT)'}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Borrower</td><td style="padding:4px 0;">{details.get('borrower', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Amount</td><td style="padding:4px 0;font-weight:bold;font-size:16px;">{details.get('amount_display', '-')}</td></tr>"""
         elif notification_type == "settlement":
             subject = f"Miles Capitals - Settlement Initiated"
             title = "Settlement Initiated for Your Account"
-            rows = f"""<tr><td style="padding:4px 0;color:#888;">Settlement ID</td><td style="padding:4px 0;font-family:monospace;">{details.get('settlement_id', '-')}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Gross Amount</td><td style="padding:4px 0;font-weight:bold;">{details.get('gross_display', '-')}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Net Settlement</td><td style="padding:4px 0;font-weight:bold;font-size:16px;color:#66FCF1;">{details.get('net_display', '-')}</td></tr>
-                <tr><td style="padding:4px 0;color:#888;">Entries</td><td style="padding:4px 0;">{details.get('tx_count', 0)}</td></tr>"""
+            rows = f"""<tr><td style="padding:4px 0;color:#64748b;">Settlement ID</td><td style="padding:4px 0;font-family:monospace;">{details.get('settlement_id', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Gross Amount</td><td style="padding:4px 0;font-weight:bold;">{details.get('gross_display', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Net Settlement</td><td style="padding:4px 0;font-weight:bold;font-size:16px;color:#4f46e5;">{details.get('net_display', '-')}</td></tr>
+                <tr><td style="padding:4px 0;color:#64748b;">Entries</td><td style="padding:4px 0;">{details.get('tx_count', 0)}</td></tr>"""
         else:
             return
 
-        html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#0B0C10;color:white;border-radius:8px;">
-            <h2 style="color:#66FCF1;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
-            <div style="background:#1F2833;padding:20px;border-radius:8px;margin:15px 0;">
+        html = f"""<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;background:#ffffff;color:#0f172a;border-radius:8px;">
+            <h2 style="color:#4f46e5;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+            <div style="background:#f8fafc;padding:20px;border-radius:8px;margin:15px 0;">
                 <h3 style="color:#fbbf24;margin:0 0 15px;">{title}</h3>
-                <table style="width:100%;font-size:13px;color:#C5C6C7;">{rows}
-                    <tr><td style="padding:4px 0;color:#888;">Exchanger</td><td style="padding:4px 0;">{vendor_name}</td></tr>
+                <table style="width:100%;font-size:13px;color:#64748b;">{rows}
+                    <tr><td style="padding:4px 0;color:#64748b;">Exchanger</td><td style="padding:4px 0;">{vendor_name}</td></tr>
                 </table>
             </div>
-            <p style="color:#C5C6C7;text-align:center;font-size:12px;">Please review in your Exchanger Portal.</p></div>"""
+            <p style="color:#64748b;text-align:center;font-size:12px;">Please review in your Exchanger Portal.</p></div>"""
 
         await send_email(
             to_emails=[user_doc["email"]],
@@ -20532,11 +20532,11 @@ async def test_email_settings(
             to_emails=settings["director_emails"],
             subject="Miles Capitals - Test Email",
             html_content=f"""
-            <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #0B0C10; color: white;">
-                <h2 style="color: #66FCF1;">Test Email Successful!</h2>
+            <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #ffffff; color: white;">
+                <h2 style="color: #4f46e5;">Test Email Successful!</h2>
                 <p>This is a test email from Miles Capitals Back Office.</p>
                 <p>If you received this, your email settings are configured correctly.</p>
-                <p style="color: #C5C6C7; font-size: 12px;">Sent at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                <p style="color: #64748b; font-size: 12px;">Sent at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
             </div>
             """,
             smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
@@ -21053,11 +21053,11 @@ async def generate_daily_report_html():
                             <div class="stat-value">${mt5_floating:,.0f}</div>
                         </div>
                     </div>
-                    <div style="background-color: #0B0C10; border-radius: 6px; padding: 20px; margin-top: 15px; text-align: center;">
+                    <div style="background-color: #ffffff; border-radius: 6px; padding: 20px; margin-top: 15px; text-align: center;">
                         <div class="stat-label">TOTAL DEALING P&L</div>
                         <div class="stat-value {total_color}" style="font-size: 32px;">${total_dealing_pnl:+,.0f} USD</div>
                     </div>
-                    {f"""<h4 style="color: #66FCF1; margin-top: 20px; font-size: 12px;">LP BREAKDOWN</h4>
+                    {f"""<h4 style="color: #4f46e5; margin-top: 20px; font-size: 12px;">LP BREAKDOWN</h4>
                     <table>
                         <tr><th>LP Name</th><th>Booked</th><th>Floating</th><th>P&L</th></tr>
                         {lp_rows}
@@ -21068,7 +21068,7 @@ async def generate_daily_report_html():
         dealing_pnl_html = """
                 <div class="section">
                     <div class="section-title">📈 Today's Dealing P&L</div>
-                    <p style="color: #C5C6C7; text-align: center; padding: 15px;">No dealing P&L record for today</p>
+                    <p style="color: #64748b; text-align: center; padding: 15px;">No dealing P&L record for today</p>
                 </div>
         """
 
@@ -21136,29 +21136,29 @@ async def generate_daily_report_html():
         <meta charset="UTF-8">
         <style>
             body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5; }}
-            .container {{ max-width: 700px; margin: 0 auto; background-color: #0B0C10; color: white; }}
-            .header {{ background: linear-gradient(135deg, #1F2833 0%, #0B0C10 100%); padding: 30px; text-align: center; border-bottom: 3px solid #66FCF1; }}
-            .header h1 {{ color: #66FCF1; margin: 0; font-size: 28px; letter-spacing: 2px; }}
-            .header p {{ color: #C5C6C7; margin: 10px 0 0; font-size: 14px; }}
+            .container {{ max-width: 700px; margin: 0 auto; background-color: #ffffff; color: white; }}
+            .header {{ background: #4f46e5; padding: 30px; text-align: center; border-bottom: 3px solid #4f46e5; }}
+            .header h1 {{ color: #4f46e5; margin: 0; font-size: 28px; letter-spacing: 2px; }}
+            .header p {{ color: #64748b; margin: 10px 0 0; font-size: 14px; }}
             .content {{ padding: 30px; }}
-            .section {{ background-color: #1F2833; border-radius: 8px; padding: 20px; margin-bottom: 20px; }}
-            .section-title {{ color: #66FCF1; font-size: 16px; font-weight: bold; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #66FCF1; padding-bottom: 10px; }}
+            .section {{ background-color: #f8fafc; border-radius: 8px; padding: 20px; margin-bottom: 20px; }}
+            .section-title {{ color: #4f46e5; font-size: 16px; font-weight: bold; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #4f46e5; padding-bottom: 10px; }}
             .stat-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }}
-            .stat-box {{ background-color: #0B0C10; border-radius: 6px; padding: 15px; }}
-            .stat-label {{ color: #C5C6C7; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }}
+            .stat-box {{ background-color: #ffffff; border-radius: 6px; padding: 15px; }}
+            .stat-label {{ color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }}
             .stat-value {{ color: white; font-size: 24px; font-weight: bold; margin-top: 5px; }}
             .stat-value.green {{ color: #4ade80; }}
             .stat-value.red {{ color: #f87171; }}
-            .stat-value.cyan {{ color: #66FCF1; }}
+            .stat-value.cyan {{ color: #4f46e5; }}
             .stat-value.yellow {{ color: #fbbf24; }}
             .alert {{ background-color: #7f1d1d; border-left: 4px solid #ef4444; padding: 15px; margin-bottom: 20px; border-radius: 0 8px 8px 0; }}
             .alert-title {{ color: #fca5a5; font-weight: bold; margin-bottom: 5px; }}
             .alert-text {{ color: #fecaca; font-size: 14px; }}
-            .footer {{ background-color: #1F2833; padding: 20px; text-align: center; border-top: 1px solid #333; }}
-            .footer p {{ color: #C5C6C7; font-size: 12px; margin: 0; }}
+            .footer {{ background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; }}
+            .footer p {{ color: #64748b; font-size: 12px; margin: 0; }}
             table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-            th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #333; }}
-            th {{ color: #66FCF1; font-size: 11px; text-transform: uppercase; }}
+            th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #e2e8f0; }}
+            th {{ color: #4f46e5; font-size: 11px; text-transform: uppercase; }}
             td {{ color: white; font-size: 13px; }}
         </style>
     </head>
@@ -21278,7 +21278,7 @@ async def generate_daily_report_html():
                         <tr><th>Type</th><th>Borrower</th><th>Amount</th><th>Currency</th></tr>
                         {"".join(f"<tr><td style='color: {'#4ade80' if lt.get('transaction_type') == 'repayment' else '#f87171'}'>{lt.get('transaction_type', 'N/A').upper()}</td><td>{loans_dict.get(lt.get('loan_id'), dict()).get('borrower_name', 'N/A')}</td><td>${lt.get('amount', 0):,.2f}</td><td>{lt.get('currency', 'USD')}</td></tr>" for lt in today_loan_txs[:10])}
                     </table>
-                    {f"<p style='color: #C5C6C7; font-size: 11px; margin-top: 10px;'>Showing 10 of {len(today_loan_txs)} transactions</p>" if len(today_loan_txs) > 10 else ""}
+                    {f"<p style='color: #64748b; font-size: 11px; margin-top: 10px;'>Showing 10 of {len(today_loan_txs)} transactions</p>" if len(today_loan_txs) > 10 else ""}
                     '''}
                 </div>
                 
@@ -21308,8 +21308,8 @@ async def generate_daily_report_html():
                         <tr><th>Exchanger</th><th>Deposits</th><th>Withdrawals</th><th>Commission</th><th>I&E</th><th>Loans</th><th>Balance</th></tr>
                         {"".join(f"<tr><td>{v['name']}</td><td style='color: #4ade80'>${v['pending_deposits']:,.0f}</td><td style='color: #f87171'>${v['pending_withdrawals']:,.0f}</td><td>${v['commission']:,.0f}</td><td>${v['ie_balance']:,.0f}</td><td>${v['loan_balance']:,.0f}</td><td style='color: {'#f87171' if v['settlement_balance'] > 0 else '#4ade80' if v['settlement_balance'] < 0 else 'white'}'>${v['settlement_balance']:+,.0f}</td></tr>" for v in vendor_summaries[:10])}
                     </table>
-                    {f"<p style='color: #C5C6C7; font-size: 11px; margin-top: 10px;'>Showing 10 of {len(vendor_summaries)} exchangers</p>" if len(vendor_summaries) > 10 else ""}
-                    <p style='color: #C5C6C7; font-size: 10px; margin-top: 5px;'>* Positive balance = We owe them | Negative balance = They owe us</p>
+                    {f"<p style='color: #64748b; font-size: 11px; margin-top: 10px;'>Showing 10 of {len(vendor_summaries)} exchangers</p>" if len(vendor_summaries) > 10 else ""}
+                    <p style='color: #64748b; font-size: 10px; margin-top: 5px;'>* Positive balance = We owe them | Negative balance = They owe us</p>
                     '''}
                 </div>
                 
@@ -21776,7 +21776,7 @@ async def generate_monthly_report_html(year: int = None, month: int = None):
     if dealing_day_rows:
         dealing_table_html = f"<table><tr><th>Date</th><th>MT5 Booked</th><th>Broker MT5</th><th>LP P&L</th><th>Total</th></tr>{dealing_day_rows}</table>"
     else:
-        dealing_table_html = '<p style="color:#C5C6C7; text-align:center; padding:10px;">No dealing P&L records this month</p>'
+        dealing_table_html = '<p style="color:#64748b; text-align:center; padding:10px;">No dealing P&L records this month</p>'
 
     # Generate HTML
     html = f"""
@@ -21786,29 +21786,29 @@ async def generate_monthly_report_html(year: int = None, month: int = None):
         <meta charset="UTF-8">
         <style>
             body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5; }}
-            .container {{ max-width: 750px; margin: 0 auto; background-color: #0B0C10; color: white; }}
-            .header {{ background: linear-gradient(135deg, #1F2833 0%, #0B0C10 100%); padding: 30px; text-align: center; border-bottom: 3px solid #66FCF1; }}
-            .header h1 {{ color: #66FCF1; margin: 0; font-size: 28px; letter-spacing: 2px; }}
-            .header p {{ color: #C5C6C7; margin: 10px 0 0; font-size: 14px; }}
+            .container {{ max-width: 750px; margin: 0 auto; background-color: #ffffff; color: white; }}
+            .header {{ background: #4f46e5; padding: 30px; text-align: center; border-bottom: 3px solid #4f46e5; }}
+            .header h1 {{ color: #4f46e5; margin: 0; font-size: 28px; letter-spacing: 2px; }}
+            .header p {{ color: #64748b; margin: 10px 0 0; font-size: 14px; }}
             .content {{ padding: 30px; }}
-            .section {{ background-color: #1F2833; border-radius: 8px; padding: 20px; margin-bottom: 20px; }}
-            .section-title {{ color: #66FCF1; font-size: 16px; font-weight: bold; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #66FCF1; padding-bottom: 10px; }}
+            .section {{ background-color: #f8fafc; border-radius: 8px; padding: 20px; margin-bottom: 20px; }}
+            .section-title {{ color: #4f46e5; font-size: 16px; font-weight: bold; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #4f46e5; padding-bottom: 10px; }}
             .stat-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }}
             .stat-grid-3 {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }}
-            .stat-box {{ background-color: #0B0C10; border-radius: 6px; padding: 15px; }}
-            .stat-label {{ color: #C5C6C7; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }}
+            .stat-box {{ background-color: #ffffff; border-radius: 6px; padding: 15px; }}
+            .stat-label {{ color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }}
             .stat-value {{ color: white; font-size: 24px; font-weight: bold; margin-top: 5px; }}
             .stat-value.green {{ color: #4ade80; }}
             .stat-value.red {{ color: #f87171; }}
-            .stat-value.cyan {{ color: #66FCF1; }}
+            .stat-value.cyan {{ color: #4f46e5; }}
             .stat-value.yellow {{ color: #fbbf24; }}
             table {{ width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; }}
             th {{ background-color: #0B3D91; color: white; padding: 8px; text-align: left; font-size: 10px; text-transform: uppercase; }}
-            td {{ padding: 6px 8px; border-bottom: 1px solid #333; color: #C5C6C7; }}
+            td {{ padding: 6px 8px; border-bottom: 1px solid #e2e8f0; color: #64748b; }}
             td.green {{ color: #4ade80; }}
             td.red {{ color: #f87171; }}
-            .footer {{ background-color: #1F2833; padding: 20px; text-align: center; border-top: 1px solid #333; }}
-            .footer p {{ color: #C5C6C7; font-size: 12px; margin: 0; }}
+            .footer {{ background-color: #f8fafc; padding: 20px; text-align: center; border-top: 1px solid #e2e8f0; }}
+            .footer p {{ color: #64748b; font-size: 12px; margin: 0; }}
         </style>
     </head>
     <body>
@@ -21816,7 +21816,7 @@ async def generate_monthly_report_html(year: int = None, month: int = None):
             <div class="header">
                 <h1>MILES CAPITALS</h1>
                 <p>Monthly Report - {month_name} {year}</p>
-                <p style="font-size:12px; color:#66FCF1;">{month_start} to {month_end}</p>
+                <p style="font-size:12px; color:#4f46e5;">{month_start} to {month_end}</p>
             </div>
             <div class="content">
                 <!-- Transaction Summary -->
@@ -21916,7 +21916,7 @@ async def generate_monthly_report_html(year: int = None, month: int = None):
                             <div class="stat-value cyan">${total_settled:,.0f}</div>
                         </div>
                     </div>
-                    {'<table><tr><th>Exchanger</th><th>Deposits</th><th>Withdrawals</th><th>Tx Comm</th><th>I&E In</th><th>I&E Out</th><th>Net</th></tr>' + vendor_rows + '</table>' if vendor_rows else '<p style="color:#C5C6C7; text-align:center; padding:10px;">No exchanger activity</p>'}
+                    {'<table><tr><th>Exchanger</th><th>Deposits</th><th>Withdrawals</th><th>Tx Comm</th><th>I&E In</th><th>I&E Out</th><th>Net</th></tr>' + vendor_rows + '</table>' if vendor_rows else '<p style="color:#64748b; text-align:center; padding:10px;">No exchanger activity</p>'}
                 </div>
 
                 <!-- PSP Summary -->
@@ -21954,7 +21954,7 @@ async def generate_monthly_report_html(year: int = None, month: int = None):
                             <div class="stat-value {'green' if total_broker_pnl >= 0 else 'red'}" style="font-size:28px">${total_broker_pnl:+,.0f}</div>
                         </div>
                     </div>
-                    <p style="color:#C5C6C7; font-size:11px; margin:10px 0 5px;">Records: {len(dealing_records)} trading days</p>
+                    <p style="color:#64748b; font-size:11px; margin:10px 0 5px;">Records: {len(dealing_records)} trading days</p>
                     {dealing_table_html}
                 </div>
 
@@ -22529,12 +22529,12 @@ async def send_audit_alert_email(result: dict):
         color = "#ef4444" if score < 60 else "#f59e0b" if score < 80 else "#22c55e"
 
         html = f"""
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#0B0C10;color:#C5C6C7;padding:20px;border-radius:8px;">
-            <h1 style="color:#66FCF1;margin-bottom:4px;">Miles Capitals - Audit Alert</h1>
-            <p style="color:#888;margin-top:0;">{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#ffffff;color:#64748b;padding:20px;border-radius:8px;">
+            <h1 style="color:#4f46e5;margin-bottom:4px;">Miles Capitals - Audit Alert</h1>
+            <p style="color:#64748b;margin-top:0;">{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
             <div style="text-align:center;margin:20px 0;">
                 <div style="display:inline-block;width:80px;height:80px;border-radius:50%;border:4px solid {color};line-height:80px;font-size:28px;font-weight:bold;color:{color};">{score}</div>
-                <p style="color:#888;margin-top:8px;">Health Score</p>
+                <p style="color:#64748b;margin-top:8px;">Health Score</p>
             </div>
             <table style="width:100%;border-collapse:collapse;margin:16px 0;">
                 <tr><td style="padding:8px;color:#ef4444;">Critical Issues</td><td style="padding:8px;text-align:right;font-weight:bold;">{stats.get('critical', 0)}</td></tr>
