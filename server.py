@@ -6313,12 +6313,12 @@ async def get_vendors(
         {"_id": 0},
     ).to_list(10000)
 
-    # Batch fetch all completed income/expense entries for all vendors
+    # Batch fetch all approved/completed income/expense entries for all vendors
     # IMPORTANT: Exclude converted_to_loan entries - they're tracked under Loans, not settlement
     ie_entries_all = await db.income_expenses.find(
         {
             "vendor_id": {"$in": vendor_ids},
-            "status": "completed",
+            "status": {"$in": ["approved", "completed"]},
             "converted_to_loan": {
                 "$ne": True
             },  # Exclude converted entries to prevent double-counting
@@ -6389,6 +6389,8 @@ async def get_vendors(
                     "withdrawals_usd": 0,
                     "commission_base": 0,
                     "commission_usd": 0,
+                    "deposit_count": 0,
+                    "withdrawal_count": 0,
                 }
 
         for tx in pending_txs:
@@ -6397,17 +6399,17 @@ async def get_vendors(
 
             base_amount = tx.get("base_amount") or tx.get("amount", 0) or 0
             usd_amount = tx.get("amount", 0) or 0
-            commission_base = (
-                tx.get("vendor_commission_base_amount") or 0
-            )  # FIX: None -> 0
-            commission_usd = tx.get("vendor_commission_amount") or 0  # FIX: None -> 0
+            commission_base = tx.get("vendor_commission_base_amount") or 0
+            commission_usd = tx.get("vendor_commission_amount") or 0
 
             if tx.get("transaction_type") == "deposit":
                 currency_breakdown[currency]["deposits_base"] += base_amount
                 currency_breakdown[currency]["deposits_usd"] += usd_amount
+                currency_breakdown[currency]["deposit_count"] += 1
             else:
                 currency_breakdown[currency]["withdrawals_base"] += base_amount
                 currency_breakdown[currency]["withdrawals_usd"] += usd_amount
+                currency_breakdown[currency]["withdrawal_count"] += 1
 
             currency_breakdown[currency]["commission_base"] += commission_base
             currency_breakdown[currency]["commission_usd"] += commission_usd
@@ -6420,17 +6422,17 @@ async def get_vendors(
 
             base_amount = ie.get("base_amount") or ie.get("amount", 0) or 0
             usd_amount = ie.get("amount_usd") or ie.get("amount", 0) or 0
-            commission_base = (
-                ie.get("vendor_commission_base_amount") or 0
-            )  # FIX: None -> 0
-            commission_usd = ie.get("vendor_commission_amount") or 0  # FIX: None -> 0
+            commission_base = ie.get("vendor_commission_base_amount") or 0
+            commission_usd = ie.get("vendor_commission_amount") or 0
 
             if ie.get("entry_type") == "income":
                 currency_breakdown[currency]["deposits_base"] += base_amount
                 currency_breakdown[currency]["deposits_usd"] += usd_amount
+                currency_breakdown[currency]["deposit_count"] += 1
             else:
                 currency_breakdown[currency]["withdrawals_base"] += base_amount
                 currency_breakdown[currency]["withdrawals_usd"] += usd_amount
+                currency_breakdown[currency]["withdrawal_count"] += 1
 
             currency_breakdown[currency]["commission_base"] += commission_base
             currency_breakdown[currency]["commission_usd"] += commission_usd
@@ -6448,9 +6450,11 @@ async def get_vendors(
             if loan_entry["type"] == "in":  # Repayment TO vendor
                 currency_breakdown[currency]["deposits_base"] += amount
                 currency_breakdown[currency]["deposits_usd"] += amount
+                currency_breakdown[currency]["deposit_count"] += 1
             else:  # Disbursement FROM vendor
                 currency_breakdown[currency]["withdrawals_base"] += amount
                 currency_breakdown[currency]["withdrawals_usd"] += amount
+                currency_breakdown[currency]["withdrawal_count"] += 1
 
             # Add loan commission
             currency_breakdown[currency]["commission_base"] += commission_base
@@ -6478,7 +6482,12 @@ async def get_vendors(
                 "currency": currency,
                 "amount": net_base,
                 "usd_equivalent": net_usd,
-                "commission_base": data["commission_base"],
+                "deposit_amount": data["deposits_base"],
+                "withdrawal_amount": data["withdrawals_base"],
+                "deposit_count": data["deposit_count"],
+                "withdrawal_count": data["withdrawal_count"],
+                "commission_earned_base": data["commission_base"],
+                "commission_earned_usd": data["commission_usd"],
                 "custom_settled": cs_amount,
             })
 
@@ -6657,7 +6666,7 @@ async def get_vendor(
         {
             "$match": {
                 "vendor_id": vendor_id,
-                "status": "completed",
+                "status": {"$in": ["approved", "completed"]},
                 "converted_to_loan": {
                     "$ne": True
                 },  # Exclude converted entries to prevent double-counting
@@ -6844,55 +6853,23 @@ async def get_vendor(
     vendor["settlement_by_currency"] = [
         {
             "currency": curr,
-            # Total calculations
-            "total_in": d["tx_deposit"] + d["ie_in"] + d["loan_in"],
-            "total_out": d["tx_withdrawal"] + d["ie_out"] + d["loan_out"],
-            "total_commission_base": d["tx_commission_base"]
-            + d["ie_commission_base"]
-            + d["loan_commission_base"],
-            "total_commission_usd": d["tx_commission_usd"]
-            + d["ie_commission_usd"]
-            + d["loan_commission_usd"],
             "amount": (d["tx_deposit"] + d["ie_in"] + d["loan_in"])
             - (d["tx_withdrawal"] + d["ie_out"] + d["loan_out"])
-            - (
-                d["tx_commission_base"]
-                + d["ie_commission_base"]
-                + d["loan_commission_base"]
-            )
+            - (d["tx_commission_base"] + d["ie_commission_base"] + d["loan_commission_base"])
             - custom_settled_map_detail.get(curr, 0),
-            "custom_settled": custom_settled_map_detail.get(curr, 0),
             "usd_equivalent": (d["tx_deposit_usd"] + d["ie_in_usd"] + d["loan_in_usd"])
             - (d["tx_withdrawal_usd"] + d["ie_out_usd"] + d["loan_out_usd"])
-            - (
-                d["tx_commission_usd"]
-                + d["ie_commission_usd"]
-                + d["loan_commission_usd"]
-            ),
-            # Breakdown
-            "deposit_amount": d["tx_deposit"],
-            "withdrawal_amount": d["tx_withdrawal"],
-            "ie_in": d["ie_in"],
-            "ie_out": d["ie_out"],
-            "loan_in": d["loan_in"],
-            "loan_out": d["loan_out"],
-            "tx_commission_base": d["tx_commission_base"],
-            "ie_commission_base": d["ie_commission_base"],
-            "loan_commission_base": d["loan_commission_base"],
-            "commission_earned_usd": d["tx_commission_usd"]
-            + d["ie_commission_usd"]
-            + d["loan_commission_usd"],
-            "commission_earned_base": d["tx_commission_base"]
-            + d["ie_commission_base"]
-            + d["loan_commission_base"],
-            "deposit_count": d["tx_deposit_count"],
-            "withdrawal_count": d["tx_withdrawal_count"],
-            "transaction_count": d["tx_deposit_count"]
-            + d["tx_withdrawal_count"]
-            + d["ie_in_count"]
-            + d["ie_out_count"]
-            + d["loan_in_count"]
-            + d["loan_out_count"],
+            - (d["tx_commission_usd"] + d["ie_commission_usd"] + d["loan_commission_usd"]),
+            "deposit_amount": d["tx_deposit"] + d["ie_in"] + d["loan_in"],
+            "withdrawal_amount": d["tx_withdrawal"] + d["ie_out"] + d["loan_out"],
+            "deposit_count": d["tx_deposit_count"] + d["ie_in_count"] + d["loan_in_count"],
+            "withdrawal_count": d["tx_withdrawal_count"] + d["ie_out_count"] + d["loan_out_count"],
+            "commission_earned_base": d["tx_commission_base"] + d["ie_commission_base"] + d["loan_commission_base"],
+            "commission_earned_usd": d["tx_commission_usd"] + d["ie_commission_usd"] + d["loan_commission_usd"],
+            "custom_settled": custom_settled_map_detail.get(curr, 0),
+            "transaction_count": d["tx_deposit_count"] + d["tx_withdrawal_count"]
+            + d["ie_in_count"] + d["ie_out_count"]
+            + d["loan_in_count"] + d["loan_out_count"],
         }
         for curr, d in currency_data.items()
     ]
