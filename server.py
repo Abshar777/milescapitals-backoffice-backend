@@ -21072,15 +21072,28 @@ async def generate_daily_report_html():
         # credit_to_vendor_id = repayment TO vendor (money in for vendor = loan_in)
         vendor_loans_out = await db.loan_transactions.find(
             {"source_vendor_id": vendor_id, "status": "completed", "settled": {"$ne": True}},
-            {"_id": 0, "amount": 1, "currency": 1},
+            {"_id": 0, "amount": 1, "currency": 1, "vendor_commission_base_amount": 1, "vendor_commission_amount": 1},
         ).to_list(1000)
         vendor_loans_in = await db.loan_transactions.find(
             {"credit_to_vendor_id": vendor_id, "status": "completed", "settled": {"$ne": True}},
-            {"_id": 0, "amount": 1, "currency": 1},
+            {"_id": 0, "amount": 1, "currency": 1, "vendor_commission_base_amount": 1, "vendor_commission_amount": 1},
         ).to_list(1000)
 
         loan_out = sum(lt.get("amount", 0) for lt in vendor_loans_out if lt.get("currency", "USD") == primary_currency)
         loan_in = sum(lt.get("amount", 0) for lt in vendor_loans_in if lt.get("currency", "USD") == primary_currency)
+
+        # Commission from I&E entries and loan transactions (missing from original email calc)
+        ie_commission = sum(
+            e.get("vendor_commission_base_amount") or e.get("vendor_commission_amount", 0) or 0
+            for e in vendor_ie
+            if (e.get("base_currency") or e.get("currency", "USD")) == primary_currency
+        )
+        loan_commission = sum(
+            lt.get("vendor_commission_base_amount") or lt.get("vendor_commission_amount", 0) or 0
+            for lt in (vendor_loans_out + vendor_loans_in)
+            if lt.get("currency", "USD") == primary_currency
+        )
+        total_commission += ie_commission + loan_commission
 
         # Custom (partial) settlements already paid in this currency
         custom_settled_rows = await db.vendor_settlements.aggregate([
