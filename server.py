@@ -543,6 +543,7 @@ class PSPUpdate(BaseModel):
 class VendorStatus:
     ACTIVE = "active"
     INACTIVE = "inactive"
+    ARCHIVED = "archived"
 
 
 class VendorSettlementType:
@@ -566,6 +567,7 @@ class VendorCreate(BaseModel):
     deposit_commission_cash: float = 0  # percentage for deposits (cash)
     withdrawal_commission_cash: float = 0  # percentage for withdrawals (cash)
     description: Optional[str] = None
+    dealing_currency: Optional[str] = None  # e.g. "USD", "EUR" — restricts transaction currency
 
 
 class VendorUpdate(BaseModel):
@@ -576,6 +578,7 @@ class VendorUpdate(BaseModel):
     withdrawal_commission_cash: Optional[float] = None
     status: Optional[str] = None
     description: Optional[str] = None
+    dealing_currency: Optional[str] = None  # set to "" to remove restriction
 
 
 # Income & Expense Models
@@ -6935,6 +6938,7 @@ async def create_vendor(
         "deposit_commission": vendor_data.deposit_commission,
         "withdrawal_commission": vendor_data.withdrawal_commission,
         "description": vendor_data.description,
+        "dealing_currency": vendor_data.dealing_currency or None,
         "total_volume": 0.0,
         "total_commission": 0.0,
         "pending_settlement": 0.0,
@@ -6966,7 +6970,11 @@ async def update_vendor(
     user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.EDIT)),
 ):
 
-    updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
+    raw = update_data.model_dump()
+    # Allow dealing_currency to be cleared (set to None) by sending empty string
+    if "dealing_currency" in raw:
+        raw["dealing_currency"] = raw["dealing_currency"] or None
+    updates = {k: v for k, v in raw.items() if v is not None or k == "dealing_currency"}
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
 
@@ -7010,6 +7018,72 @@ async def delete_vendor(
     await log_activity(request, user, "delete", "exchangers", "Deleted exchanger")
 
     return {"message": "Vendor deleted"}
+
+
+@api_router.post("/vendors/{vendor_id}/archive")
+async def archive_vendor(
+    request: Request,
+    vendor_id: str,
+    user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.EDIT)),
+):
+    """Archive an exchanger — hides from reports and disables new transactions."""
+    vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    if vendor.get("status") == VendorStatus.ARCHIVED:
+        raise HTTPException(status_code=400, detail="Exchanger is already archived")
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.vendors.update_one(
+        {"vendor_id": vendor_id},
+        {"$set": {"status": VendorStatus.ARCHIVED, "archived_at": now, "updated_at": now}},
+    )
+    # Disable the linked user account so they can't login
+    await db.users.update_one(
+        {"user_id": vendor["user_id"]},
+        {"$set": {"is_active": False}},
+    )
+
+    await log_activity(
+        request, user, "edit", "exchangers",
+        f"Archived exchanger: {vendor['vendor_name']}",
+        reference_id=vendor_id,
+    )
+    return await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
+
+
+@api_router.post("/vendors/{vendor_id}/unarchive")
+async def unarchive_vendor(
+    request: Request,
+    vendor_id: str,
+    user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.EDIT)),
+):
+    """Unarchive an exchanger — restores to active status."""
+    vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+
+    if vendor.get("status") != VendorStatus.ARCHIVED:
+        raise HTTPException(status_code=400, detail="Exchanger is not archived")
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.vendors.update_one(
+        {"vendor_id": vendor_id},
+        {"$set": {"status": VendorStatus.ACTIVE, "updated_at": now}, "$unset": {"archived_at": ""}},
+    )
+    # Re-enable the linked user account
+    await db.users.update_one(
+        {"user_id": vendor["user_id"]},
+        {"$set": {"is_active": True}},
+    )
+
+    await log_activity(
+        request, user, "edit", "exchangers",
+        f"Unarchived exchanger: {vendor['vendor_name']}",
+        reference_id=vendor_id,
+    )
+    return await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
 
 
 # Get vendor's assigned transactions (for vendor portal)
@@ -10474,6 +10548,16 @@ async def _create_transaction_impl(
         vendor_info = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
         if not vendor_info:
             raise HTTPException(status_code=404, detail="Vendor not found")
+        # Archived vendors cannot accept new transactions
+        if vendor_info.get("status") == VendorStatus.ARCHIVED:
+            raise HTTPException(status_code=400, detail="Exchanger is archived and cannot accept new transactions")
+        # Dealing currency restriction
+        dealing_currency = vendor_info.get("dealing_currency")
+        if dealing_currency and base_currency and base_currency.upper() != dealing_currency.upper():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Exchanger only deals in {dealing_currency}. Transaction currency {base_currency} is not allowed."
+            )
 
     # Save bank account to client profile if requested
     if (
@@ -20858,8 +20942,8 @@ async def generate_daily_report_html():
         if d.get("debt_type") == "payable"
     )
 
-    # Vendor pending
-    vendors = await db.vendors.find({"status": "active"}, {"_id": 0}).to_list(100)
+    # Vendor pending — exclude archived exchangers
+    vendors = await db.vendors.find({"status": {"$ne": VendorStatus.ARCHIVED}}, {"_id": 0}).to_list(100)
 
     # Pending approvals
     pending_txs = await db.transactions.find({"status": "pending"}, {"_id": 0}).to_list(
@@ -21651,8 +21735,8 @@ async def generate_monthly_report_html(year: int = None, month: int = None):
         l.get("amount", 0) - l.get("total_repaid", 0) for l in active_loans
     )
 
-    # --- Vendor/Exchanger Summary ---
-    vendors = await db.vendors.find({"status": "active"}, {"_id": 0}).to_list(100)
+    # --- Vendor/Exchanger Summary --- exclude archived exchangers
+    vendors = await db.vendors.find({"status": {"$ne": VendorStatus.ARCHIVED}}, {"_id": 0}).to_list(100)
     vendor_commission_total = sum(
         t.get("vendor_commission_amount", 0) or 0
         for t in approved_txs
