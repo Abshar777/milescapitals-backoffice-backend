@@ -6859,7 +6859,8 @@ async def get_vendor(
             - custom_settled_map_detail.get(curr, 0),
             "usd_equivalent": (d["tx_deposit_usd"] + d["ie_in_usd"] + d["loan_in_usd"])
             - (d["tx_withdrawal_usd"] + d["ie_out_usd"] + d["loan_out_usd"])
-            - (d["tx_commission_usd"] + d["ie_commission_usd"] + d["loan_commission_usd"]),
+            - (d["tx_commission_usd"] + d["ie_commission_usd"] + d["loan_commission_usd"])
+            - convert_to_usd(custom_settled_map_detail.get(curr, 0), curr),
             "deposit_amount": d["tx_deposit"] + d["ie_in"] + d["loan_in"],
             "withdrawal_amount": d["tx_withdrawal"] + d["ie_out"] + d["loan_out"],
             "deposit_count": d["tx_deposit_count"] + d["ie_in_count"] + d["loan_in_count"],
@@ -16631,6 +16632,7 @@ async def get_vendor_summary_report(
     tx_query = {
         "vendor_id": {"$exists": True, "$ne": None},
         "status": {"$in": ["approved", "completed"]},
+        "settled": {"$ne": True},
     }
     if date_filter:
         tx_query["created_at"] = date_filter
@@ -16648,8 +16650,12 @@ async def get_vendor_summary_report(
                         "currency": {"$ifNull": ["$base_currency", "$currency"]},
                     },
                     "total_base": {"$sum": {"$ifNull": ["$base_amount", "$amount"]}},
+                    "total_usd": {"$sum": "$amount"},
                     "commission_base": {
                         "$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}
+                    },
+                    "commission_usd": {
+                        "$sum": {"$ifNull": ["$vendor_commission_amount", 0]}
                     },
                     "count": {"$sum": 1},
                 }
@@ -16662,6 +16668,7 @@ async def get_vendor_summary_report(
         "vendor_id": {"$exists": True, "$ne": None},
         "status": {"$in": ["approved", "completed"]},
         "converted_to_loan": {"$ne": True},
+        "settled": {"$ne": True},
     }
     if date_filter:
         ie_query["created_at"] = date_filter
@@ -16679,8 +16686,12 @@ async def get_vendor_summary_report(
                         "currency": {"$ifNull": ["$base_currency", "$currency"]},
                     },
                     "total_base": {"$sum": {"$ifNull": ["$base_amount", "$amount"]}},
+                    "total_usd": {"$sum": {"$ifNull": ["$amount_usd", "$amount"]}},
                     "commission_base": {
                         "$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}
+                    },
+                    "commission_usd": {
+                        "$sum": {"$ifNull": ["$vendor_commission_amount", 0]}
                     },
                     "count": {"$sum": 1},
                 }
@@ -16689,7 +16700,7 @@ async def get_vendor_summary_report(
     ).to_list(5000)
 
     # --- Loans: individual docs (need vendor_id logic) ---
-    loan_query = {"status": {"$in": ["approved", "completed"]}}
+    loan_query = {"status": "completed", "settled": {"$ne": True}}
     if date_filter:
         loan_query["created_at"] = date_filter
     loan_txs = await db.loan_transactions.find(
@@ -16701,11 +16712,11 @@ async def get_vendor_summary_report(
             "amount": 1,
             "currency": 1,
             "vendor_commission_base_amount": 1,
+            "vendor_commission_amount": 1,
         },
     ).to_list(5000)
 
     # Build per-vendor per-currency data
-    # Structure: vendor_data[vid][currency] = {deposits, withdrawals, tx_comm, ie_in, ie_out, ie_comm, loan_in, loan_out, loan_comm}
     vendor_data = {}
 
     def ensure_entry(vid, curr):
@@ -16715,13 +16726,22 @@ async def get_vendor_summary_report(
             vendor_data[vid][curr] = {
                 "deposits": 0,
                 "withdrawals": 0,
+                "deposits_usd": 0,
+                "withdrawals_usd": 0,
                 "tx_comm": 0,
+                "tx_comm_usd": 0,
                 "ie_in": 0,
                 "ie_out": 0,
+                "ie_in_usd": 0,
+                "ie_out_usd": 0,
                 "ie_comm": 0,
+                "ie_comm_usd": 0,
                 "loan_in": 0,
                 "loan_out": 0,
+                "loan_in_usd": 0,
+                "loan_out_usd": 0,
                 "loan_comm": 0,
+                "loan_comm_usd": 0,
                 "dep_count": 0,
                 "wdr_count": 0,
                 "ie_in_count": 0,
@@ -16737,11 +16757,14 @@ async def get_vendor_summary_report(
         d = vendor_data[vid][curr]
         if r["_id"]["type"] == "deposit":
             d["deposits"] += r["total_base"]
+            d["deposits_usd"] += r["total_usd"]
             d["dep_count"] += r["count"]
         elif r["_id"]["type"] == "withdrawal":
             d["withdrawals"] += r["total_base"]
+            d["withdrawals_usd"] += r["total_usd"]
             d["wdr_count"] += r["count"]
         d["tx_comm"] += r["commission_base"]
+        d["tx_comm_usd"] += r["commission_usd"]
 
     for r in ie_results:
         vid = r["_id"]["vendor_id"]
@@ -16750,11 +16773,14 @@ async def get_vendor_summary_report(
         d = vendor_data[vid][curr]
         if r["_id"]["entry_type"] == "income":
             d["ie_in"] += r["total_base"]
+            d["ie_in_usd"] += r["total_usd"]
             d["ie_in_count"] += r["count"]
         else:
             d["ie_out"] += r["total_base"]
+            d["ie_out_usd"] += r["total_usd"]
             d["ie_out_count"] += r["count"]
         d["ie_comm"] += r["commission_base"]
+        d["ie_comm_usd"] += r["commission_usd"]
 
     for ltx in loan_txs:
         vid = None
@@ -16772,14 +16798,34 @@ async def get_vendor_summary_report(
         ensure_entry(vid, curr)
         d = vendor_data[vid][curr]
         amt = ltx.get("amount", 0)
+        amt_usd = convert_to_usd(amt, curr)
         comm = ltx.get("vendor_commission_base_amount", 0) or 0
+        comm_usd = ltx.get("vendor_commission_amount", 0) or 0
         if is_in:
             d["loan_in"] += amt
+            d["loan_in_usd"] += amt_usd
             d["loan_in_count"] += 1
         else:
             d["loan_out"] += amt
+            d["loan_out_usd"] += amt_usd
             d["loan_out_count"] += 1
         d["loan_comm"] += comm
+        d["loan_comm_usd"] += comm_usd
+
+    # Batch-fetch approved custom settlements for all vendors in this result set
+    all_vids = list(vendor_data.keys())
+    custom_settled_all: dict[str, dict[str, float]] = {}
+    if all_vids:
+        cs_rows = await db.vendor_settlements.aggregate([
+            {"$match": {"vendor_id": {"$in": all_vids}, "settlement_mode": "custom", "status": VendorSettlementStatus.APPROVED}},
+            {"$group": {"_id": {"vendor_id": "$vendor_id", "currency": "$source_currency"}, "total": {"$sum": "$gross_amount"}}},
+        ]).to_list(5000)
+        for cs in cs_rows:
+            v = cs["_id"]["vendor_id"]
+            c = cs["_id"]["currency"]
+            if v not in custom_settled_all:
+                custom_settled_all[v] = {}
+            custom_settled_all[v][c] = cs["total"]
 
     # Build response: one row per vendor per currency
     vendor_list = []
@@ -16789,8 +16835,13 @@ async def get_vendor_summary_report(
         for curr, d in currencies.items():
             money_in = d["deposits"] + d["ie_in"] + d["loan_in"]
             money_out = d["withdrawals"] + d["ie_out"] + d["loan_out"]
+            money_in_usd = d["deposits_usd"] + d["ie_in_usd"] + d["loan_in_usd"]
+            money_out_usd = d["withdrawals_usd"] + d["ie_out_usd"] + d["loan_out_usd"]
             total_comm = d["tx_comm"] + d["ie_comm"] + d["loan_comm"]
-            net = money_in - money_out - total_comm
+            total_comm_usd = d["tx_comm_usd"] + d["ie_comm_usd"] + d["loan_comm_usd"]
+            custom_settled = custom_settled_all.get(vid, {}).get(curr, 0)
+            net = money_in - money_out - total_comm - custom_settled
+            net_usd = money_in_usd - money_out_usd - total_comm_usd - convert_to_usd(custom_settled, curr)
             rows.append(
                 {
                     "currency": curr,
@@ -16806,7 +16857,9 @@ async def get_vendor_summary_report(
                     "money_in": round(money_in, 2),
                     "money_out": round(money_out, 2),
                     "total_commission": round(total_comm, 2),
+                    "custom_settled": round(custom_settled, 2),
                     "net_settlement": round(net, 2),
+                    "usd_equivalent": round(net_usd, 2),
                     "tx_count": d["dep_count"]
                     + d["wdr_count"]
                     + d["ie_in_count"]
@@ -16835,12 +16888,16 @@ async def get_vendor_summary_report(
                     "money_in": 0,
                     "money_out": 0,
                     "total_commission": 0,
+                    "custom_settled": 0,
                     "net_settlement": 0,
+                    "usd_equivalent": 0,
                 }
             grand_by_currency[c]["money_in"] += r["money_in"]
             grand_by_currency[c]["money_out"] += r["money_out"]
             grand_by_currency[c]["total_commission"] += r["total_commission"]
+            grand_by_currency[c]["custom_settled"] += r["custom_settled"]
             grand_by_currency[c]["net_settlement"] += r["net_settlement"]
+            grand_by_currency[c]["usd_equivalent"] += r["usd_equivalent"]
 
     return {
         "vendors": vendor_list,
