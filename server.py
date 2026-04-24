@@ -1204,6 +1204,10 @@ async def get_user_permissions(user_id: str) -> dict:
     if not user:
         return {}
 
+    # Admin bypass — full access to all modules
+    if user.get("role") == "admin":
+        return {module: ["*"] for module in ALL_MODULES}
+
     # Get role permissions
     role_name = user.get("role_id") or user.get("role", "")
     role = await db.roles.find_one({"role_id": role_name}, {"_id": 0})
