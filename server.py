@@ -8305,6 +8305,12 @@ async def settle_vendor_balance(
             raise HTTPException(status_code=400, detail="Please enter a valid custom settlement amount")
         if not settlement_request.custom_currency:
             raise HTTPException(status_code=400, detail="Please select a currency for the custom settlement")
+        # Validate cross-currency: if destination differs from custom currency, require the converted amount
+        if not is_direct and settlement_request.destination_account_id:
+            dest_acc = await db.treasury_accounts.find_one({"account_id": settlement_request.destination_account_id}, {"_id": 0, "currency": 1})
+            if dest_acc and dest_acc.get("currency") != settlement_request.custom_currency:
+                if not settlement_request.settlement_amount_in_dest_currency:
+                    raise HTTPException(status_code=400, detail=f"Please enter the final settlement amount in {dest_acc['currency']}")
 
     pending_txs = []
     pending_ie = []
@@ -8322,7 +8328,6 @@ async def settle_vendor_balance(
         # Full: get all approved transactions for this vendor that haven't been settled
         pending_txs = await db.transactions.find({
             "vendor_id": vendor_id,
-            "destination_type": "vendor",
             "status": {"$in": [TransactionStatus.APPROVED, TransactionStatus.COMPLETED]},
             "settled": {"$ne": True}
         }, {"_id": 0}).to_list(1000)
@@ -8570,14 +8575,31 @@ async def approve_settlement(
             {"$set": {"settled": True, "settlement_status": "completed"}},
         )
 
-    # Update treasury balance with settlement amount
-    await db.treasury_accounts.update_one(
-        {"account_id": settlement["settlement_destination_id"]},
-        {
-            "$inc": {"balance": settlement["settlement_amount"]},
-            "$set": {"updated_at": now.isoformat()},
-        },
-    )
+    # Update treasury balance and record transaction (skip for direct transfers — no linked account)
+    if not settlement.get("is_direct_transfer"):
+        await db.treasury_accounts.update_one(
+            {"account_id": settlement["settlement_destination_id"]},
+            {
+                "$inc": {"balance": settlement["settlement_amount"]},
+                "$set": {"updated_at": now.isoformat()},
+            },
+        )
+
+        treasury_tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+        treasury_tx_doc = {
+            "treasury_transaction_id": treasury_tx_id,
+            "account_id": settlement["settlement_destination_id"],
+            "transaction_type": "settlement_in",
+            "amount": settlement["settlement_amount"],
+            "currency": settlement["destination_currency"],
+            "reference": f"Vendor Settlement: {settlement['vendor_name']}",
+            "settlement_id": settlement_id,
+            "vendor_id": settlement["vendor_id"],
+            "created_at": treasury_date_str,
+            "created_by": user["user_id"],
+            "created_by_name": user["name"],
+        }
+        await db.treasury_transactions.insert_one(treasury_tx_doc)
 
     # Update vendor stats
     await db.vendors.update_one(
@@ -8589,23 +8611,6 @@ async def approve_settlement(
             }
         },
     )
-
-    # Record treasury transaction for history
-    treasury_tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
-    treasury_tx_doc = {
-        "treasury_transaction_id": treasury_tx_id,
-        "account_id": settlement["settlement_destination_id"],
-        "transaction_type": "settlement_in",
-        "amount": settlement["settlement_amount"],
-        "currency": settlement["destination_currency"],
-        "reference": f"Vendor Settlement: {settlement['vendor_name']}",
-        "settlement_id": settlement_id,
-        "vendor_id": settlement["vendor_id"],
-        "created_at": treasury_date_str,
-        "created_by": user["user_id"],
-        "created_by_name": user["name"],
-    }
-    await db.treasury_transactions.insert_one(treasury_tx_doc)
 
     # Store approval_date on the settlement record if provided
     if approval_date:
