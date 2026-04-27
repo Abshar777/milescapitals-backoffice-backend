@@ -17824,6 +17824,9 @@ async def get_psp_reconciliation_details(
                 "reference": tx.get("reference"),
                 "client_name": tx.get("client_name"),
                 "gross_amount": tx.get("amount"),
+                "base_amount": tx.get("base_amount"),
+                "base_currency": tx.get("base_currency"),
+                "currency": tx.get("currency", "USD"),
                 "commission": tx.get("psp_commission_amount", 0),
                 "chargeback": tx.get(
                     "psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0)
