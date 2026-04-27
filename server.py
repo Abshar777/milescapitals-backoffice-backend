@@ -18618,6 +18618,25 @@ async def update_statement_date(
     return {"success": True}
 
 
+@api_router.delete("/reconciliation/statements/{statement_id}")
+async def delete_statement(
+    request: Request,
+    statement_id: str,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.DELETE)),
+):
+    """Delete an uploaded reconciliation statement"""
+    stmt = await db.reconciliation_statements.find_one({"statement_id": statement_id})
+    if not stmt:
+        raise HTTPException(status_code=404, detail="Statement not found")
+
+    await db.reconciliation_statements.delete_one({"statement_id": statement_id})
+    await log_activity(
+        request, user, "delete", "reconciliation",
+        f"Deleted statement: {stmt.get('filename', statement_id)}",
+    )
+    return {"message": "Statement deleted"}
+
+
 @api_router.get("/reconciliation/statements/{statement_id}/file")
 async def download_statement_file(
     statement_id: str,
