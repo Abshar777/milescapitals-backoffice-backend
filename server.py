@@ -18621,6 +18621,24 @@ async def update_statement_date(
     return {"success": True}
 
 
+@api_router.patch("/reconciliation/statements/{statement_id}/description")
+async def update_statement_description(
+    statement_id: str,
+    body: dict = Body(...),
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.EDIT)),
+):
+    """Update the description/notes for a statement"""
+    stmt = await db.reconciliation_statements.find_one({"statement_id": statement_id})
+    if not stmt:
+        raise HTTPException(status_code=404, detail="Statement not found")
+    description = body.get("description", "")
+    await db.reconciliation_statements.update_one(
+        {"statement_id": statement_id},
+        {"$set": {"description": description}},
+    )
+    return {"success": True}
+
+
 @api_router.delete("/reconciliation/statements/{statement_id}")
 async def delete_statement(
     request: Request,
