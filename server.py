@@ -2763,6 +2763,9 @@ async def get_treasury_history(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     transaction_type: Optional[str] = None,
+    search: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     limit: int = 5000,
@@ -2863,6 +2866,20 @@ async def get_treasury_history(
 
     # Sort combined list by date (newest first)
     treasury_txs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+    # Apply search and amount filters in Python (multi-collection merge prevents DB-level filtering)
+    if search:
+        sl = search.lower()
+        treasury_txs = [
+            tx for tx in treasury_txs
+            if sl in (tx.get("reference") or "").lower()
+            or sl in (tx.get("client_name") or "").lower()
+            or sl in (tx.get("transaction_id") or tx.get("treasury_transaction_id") or "").lower()
+        ]
+    if amount_min is not None:
+        treasury_txs = [tx for tx in treasury_txs if abs(tx.get("amount", 0)) >= amount_min]
+    if amount_max is not None:
+        treasury_txs = [tx for tx in treasury_txs if abs(tx.get("amount", 0)) <= amount_max]
 
     # Calculate running balance (start from current balance, work backwards)
     current_balance = account.get("balance", 0)
@@ -4592,6 +4609,73 @@ async def get_psp_withdrawal_transactions(
     skip = (page - 1) * page_size
     transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
     return {"items": transactions, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, -(-total // page_size))}
+
+
+@api_router.get("/psp/{psp_id}/all-transactions")
+async def get_psp_all_transactions(
+    psp_id: str,
+    page: int = 1,
+    page_size: int = 20,
+    search: Optional[str] = None,
+    transaction_type: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW)),
+):
+    """Unified PSP transactions endpoint with full server-side filtering and pagination"""
+    query = {"psp_id": psp_id, "destination_type": "psp"}
+
+    if transaction_type and transaction_type != "all":
+        query["transaction_type"] = transaction_type
+
+    if status and status != "all":
+        if status == "settled":
+            query["settled"] = True
+        elif status == "pending":
+            query["settled"] = {"$ne": True}
+        else:
+            query["status"] = status
+
+    date_field = "transaction_date"
+    if date_from:
+        query.setdefault(date_field, {})["$gte"] = date_from
+    if date_to:
+        query.setdefault(date_field, {})["$lte"] = date_to
+
+    if amount_min is not None or amount_max is not None:
+        amt_q = {}
+        if amount_min is not None:
+            amt_q["$gte"] = amount_min
+        if amount_max is not None:
+            amt_q["$lte"] = amount_max
+        query["amount"] = amt_q
+
+    if search:
+        query["$or"] = [
+            {"reference": {"$regex": search, "$options": "i"}},
+            {"client_name": {"$regex": search, "$options": "i"}},
+            {"transaction_id": {"$regex": search, "$options": "i"}},
+        ]
+
+    total = await db.transactions.count_documents(query)
+    skip = (page - 1) * page_size
+    items = (
+        await db.transactions.find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(page_size)
+        .to_list(page_size)
+    )
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, -(-total // page_size)),
+    }
 
 
 @api_router.post("/psp/{psp_id}/deposit-extra-commission")
@@ -7069,6 +7153,13 @@ async def unarchive_vendor(
 async def get_vendor_transactions(
     vendor_id: str,
     status: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    page: int = 1,
+    page_size: int = 20,
     user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW)),
 ):
     # Vendors can only see their own transactions
@@ -7080,15 +7171,49 @@ async def get_vendor_transactions(
             raise HTTPException(status_code=403, detail="Access denied")
 
     query = {"vendor_id": vendor_id, "destination_type": "vendor"}
-    if status:
-        query["status"] = status
 
+    if status and status != "all":
+        query["status"] = status
+    else:
+        # Default: only show approved/completed transactions
+        query["status"] = {"$in": ["approved", "completed"]}
+
+    if date_from:
+        query.setdefault("created_at", {})["$gte"] = date_from
+    if date_to:
+        query.setdefault("created_at", {})["$lte"] = date_to
+
+    if amount_min is not None or amount_max is not None:
+        amt_q = {}
+        if amount_min is not None:
+            amt_q["$gte"] = amount_min
+        if amount_max is not None:
+            amt_q["$lte"] = amount_max
+        query["amount"] = amt_q
+
+    if search:
+        query["$or"] = [
+            {"reference": {"$regex": search, "$options": "i"}},
+            {"client_name": {"$regex": search, "$options": "i"}},
+            {"transaction_id": {"$regex": search, "$options": "i"}},
+        ]
+
+    total = await db.transactions.count_documents(query)
+    skip = (page - 1) * page_size
     transactions = (
         await db.transactions.find(query, {"_id": 0})
         .sort("created_at", -1)
-        .to_list(1000)
+        .skip(skip)
+        .limit(page_size)
+        .to_list(page_size)
     )
-    return transactions
+    return {
+        "items": transactions,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, -(-total // page_size)),
+    }
 
 
 # Get current vendor info (for logged in vendor)
