@@ -2346,6 +2346,36 @@ async def update_client(
     return await db.clients.find_one({"client_id": client_id}, {"_id": 0})
 
 
+@api_router.patch("/clients/{client_id}/tags")
+async def update_client_tags(
+    request: Request,
+    client_id: str,
+    user: dict = Depends(require_permission(Modules.CLIENTS, Actions.EDIT)),
+):
+    """Update client tags and backfill all existing transactions"""
+    body = await request.json()
+    new_tags = body.get("tags", [])
+    if not isinstance(new_tags, list):
+        raise HTTPException(status_code=400, detail="tags must be a list")
+
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.clients.update_one(
+        {"client_id": client_id},
+        {"$set": {"tags": new_tags, "updated_at": now}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Backfill all existing transactions for this client
+    await db.transactions.update_many(
+        {"client_id": client_id},
+        {"$set": {"client_tags": new_tags, "updated_at": now}}
+    )
+
+    await log_activity(request, user, "edit", "clients", f"Updated client tags: {new_tags}")
+    return await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+
+
 @api_router.delete("/clients/{client_id}")
 async def delete_client(
     request: Request,
@@ -2766,6 +2796,7 @@ async def get_treasury_history(
     search: Optional[str] = None,
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
+    tags: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     limit: int = 5000,
@@ -2858,6 +2889,7 @@ async def get_treasury_history(
                     "reference": f"{tx.get('transaction_type', '').capitalize()}: {tx.get('client_name', 'Unknown')} - {tx.get('reference', '')}",
                     "client_id": tx.get("client_id"),
                     "client_name": tx.get("client_name"),
+                    "client_tags": tx.get("client_tags", []),
                     "created_at": tx.get("processed_at") or tx.get("created_at"),
                     "created_by": tx.get("processed_by"),
                     "created_by_name": tx.get("processed_by_name"),
@@ -2880,6 +2912,13 @@ async def get_treasury_history(
         treasury_txs = [tx for tx in treasury_txs if abs(tx.get("amount", 0)) >= amount_min]
     if amount_max is not None:
         treasury_txs = [tx for tx in treasury_txs if abs(tx.get("amount", 0)) <= amount_max]
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list:
+            treasury_txs = [
+                tx for tx in treasury_txs
+                if any(t in (tx.get("client_tags") or []) for t in tag_list)
+            ]
 
     # Calculate running balance (start from current balance, work backwards)
     current_balance = account.get("balance", 0)
@@ -4623,6 +4662,7 @@ async def get_psp_all_transactions(
     date_to: Optional[str] = None,
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
+    tags: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW)),
 ):
     """Unified PSP transactions endpoint with full server-side filtering and pagination"""
@@ -4652,6 +4692,11 @@ async def get_psp_all_transactions(
         if amount_max is not None:
             amt_q["$lte"] = amount_max
         query["amount"] = amt_q
+
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list:
+            query["client_tags"] = {"$in": tag_list}
 
     if search:
         query["$or"] = [
@@ -7158,6 +7203,7 @@ async def get_vendor_transactions(
     date_to: Optional[str] = None,
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
+    tags: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
     user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW)),
@@ -7190,6 +7236,11 @@ async def get_vendor_transactions(
         if amount_max is not None:
             amt_q["$lte"] = amount_max
         query["amount"] = amt_q
+
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list:
+            query["client_tags"] = {"$in": tag_list}
 
     if search:
         query["$or"] = [
