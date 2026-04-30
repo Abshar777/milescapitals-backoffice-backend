@@ -18865,6 +18865,382 @@ async def get_account_history_for_reconciliation(
     return transactions
 
 
+@api_router.get("/reconciliation/history")
+async def get_reconciliation_history_endpoint(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW)),
+):
+    """
+    Return daily net-amount rows for every account, each in its native currency.
+    Formulas mirror the respective "by-ID" summary APIs exactly:
+
+    Treasury  → treasury_transactions signed amounts (all time, start from opening_balance)
+                closing_balance == treasury account.balance on today
+    PSP       → unsettled approved txns: deposit_net - reserve_fund - withdrawal - withdrawal_extra_comm
+                closing_balance == psp-summary pending_amount on today
+    Exchanger → unsettled approved txns + IE + loans - commission - custom_settled (base_currency)
+                closing_balance == vendor settlement_by_currency.amount on today
+
+    Closing balance is computed over ALL time (not just the display window) so
+    filtered views still show accurate cumulative balances.
+    """
+    import asyncio
+    from collections import defaultdict
+
+    display_start = date_from or (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()[:10]
+    display_end   = date_to   or datetime.now(timezone.utc).isoformat()[:10]
+
+    all_rows: list[dict] = []
+
+    # ── Statements lookup: (account_id, date) → statement doc ────────
+    all_stmts = await db.reconciliation_statements.find(
+        {}, {"_id": 0, "file_content": 0}
+    ).to_list(2000)
+    stmt_lookup: dict = {}
+    for s in all_stmts:
+        key = (s.get("account_id"), (s.get("statement_date") or "")[:10])
+        stmt_lookup[key] = s
+
+    def _stmt_status(stmt):
+        return "done" if stmt and stmt.get("status") == "completed" else "pending"
+
+    # ════════════════════════════════════════════════════════════════
+    # 1. TREASURY
+    #    treasury_transactions.amount is already signed:
+    #      positive → money in  (deposit, transfer_in, lp_withdrawal …)
+    #      negative → money out (transfer_out, lp_deposit …)
+    #    No date restriction — need full history for accurate closing balance.
+    #    Closing balance starts from account opening_balance.
+    # ════════════════════════════════════════════════════════════════
+    treasury_accounts = await db.treasury_accounts.find(
+        {}, {"_id": 0, "account_id": 1, "account_name": 1, "currency": 1, "opening_balance": 1}
+    ).to_list(200)
+    acc_map = {a["account_id"]: a for a in treasury_accounts}
+
+    trs_pipeline = [
+        {"$group": {
+            "_id": {
+                "date":       {"$substr": ["$created_at", 0, 10]},
+                "account_id": "$account_id",
+                "currency":   {"$ifNull": ["$currency", "USD"]},
+            },
+            "net_amount": {"$sum": "$amount"},
+            "tx_count":   {"$sum": 1},
+        }},
+    ]
+    for r in await db.treasury_transactions.aggregate(trs_pipeline).to_list(10000):
+        aid  = r["_id"]["account_id"]
+        date = r["_id"]["date"]
+        acc  = acc_map.get(aid, {})
+        stmt = stmt_lookup.get((aid, date))
+        all_rows.append({
+            "key":              f"{aid}-{date}",
+            "account_id":       aid,
+            "account_name":     acc.get("account_name", "Unknown"),
+            "account_type":     "treasury",
+            "date":             date,
+            "currency":         r["_id"].get("currency") or acc.get("currency", "USD"),
+            "net_amount":       round(r["net_amount"], 2),
+            "tx_count":         r["tx_count"],
+            "statement":        stmt,
+            "status":           _stmt_status(stmt),
+            "closing_balance":  0,
+            "_opening_balance": acc.get("opening_balance", 0.0),
+        })
+
+    # ════════════════════════════════════════════════════════════════
+    # 2. PSP — mirrors psp-summary pending_amount (unsettled only, all time)
+    #    net = deposit_net(psp_net_amount)
+    #          - reserve_fund_amount
+    #          - withdrawal_amount
+    #          - withdrawal_extra_commission
+    # ════════════════════════════════════════════════════════════════
+    psps = await db.psps.find({}, {"_id": 0, "psp_id": 1, "psp_name": 1}).to_list(100)
+    psp_map = {p["psp_id"]: p for p in psps}
+
+    psp_pipeline = [
+        {"$match": {
+            "psp_id":           {"$exists": True, "$ne": None},
+            "destination_type": "psp",
+            "status":           {"$in": ["approved", "completed"]},
+            "settled":          {"$ne": True},
+        }},
+        {"$group": {
+            "_id": {
+                "date":   {"$substr": [{"$ifNull": ["$transaction_date", "$created_at"]}, 0, 10]},
+                "psp_id": "$psp_id",
+            },
+            "deposit_net": {"$sum": {"$cond": [
+                {"$eq": ["$transaction_type", "deposit"]},
+                {"$ifNull": ["$psp_net_amount", "$amount"]},
+                0,
+            ]}},
+            "reserve_fund": {"$sum": {"$cond": [
+                {"$eq": ["$transaction_type", "deposit"]},
+                {"$ifNull": ["$psp_reserve_fund_amount", {"$ifNull": ["$psp_chargeback_amount", 0]}]},
+                0,
+            ]}},
+            "withdrawal_amount": {"$sum": {"$cond": [
+                {"$eq": ["$transaction_type", "withdrawal"]},
+                "$amount",
+                0,
+            ]}},
+            "withdrawal_extra_comm": {"$sum": {"$cond": [
+                {"$eq": ["$transaction_type", "withdrawal"]},
+                {"$ifNull": ["$psp_withdrawal_extra_commission", 0]},
+                0,
+            ]}},
+            "tx_count": {"$sum": 1},
+        }},
+    ]
+    for r in await db.transactions.aggregate(psp_pipeline).to_list(5000):
+        pid  = r["_id"]["psp_id"]
+        date = r["_id"]["date"]
+        psp  = psp_map.get(pid, {})
+        stmt = stmt_lookup.get((pid, date))
+        net  = round(
+            r["deposit_net"] - r["reserve_fund"]
+            - r["withdrawal_amount"] - r["withdrawal_extra_comm"],
+            2,
+        )
+        all_rows.append({
+            "key":              f"{pid}-{date}",
+            "account_id":       pid,
+            "account_name":     psp.get("psp_name", "Unknown"),
+            "account_type":     "psp",
+            "date":             date,
+            "currency":         "USD",
+            "net_amount":       net,
+            "tx_count":         r["tx_count"],
+            "statement":        stmt,
+            "status":           _stmt_status(stmt),
+            "closing_balance":  0,
+            "_opening_balance": 0.0,
+        })
+
+    # ════════════════════════════════════════════════════════════════
+    # 3. EXCHANGER — mirrors vendor settlement_by_currency.amount
+    #    (unsettled only, all time, base_currency amounts)
+    #
+    #    net = (tx_dep_base + ie_in_base + loan_in_base)
+    #          - (tx_wth_base + ie_out_base + loan_out_base)
+    #          - (tx_comm_base + ie_comm_base + loan_comm_base)
+    #          - custom_settled_base
+    #
+    #    Five pipelines run in parallel, merged in Python.
+    # ════════════════════════════════════════════════════════════════
+    vendors = await db.vendors.find(
+        {}, {"_id": 0, "vendor_id": 1, "vendor_name": 1}
+    ).to_list(200)
+    vendor_map = {v["vendor_id"]: v for v in vendors}
+
+    # 3a — Transactions (unsettled approved/completed)
+    vtx_pipeline = [
+        {"$match": {
+            "vendor_id":        {"$exists": True, "$ne": None},
+            "destination_type": "vendor",
+            "status":           {"$in": ["approved", "completed"]},
+            "settled":          {"$ne": True},
+        }},
+        {"$group": {
+            "_id": {
+                "date":      {"$substr": [{"$ifNull": ["$transaction_date", "$created_at"]}, 0, 10]},
+                "vendor_id": "$vendor_id",
+                "currency":  {"$ifNull": ["$base_currency", "$currency"]},
+            },
+            "dep_base":  {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]},
+                                              {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "wth_base":  {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]},
+                                              {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+            "tx_count":  {"$sum": 1},
+        }},
+    ]
+
+    # 3b — Income / Expense entries (unsettled, not converted to loan)
+    ie_pipeline = [
+        {"$match": {
+            "vendor_id":         {"$exists": True, "$ne": None},
+            "status":            {"$in": ["approved", "completed"]},
+            "converted_to_loan": {"$ne": True},
+            "settled":           {"$ne": True},
+        }},
+        {"$group": {
+            "_id": {
+                "date":      {"$substr": [{"$ifNull": ["$created_at", ""]}, 0, 10]},
+                "vendor_id": "$vendor_id",
+                "currency":  {"$ifNull": ["$base_currency", "$currency"]},
+            },
+            "ie_in_base":   {"$sum": {"$cond": [{"$eq": ["$entry_type", "income"]},
+                                                 {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "ie_out_base":  {"$sum": {"$cond": [{"$eq": ["$entry_type", "expense"]},
+                                                 {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "ie_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+            "ie_count":     {"$sum": 1},
+        }},
+    ]
+
+    # 3c — Loan repayments TO vendor = money IN (unsettled)
+    loan_in_pipeline = [
+        {"$match": {
+            "credit_to_vendor_id": {"$exists": True, "$ne": None},
+            "status":  "completed",
+            "settled": {"$ne": True},
+        }},
+        {"$group": {
+            "_id": {
+                "date":      {"$substr": ["$created_at", 0, 10]},
+                "vendor_id": "$credit_to_vendor_id",
+                "currency":  {"$ifNull": ["$currency", "USD"]},
+            },
+            "loan_in":        {"$sum": "$amount"},
+            "loan_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+        }},
+    ]
+
+    # 3d — Loan disbursements FROM vendor = money OUT (unsettled)
+    loan_out_pipeline = [
+        {"$match": {
+            "source_vendor_id": {"$exists": True, "$ne": None},
+            "status":  "completed",
+            "settled": {"$ne": True},
+        }},
+        {"$group": {
+            "_id": {
+                "date":      {"$substr": ["$created_at", 0, 10]},
+                "vendor_id": "$source_vendor_id",
+                "currency":  {"$ifNull": ["$currency", "USD"]},
+            },
+            "loan_out": {"$sum": "$amount"},
+        }},
+    ]
+
+    # 3e — Custom settlements approved (reduce outstanding balance on approval date)
+    sett_pipeline = [
+        {"$match": {
+            "settlement_mode": "custom",
+            "status": VendorSettlementStatus.APPROVED,
+        }},
+        {"$group": {
+            "_id": {
+                "date":      {"$substr": [{"$ifNull": ["$approval_date", "$created_at"]}, 0, 10]},
+                "vendor_id": "$vendor_id",
+                "currency":  "$source_currency",
+            },
+            "settled": {"$sum": "$gross_amount"},
+        }},
+    ]
+
+    vtx_res, ie_res, loan_in_res, loan_out_res, sett_res = await asyncio.gather(
+        db.transactions.aggregate(vtx_pipeline).to_list(10000),
+        db.income_expenses.aggregate(ie_pipeline).to_list(5000),
+        db.loan_transactions.aggregate(loan_in_pipeline).to_list(5000),
+        db.loan_transactions.aggregate(loan_out_pipeline).to_list(5000),
+        db.vendor_settlements.aggregate(sett_pipeline).to_list(5000),
+    )
+
+    # Merge all five result sets into per-(vendor_id, date, currency) buckets
+    vdata: dict = defaultdict(lambda: {
+        "dep_base": 0.0, "wth_base": 0.0, "comm_base": 0.0,
+        "ie_in_base": 0.0, "ie_out_base": 0.0, "ie_comm_base": 0.0,
+        "loan_in": 0.0, "loan_out": 0.0, "loan_comm_base": 0.0,
+        "settled": 0.0, "tx_count": 0,
+    })
+
+    for r in vtx_res:
+        k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
+        d = vdata[k]
+        d["dep_base"]  += r["dep_base"]
+        d["wth_base"]  += r["wth_base"]
+        d["comm_base"] += r["comm_base"]
+        d["tx_count"]  += r["tx_count"]
+
+    for r in ie_res:
+        k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
+        d = vdata[k]
+        d["ie_in_base"]   += r["ie_in_base"]
+        d["ie_out_base"]  += r["ie_out_base"]
+        d["ie_comm_base"] += r["ie_comm_base"]
+        d["tx_count"]     += r["ie_count"]
+
+    for r in loan_in_res:
+        k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
+        d = vdata[k]
+        d["loan_in"]        += r["loan_in"]
+        d["loan_comm_base"] += r["loan_comm_base"]
+
+    for r in loan_out_res:
+        k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
+        vdata[k]["loan_out"] += r["loan_out"]
+
+    for r in sett_res:
+        k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
+        vdata[k]["settled"] += r["settled"]
+
+    for (vid, date, currency), d in vdata.items():
+        v    = vendor_map.get(vid, {})
+        stmt = stmt_lookup.get((vid, date))
+        net  = round(
+            (d["dep_base"] + d["ie_in_base"] + d["loan_in"])
+            - (d["wth_base"] + d["ie_out_base"] + d["loan_out"])
+            - (d["comm_base"] + d["ie_comm_base"] + d["loan_comm_base"])
+            - d["settled"],
+            2,
+        )
+        all_rows.append({
+            "key":              f"{vid}-{date}-{currency}",
+            "account_id":       vid,
+            "account_name":     v.get("vendor_name", "Unknown"),
+            "account_type":     "exchanger",
+            "date":             date,
+            "currency":         currency,
+            "net_amount":       net,
+            "tx_count":         d["tx_count"],
+            "statement":        stmt,
+            "status":           _stmt_status(stmt),
+            "closing_balance":  0,
+            "_opening_balance": 0.0,
+        })
+
+    # ════════════════════════════════════════════════════════════════
+    # 4. Closing balance — running cumulative per (account + currency)
+    #    sorted oldest → newest across ALL time (not just display window)
+    #    Treasury starts from opening_balance; PSP and Vendor start from 0
+    # ════════════════════════════════════════════════════════════════
+    by_group: dict = defaultdict(list)
+    for row in all_rows:
+        by_group[f"{row['account_id']}-{row['currency']}"].append(row)
+
+    for group_rows in by_group.values():
+        group_rows.sort(key=lambda r: r["date"])
+        cum = group_rows[0].get("_opening_balance", 0.0)
+        for r in group_rows:
+            cum += r["net_amount"]
+            r["closing_balance"] = round(cum, 2)
+
+    # ════════════════════════════════════════════════════════════════
+    # 5. Filter to display window, sort, summarise
+    # ════════════════════════════════════════════════════════════════
+    rows = [r for r in all_rows if display_start <= r["date"] <= display_end]
+    rows.sort(key=lambda r: r["date"], reverse=True)
+
+    summary = {
+        "treasury": {"done": 0, "pending": 0},
+        "psp":      {"done": 0, "pending": 0},
+        "exchanger":{"done": 0, "pending": 0},
+    }
+    for r in rows:
+        t = r["account_type"]
+        if t in summary:
+            summary[t][r["status"]] = summary[t].get(r["status"], 0) + 1
+
+    for r in rows:
+        r.pop("_opening_balance", None)
+
+    return {"rows": rows, "summary": summary}
+
+
 @api_router.post("/reconciliation/upload-statement")
 async def upload_statement_for_reconciliation(
     request: Request,
@@ -20049,8 +20425,8 @@ async def create_adjustment(
 
 
 # Get Reconciliation History / Audit Trail
-@api_router.get("/reconciliation/history")
-async def get_reconciliation_history(
+@api_router.get("/reconciliation/audit-trail")
+async def get_reconciliation_audit_trail(
     date_from: str = None,
     date_to: str = None,
     account_type: str = None,
@@ -20094,8 +20470,8 @@ async def get_reconciliation_history(
     return history
 
 
-@api_router.get("/reconciliation/history/export")
-async def export_reconciliation_history(
+@api_router.get("/reconciliation/audit-trail/export")
+async def export_reconciliation_audit_trail(
     format: str = "xlsx",
     date_from: str = None,
     date_to: str = None,
