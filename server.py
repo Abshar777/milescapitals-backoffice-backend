@@ -2109,6 +2109,41 @@ class ClientTagCreate(BaseModel):
     name: str
     color: Optional[str] = "#3B82F6"
 
+# Transaction tag model (reused for both collections)
+class TransactionTagCreate(BaseModel):
+    name: str
+    color: Optional[str] = "#F59E0B"
+
+@api_router.get("/transaction-tags")
+async def get_transaction_tags(user: dict = Depends(get_current_user)):
+    """Get all predefined transaction tags"""
+    tags = await db.transaction_tags.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+    return tags
+
+@api_router.post("/transaction-tags")
+async def create_transaction_tag(tag: TransactionTagCreate, user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.CREATE))):
+    """Create a new transaction tag"""
+    existing = await db.transaction_tags.find_one({"name": {"$regex": f"^{tag.name}$", "$options": "i"}})
+    if existing:
+        raise HTTPException(status_code=400, detail="Tag already exists")
+    tag_doc = {
+        "tag_id": f"txntag_{uuid.uuid4().hex[:8]}",
+        "name": tag.name.strip(),
+        "color": tag.color or "#F59E0B",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": user["user_id"],
+    }
+    await db.transaction_tags.insert_one(tag_doc)
+    return {k: v for k, v in tag_doc.items() if k != "_id"}
+
+@api_router.delete("/transaction-tags/{tag_id}")
+async def delete_transaction_tag(tag_id: str, user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.DELETE))):
+    """Delete a transaction tag"""
+    result = await db.transaction_tags.delete_one({"tag_id": tag_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Tag not found")
+    return {"message": "Tag deleted"}
+
 @api_router.get("/client-tags")
 async def get_client_tags(user: dict = Depends(get_current_user)):
     """Get all predefined client tags"""
@@ -7338,6 +7373,7 @@ async def get_vendor_transactions(
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
     tags: Optional[str] = None,
+    transaction_tag: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
     user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW)),
@@ -7375,6 +7411,8 @@ async def get_vendor_transactions(
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         if tag_list:
             query["client_tags"] = {"$in": tag_list}
+    if transaction_tag:
+        query["transaction_tags"] = transaction_tag
 
     if search:
         query["$or"] = [
@@ -9014,6 +9052,7 @@ async def get_transactions(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
+    transaction_tag: Optional[str] = None,
     page: int = 1,
     page_size: int = 25,
     limit: int = 100,
@@ -9049,6 +9088,8 @@ async def get_transactions(
 
     if client_tag:
         query["client_tags"] = client_tag
+    if transaction_tag:
+        query["transaction_tags"] = transaction_tag
     # Date filtering: check transaction_date (YYYY-MM-DD) first,
     # fall back to created_at for older records that may not have it.
     if date_from or date_to:
@@ -9858,6 +9899,7 @@ async def export_transactions(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
+    transaction_tag: Optional[str] = None,
 ):
     """Export ALL transactions matching the given filters — no pagination cap."""
     # Resolve client_email → client_id(s)
@@ -9885,6 +9927,8 @@ async def export_transactions(
         query["destination_type"] = destination_type
     if client_tag:
         query["client_tags"] = client_tag
+    if transaction_tag:
+        query["transaction_tags"] = transaction_tag
 
     if date_from or date_to:
         tx_date_q = {}
@@ -11010,6 +11054,7 @@ async def _create_transaction_impl(
         "client_id": client_id,
         "client_name": f"{client['first_name']} {client['last_name']}",
         "client_tags": tx_client_tags,
+        "transaction_tags": [],
         "transaction_type": transaction_type,
         "amount": usd_amount,
         "currency": "USD",
@@ -11343,6 +11388,28 @@ async def update_transaction(
     return await db.transactions.find_one(
         {"transaction_id": transaction_id}, {"_id": 0}
     )
+
+
+@api_router.patch("/transactions/{transaction_id}/transaction-tags")
+async def update_transaction_own_tags(
+    request: Request,
+    transaction_id: str,
+    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.EDIT)),
+):
+    """Update the transaction-level tags on a single transaction"""
+    body = await request.json()
+    new_tags = body.get("transaction_tags", [])
+    if not isinstance(new_tags, list):
+        raise HTTPException(status_code=400, detail="transaction_tags must be a list")
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.transactions.update_one(
+        {"transaction_id": transaction_id},
+        {"$set": {"transaction_tags": new_tags, "updated_at": now}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    await log_activity(request, user, "edit", "transactions", "Updated transaction tags")
+    return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 
 @api_router.put("/transactions/{transaction_id}/assign")
@@ -12160,6 +12227,7 @@ async def create_transaction_request(
         "client_id": client_id,
         "client_name": f"{client.get('first_name', '')} {client.get('last_name', '')}".strip(),
         "client_tags": tx_client_tags,
+        "transaction_tags": [],
         "amount": amount,
         "currency": currency,
         "base_currency": base_currency,
@@ -12318,6 +12386,7 @@ async def create_transaction_request(
             "crm_reference": crm_reference.strip() if crm_reference else None,
             "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
             "client_tags": tx_client_tags,
+            "transaction_tags": [],
             "proof_image": proof_url,
             "proof_images": proof_urls,
             "created_by": user["user_id"],
