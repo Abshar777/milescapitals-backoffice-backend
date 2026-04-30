@@ -19036,12 +19036,12 @@ async def get_reconciliation_history_endpoint(
     vendor_map = {v["vendor_id"]: v for v in vendors}
 
     # 3a — Transactions (unsettled approved/completed)
+    # No destination_type filter — mirrors vendor by ID which matches only on vendor_id
     vtx_pipeline = [
         {"$match": {
-            "vendor_id":        {"$exists": True, "$ne": None},
-            "destination_type": "vendor",
-            "status":           {"$in": ["approved", "completed"]},
-            "settled":          {"$ne": True},
+            "vendor_id": {"$exists": True, "$ne": None},
+            "status":    {"$in": ["approved", "completed"]},
+            "settled":   {"$ne": True},
         }},
         {"$group": {
             "_id": {
@@ -19100,6 +19100,7 @@ async def get_reconciliation_history_endpoint(
     ]
 
     # 3d — Loan disbursements FROM vendor = money OUT (unsettled)
+    # Also captures commission — mirrors vendor by ID which sums commission across both loan directions
     loan_out_pipeline = [
         {"$match": {
             "source_vendor_id": {"$exists": True, "$ne": None},
@@ -19112,7 +19113,8 @@ async def get_reconciliation_history_endpoint(
                 "vendor_id": "$source_vendor_id",
                 "currency":  {"$ifNull": ["$currency", "USD"]},
             },
-            "loan_out": {"$sum": "$amount"},
+            "loan_out":       {"$sum": "$amount"},
+            "loan_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
         }},
     ]
 
@@ -19172,7 +19174,9 @@ async def get_reconciliation_history_endpoint(
 
     for r in loan_out_res:
         k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
-        vdata[k]["loan_out"] += r["loan_out"]
+        d = vdata[k]
+        d["loan_out"]       += r["loan_out"]
+        d["loan_comm_base"] += r.get("loan_comm_base", 0)
 
     for r in sett_res:
         k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
