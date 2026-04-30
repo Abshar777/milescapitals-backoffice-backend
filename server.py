@@ -18907,14 +18907,20 @@ async def get_reconciliation_history_endpoint(
 
     # ════════════════════════════════════════════════════════════════
     # 1. TREASURY
-    #    treasury_transactions.amount is already signed:
-    #      positive → money in  (deposit, transfer_in, lp_withdrawal …)
-    #      negative → money out (transfer_out, lp_deposit …)
-    #    No date restriction — need full history for accurate closing balance.
-    #    Closing balance starts from account opening_balance.
+    #    Mirrors the canonical balance-fix formula exactly:
+    #      - Start cumulative from 0 (opening balance is stored as a
+    #        balance_adjustment treasury_transaction by balance-fix)
+    #      - Use abs(amount) + sign from transaction_type
+    #      - outflow_types always negative, everything else positive
+    #    This makes closing_balance == account.balance on the latest date.
     # ════════════════════════════════════════════════════════════════
+    _TREASURY_OUTFLOW_TYPES = [
+        "debt_payment", "withdrawal", "transfer_out", "expense",
+        "balance_adjustment_debit", "loan_disbursement",
+    ]
+
     treasury_accounts = await db.treasury_accounts.find(
-        {}, {"_id": 0, "account_id": 1, "account_name": 1, "currency": 1, "opening_balance": 1}
+        {}, {"_id": 0, "account_id": 1, "account_name": 1, "currency": 1}
     ).to_list(200)
     acc_map = {a["account_id"]: a for a in treasury_accounts}
 
@@ -18925,8 +18931,14 @@ async def get_reconciliation_history_endpoint(
                 "account_id": "$account_id",
                 "currency":   {"$ifNull": ["$currency", "USD"]},
             },
-            "net_amount": {"$sum": "$amount"},
-            "tx_count":   {"$sum": 1},
+            "net_amount": {"$sum": {
+                "$cond": [
+                    {"$in": ["$transaction_type", _TREASURY_OUTFLOW_TYPES]},
+                    {"$multiply": [-1, {"$abs": "$amount"}]},
+                    {"$abs": "$amount"},
+                ]
+            }},
+            "tx_count": {"$sum": 1},
         }},
     ]
     for r in await db.treasury_transactions.aggregate(trs_pipeline).to_list(10000):
@@ -18946,7 +18958,7 @@ async def get_reconciliation_history_endpoint(
             "statement":        stmt,
             "status":           _stmt_status(stmt),
             "closing_balance":  0,
-            "_opening_balance": acc.get("opening_balance", 0.0),
+            "_opening_balance": 0.0,  # opening balance is a balance_adjustment tx, not a field
         })
 
     # ════════════════════════════════════════════════════════════════
