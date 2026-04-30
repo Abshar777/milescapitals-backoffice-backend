@@ -2152,6 +2152,7 @@ async def get_clients(
     user: dict = Depends(require_listing_or_view(Modules.CLIENTS)),
     status: Optional[str] = None,
     search: Optional[str] = None,
+    tags: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
 ):
@@ -2164,6 +2165,10 @@ async def get_clients(
             {"last_name": {"$regex": search, "$options": "i"}},
             {"email": {"$regex": search, "$options": "i"}},
         ]
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list:
+            query["tags"] = {"$in": tag_list}
 
     total = await db.clients.count_documents(query)
     total_pages = max(1, (total + page_size - 1) // page_size)
@@ -2332,6 +2337,11 @@ async def update_client(
 ):
 
     updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
+    # Allow explicit empty list for tags
+    raw = update_data.model_dump()
+    if "tags" in raw and raw["tags"] is not None:
+        updates["tags"] = raw["tags"]
+
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
 
@@ -2340,6 +2350,13 @@ async def update_client(
     result = await db.clients.update_one({"client_id": client_id}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Client not found")
+
+    # If tags were updated, backfill all existing transactions for this client
+    if "tags" in updates:
+        await db.transactions.update_many(
+            {"client_id": client_id},
+            {"$set": {"client_tags": updates["tags"], "updated_at": updates["updated_at"]}}
+        )
 
     await log_activity(request, user, "edit", "clients", "Updated client")
 
