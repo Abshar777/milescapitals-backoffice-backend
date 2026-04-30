@@ -2244,6 +2244,114 @@ async def get_clients(
     }
 
 
+@api_router.get("/clients/export")
+async def export_clients(
+    user: dict = Depends(require_permission(Modules.CLIENTS, Actions.VIEW)),
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    tags: Optional[str] = None,
+    min_balance: Optional[float] = None,
+    max_balance: Optional[float] = None,
+    tx_type: Optional[str] = None,
+):
+    import csv, io
+    from fastapi.responses import StreamingResponse
+
+    query = {}
+    if status:
+        query["kyc_status"] = status
+    if search:
+        query["$or"] = [
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}},
+        ]
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list:
+            query["tags"] = {"$in": tag_list}
+
+    clients = await db.clients.find(query, {"_id": 0}).sort("created_at", -1).to_list(None)
+
+    # Transaction aggregation for all matched clients
+    client_ids = [c["client_id"] for c in clients]
+    client_tx_map = {}
+    if client_ids:
+        tx_pipeline = [
+            {"$match": {"client_id": {"$in": client_ids}}},
+            {"$group": {
+                "_id": {"client_id": "$client_id", "type": "$transaction_type"},
+                "total_amount": {"$sum": "$amount"},
+                "count": {"$sum": 1},
+            }},
+        ]
+        for summary in await db.transactions.aggregate(tx_pipeline).to_list(None):
+            cid = summary["_id"]["client_id"]
+            ttype = summary["_id"]["type"]
+            if cid not in client_tx_map:
+                client_tx_map[cid] = {"deposits": 0, "withdrawals": 0, "deposit_count": 0, "withdrawal_count": 0}
+            if ttype == "deposit":
+                client_tx_map[cid]["deposits"] = summary["total_amount"]
+                client_tx_map[cid]["deposit_count"] = summary["count"]
+            elif ttype == "withdrawal":
+                client_tx_map[cid]["withdrawals"] = summary["total_amount"]
+                client_tx_map[cid]["withdrawal_count"] = summary["count"]
+
+    for client in clients:
+        tx = client_tx_map.get(client["client_id"], {})
+        client["total_deposits"] = tx.get("deposits", 0)
+        client["total_withdrawals"] = tx.get("withdrawals", 0)
+        client["deposit_count"] = tx.get("deposit_count", 0)
+        client["withdrawal_count"] = tx.get("withdrawal_count", 0)
+        client["net_balance"] = client["total_deposits"] - client["total_withdrawals"]
+        client["transaction_count"] = client["deposit_count"] + client["withdrawal_count"]
+
+    # Apply client-side-only filters
+    if min_balance is not None:
+        clients = [c for c in clients if c["net_balance"] >= min_balance]
+    if max_balance is not None:
+        clients = [c for c in clients if c["net_balance"] <= max_balance]
+    if tx_type == "deposits_only":
+        clients = [c for c in clients if c["deposit_count"] > 0]
+    elif tx_type == "withdrawals_only":
+        clients = [c for c in clients if c["withdrawal_count"] > 0]
+    elif tx_type == "no_transactions":
+        clients = [c for c in clients if c["transaction_count"] == 0]
+
+    # Resolve tag IDs → names
+    all_tag_docs = {t["tag_id"]: t["name"] for t in await db.client_tags.find({}, {"_id": 0, "tag_id": 1, "name": 1}).to_list(None)}
+
+    # Build CSV
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    writer.writerow(["Client ID", "Name", "Email", "Phone", "Country", "KYC Status", "Tags",
+                     "Total Deposits", "Deposit Count", "Total Withdrawals", "Withdrawal Count", "Net Balance"])
+    for c in clients:
+        tag_names = "; ".join(all_tag_docs.get(tid, tid) for tid in (c.get("tags") or []))
+        writer.writerow([
+            c["client_id"],
+            f"{c.get('first_name', '')} {c.get('last_name', '')}".strip(),
+            c.get("email", ""),
+            c.get("phone", "") or "",
+            c.get("country", "") or "",
+            c.get("kyc_status", ""),
+            tag_names,
+            c["total_deposits"],
+            c["deposit_count"],
+            c["total_withdrawals"],
+            c["withdrawal_count"],
+            c["net_balance"],
+        ])
+
+    filename = f"clients_{datetime.now().strftime('%Y-%m-%d')}.csv"
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @api_router.get("/clients/{client_id}")
 async def get_client(
     client_id: str,
