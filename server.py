@@ -18907,12 +18907,18 @@ async def get_reconciliation_history_endpoint(
 
     # ════════════════════════════════════════════════════════════════
     # 1. TREASURY
-    #    Mirrors the canonical balance-fix formula exactly:
-    #      - Start cumulative from 0 (opening balance is stored as a
-    #        balance_adjustment treasury_transaction by balance-fix)
-    #      - Use abs(amount) + sign from transaction_type
-    #      - outflow_types always negative, everything else positive
-    #    This makes closing_balance == account.balance on the latest date.
+    #    Uses abs(amount) + sign from transaction_type (same as balance-fix).
+    #    Closing balance is anchored to account.balance (always authoritative):
+    #
+    #      implied_start = account.balance − sum(all treasury_tx signed)
+    #
+    #    This covers all accounts regardless of whether balance-fix was run:
+    #      - balance-fix run     → opening_balance is a balance_adjustment tx
+    #                              → implied_start = 0
+    #      - balance-fix NOT run → opening_balance only in account field,
+    #                              old transactions may be in db.transactions
+    #                              → implied_start = the missing gap
+    #    Either way the final cumulative == account.balance exactly.
     # ════════════════════════════════════════════════════════════════
     _TREASURY_OUTFLOW_TYPES = [
         "debt_payment", "withdrawal", "transfer_out", "expense",
@@ -18920,10 +18926,40 @@ async def get_reconciliation_history_endpoint(
     ]
 
     treasury_accounts = await db.treasury_accounts.find(
-        {}, {"_id": 0, "account_id": 1, "account_name": 1, "currency": 1}
+        {}, {"_id": 0, "account_id": 1, "account_name": 1, "currency": 1, "balance": 1}
     ).to_list(200)
     acc_map = {a["account_id"]: a for a in treasury_accounts}
 
+    # Signed-amount expression reused in both pipelines
+    _trs_signed_amt = {
+        "$cond": [
+            {"$in": ["$transaction_type", _TREASURY_OUTFLOW_TYPES]},
+            {"$multiply": [-1, {"$abs": "$amount"}]},
+            {"$abs": "$amount"},
+        ]
+    }
+
+    # 1a. All-time total per account — used to compute implied starting balance
+    trs_total_pipeline = [
+        {"$group": {
+            "_id": "$account_id",
+            "total_signed": {"$sum": _trs_signed_amt},
+        }},
+    ]
+    trs_tx_totals = {
+        r["_id"]: r["total_signed"]
+        for r in await db.treasury_transactions.aggregate(trs_total_pipeline).to_list(200)
+    }
+
+    # implied_start[account_id] = account.balance − sum(all treasury_tx signed)
+    implied_start: dict = {}
+    for acc in treasury_accounts:
+        aid = acc["account_id"]
+        implied_start[aid] = round(
+            acc.get("balance", 0.0) - trs_tx_totals.get(aid, 0.0), 2
+        )
+
+    # 1b. Daily net per (account, date, currency)
     trs_pipeline = [
         {"$group": {
             "_id": {
@@ -18931,14 +18967,8 @@ async def get_reconciliation_history_endpoint(
                 "account_id": "$account_id",
                 "currency":   {"$ifNull": ["$currency", "USD"]},
             },
-            "net_amount": {"$sum": {
-                "$cond": [
-                    {"$in": ["$transaction_type", _TREASURY_OUTFLOW_TYPES]},
-                    {"$multiply": [-1, {"$abs": "$amount"}]},
-                    {"$abs": "$amount"},
-                ]
-            }},
-            "tx_count": {"$sum": 1},
+            "net_amount": {"$sum": _trs_signed_amt},
+            "tx_count":   {"$sum": 1},
         }},
     ]
     for r in await db.treasury_transactions.aggregate(trs_pipeline).to_list(10000):
@@ -18958,7 +18988,7 @@ async def get_reconciliation_history_endpoint(
             "statement":        stmt,
             "status":           _stmt_status(stmt),
             "closing_balance":  0,
-            "_opening_balance": 0.0,  # opening balance is a balance_adjustment tx, not a field
+            "_opening_balance": implied_start.get(aid, 0.0),
         })
 
     # ════════════════════════════════════════════════════════════════
