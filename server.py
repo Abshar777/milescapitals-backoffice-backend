@@ -2353,9 +2353,14 @@ async def update_client(
 
     # If tags were updated, backfill all existing transactions for this client
     if "tags" in updates:
+        # Convert tag IDs to tag names for storage on transactions
+        tag_docs = await db.client_tags.find(
+            {"tag_id": {"$in": updates["tags"]}}, {"_id": 0, "name": 1}
+        ).to_list(None)
+        tag_names = [t["name"] for t in tag_docs]
         await db.transactions.update_many(
             {"client_id": client_id},
-            {"$set": {"client_tags": updates["tags"], "updated_at": updates["updated_at"]}}
+            {"$set": {"client_tags": tag_names, "updated_at": updates["updated_at"]}}
         )
 
     await log_activity(request, user, "edit", "clients", "Updated client")
@@ -2383,10 +2388,14 @@ async def update_client_tags(
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # Backfill all existing transactions for this client
+    # Convert tag IDs to tag names for storage on transactions
+    tag_docs = await db.client_tags.find(
+        {"tag_id": {"$in": new_tags}}, {"_id": 0, "name": 1}
+    ).to_list(None)
+    tag_names = [t["name"] for t in tag_docs]
     await db.transactions.update_many(
         {"client_id": client_id},
-        {"$set": {"client_tags": new_tags, "updated_at": now}}
+        {"$set": {"client_tags": tag_names, "updated_at": now}}
     )
 
     await log_activity(request, user, "edit", "clients", f"Updated client tags: {new_tags}")
@@ -10878,12 +10887,15 @@ async def _create_transaction_impl(
             vendor_commission_amount = round(
                 usd_amount * vendor_commission_rate / 100, 2
             )
-    # Parse client_tags: either from form (comma-separated string) or from client defaults
+    # Parse client_tags: either from form (comma-separated names) or from client defaults (IDs → names)
     tx_client_tags = []
     if client_tags_str:
         tx_client_tags = [t.strip() for t in client_tags_str.split(",") if t.strip()]
     elif client.get("tags"):
-        tx_client_tags = client["tags"]
+        tag_docs = await db.client_tags.find(
+            {"tag_id": {"$in": client["tags"]}}, {"_id": 0, "name": 1}
+        ).to_list(None)
+        tx_client_tags = [t["name"] for t in tag_docs]
 
     tx_doc = {
         "transaction_id": tx_id,
@@ -12013,13 +12025,16 @@ async def create_transaction_request(
     #         detail=f"Possible duplicate: Similar request created recently (Request ID: {recent_dup['request_id']}). Wait 5 minutes or use a unique reference.",
     #     )
 
-    # Parse client_tags
+    # Parse client_tags: either from request (comma-separated names) or from client defaults (IDs → names)
     tx_client_tags = []
     if client_tags:
         tx_client_tags = [t.strip() for t in client_tags.split(",") if t.strip()]
     elif client.get("tags"):
-        tx_client_tags = client["tags"]
-    
+        tag_docs = await db.client_tags.find(
+            {"tag_id": {"$in": client["tags"]}}, {"_id": 0, "name": 1}
+        ).to_list(None)
+        tx_client_tags = [t["name"] for t in tag_docs]
+
     # Handle multiple proof images/PDFs upload
     proof_urls = []
     for img in (proof_images or []):
