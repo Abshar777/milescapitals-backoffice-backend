@@ -1691,6 +1691,10 @@ async def get_notification_preferences(user: dict = Depends(get_current_user)):
         "approval_notifications": (
             prefs.get("approval_notifications", True) if prefs else True
         ),
+        # Master email toggle — default ON
+        "email_notifications": (
+            prefs.get("email_notifications", True) if prefs else True
+        ),
     }
 
 
@@ -1703,11 +1707,57 @@ async def update_notification_preferences(
     updates = {"user_id": user["user_id"], "updated_at": now.isoformat()}
     if "approval_notifications" in data:
         updates["approval_notifications"] = bool(data["approval_notifications"])
+    if "email_notifications" in data:
+        updates["email_notifications"] = bool(data["email_notifications"])
 
     await db.user_preferences.update_one(
         {"user_id": user["user_id"]}, {"$set": updates}, upsert=True
     )
     return {"message": "Preferences updated"}
+
+
+async def _emails_enabled(user_ids: list) -> set:
+    """
+    Return the set of user_ids whose email_notifications preference is enabled
+    (True or not set = default ON). Used to filter recipient lists.
+    """
+    if not user_ids:
+        return set()
+    # Only fetch users who have explicitly disabled emails
+    opted_out = await db.user_preferences.find(
+        {"user_id": {"$in": user_ids}, "email_notifications": False},
+        {"_id": 0, "user_id": 1},
+    ).to_list(500)
+    disabled = {p["user_id"] for p in opted_out}
+    return set(user_ids) - disabled  # enabled = all minus disabled
+
+
+async def _filter_emails_by_preference(emails: list) -> list:
+    """
+    Given a list of email addresses, return only those belonging to users
+    who have email_notifications enabled (default ON).
+    Emails not found in db.users are kept (unknown = assume enabled).
+    """
+    if not emails:
+        return []
+    users = await db.users.find(
+        {"email": {"$in": emails}},
+        {"_id": 0, "user_id": 1, "email": 1},
+    ).to_list(500)
+    user_ids = [u["user_id"] for u in users]
+    email_to_uid = {u["email"].lower(): u["user_id"] for u in users}
+
+    enabled_ids = await _emails_enabled(user_ids)
+
+    result = []
+    for email in emails:
+        uid = email_to_uid.get(email.lower())
+        if uid is None:
+            result.append(email)   # not a system user → keep
+        elif uid in enabled_ids:
+            result.append(email)   # preference is ON → keep
+        # else: opted out → skip
+    return result
 
 
 @api_router.post("/auth/forgot-password")
@@ -21293,9 +21343,11 @@ async def send_approval_notification(notification_type: str, details: dict):
             return
 
         # Filter by notification preference (default: ON)
+        # A user is opted-out if either approval_notifications=False OR email_notifications=False
         approver_ids = [u["user_id"] for u in approvers]
         prefs = await db.user_preferences.find(
-            {"user_id": {"$in": approver_ids}, "approval_notifications": False},
+            {"user_id": {"$in": approver_ids},
+             "$or": [{"approval_notifications": False}, {"email_notifications": False}]},
             {"_id": 0, "user_id": 1},
         ).to_list(50)
         opted_out = set(p["user_id"] for p in prefs)
@@ -21379,11 +21431,14 @@ async def send_exchanger_notification(
         if not user_doc or not user_doc.get("email"):
             return
 
-        # Check notification preference
+        # Check notification preference — skip if either master or approval toggle is off
         prefs = await db.user_preferences.find_one(
             {"user_id": user_doc["user_id"]}, {"_id": 0}
         )
-        if prefs and prefs.get("approval_notifications") is False:
+        if prefs and (
+            prefs.get("email_notifications") is False
+            or prefs.get("approval_notifications") is False
+        ):
             return
 
         smtp_settings = await db.app_settings.find_one(
@@ -21651,12 +21706,15 @@ async def send_daily_report_now(
         # Generate the daily report
         html_content = await generate_daily_report_html()
 
-        # Send to all directors
+        # Send to directors who have email notifications enabled
         now = datetime.now(timezone.utc)
         subject = f"Miles Capitals Daily Report - {now.strftime('%Y-%m-%d')}"
+        filtered_emails = await _filter_emails_by_preference(director_emails)
+        if not filtered_emails:
+            return {"message": "No recipients with email notifications enabled"}
 
         await send_email(
-            to_emails=director_emails,
+            to_emails=filtered_emails,
             subject=subject,
             html_content=html_content,
             smtp_host=smtp_host,
@@ -21666,9 +21724,9 @@ async def send_daily_report_now(
             smtp_from_email=smtp_from_email,
         )
 
-        logger.info(f"Daily report sent manually to: {director_emails}")
+        logger.info(f"Daily report sent manually to: {filtered_emails}")
         return {
-            "message": f"Daily report sent successfully to {', '.join(director_emails)}"
+            "message": f"Daily report sent successfully to {', '.join(filtered_emails)}"
         }
     except HTTPException:
         raise
@@ -22553,23 +22611,25 @@ async def send_daily_report():
 
             html_content = await generate_daily_report_html()
 
-            await send_email(
-                to_emails=settings["director_emails"],
-                subject=f"Miles Capitals - Daily Report ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})",
-                html_content=html_content,
-                smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
-                smtp_port=settings.get("smtp_port", 587),
-                smtp_email=settings["smtp_email"],
-                smtp_password=settings["smtp_password"],
-                smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"]),
-            )
+            filtered_directors = await _filter_emails_by_preference(settings["director_emails"])
+            if filtered_directors:
+                await send_email(
+                    to_emails=filtered_directors,
+                    subject=f"Miles Capitals - Daily Report ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})",
+                    html_content=html_content,
+                    smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
+                    smtp_port=settings.get("smtp_port", 587),
+                    smtp_email=settings["smtp_email"],
+                    smtp_password=settings["smtp_password"],
+                    smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"]),
+                )
 
             # Mark claimed slot as sent
             await db.email_logs.update_one(
                 {"log_id": today_key},
                 {
                     "$set": {
-                        "recipients": settings["director_emails"],
+                        "recipients": filtered_directors,
                         "status": "sent",
                         "sent_at": datetime.now(timezone.utc).isoformat(),
                     }
@@ -22614,8 +22674,12 @@ async def send_report_now(
     try:
         html_content = await generate_daily_report_html()
 
+        filtered_directors = await _filter_emails_by_preference(settings["director_emails"])
+        if not filtered_directors:
+            return {"message": "No recipients with email notifications enabled"}
+
         await send_email(
-            to_emails=settings["director_emails"],
+            to_emails=filtered_directors,
             subject=f"Miles Capitals - Daily Report ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})",
             html_content=html_content,
             smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
@@ -22626,7 +22690,7 @@ async def send_report_now(
         )
 
         return {
-            "message": f"Report sent to {len(settings['director_emails'])} directors"
+            "message": f"Report sent to {len(filtered_directors)} directors"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to send report: {str(e)}")
@@ -23174,22 +23238,24 @@ async def send_monthly_report():
 
         month_name = calendar.month_name[now.month]
 
-        await send_email(
-            to_emails=settings["director_emails"],
-            subject=f"Miles Capitals - Monthly Report ({month_name} {now.year})",
-            html_content=html_content,
-            smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
-            smtp_port=settings.get("smtp_port", 587),
-            smtp_email=settings["smtp_email"],
-            smtp_password=settings["smtp_password"],
-            smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"]),
-        )
+        filtered_directors = await _filter_emails_by_preference(settings["director_emails"])
+        if filtered_directors:
+            await send_email(
+                to_emails=filtered_directors,
+                subject=f"Miles Capitals - Monthly Report ({month_name} {now.year})",
+                html_content=html_content,
+                smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
+                smtp_port=settings.get("smtp_port", 587),
+                smtp_email=settings["smtp_email"],
+                smtp_password=settings["smtp_password"],
+                smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"]),
+            )
 
         await db.email_logs.insert_one(
             {
                 "log_id": f"email_{uuid.uuid4().hex[:12]}",
                 "type": "monthly_report",
-                "recipients": settings["director_emails"],
+                "recipients": filtered_directors,
                 "status": "sent",
                 "month": f"{now.year}-{now.month:02d}",
                 "sent_at": datetime.now(timezone.utc).isoformat(),
@@ -23258,8 +23324,12 @@ async def send_monthly_report_now(
 
         month_name = calendar.month_name[m]
 
+        filtered_directors = await _filter_emails_by_preference(settings["director_emails"])
+        if not filtered_directors:
+            return {"message": "No recipients with email notifications enabled"}
+
         await send_email(
-            to_emails=settings["director_emails"],
+            to_emails=filtered_directors,
             subject=f"Miles Capitals - Monthly Report ({month_name} {y})",
             html_content=html_content,
             smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
@@ -23270,7 +23340,7 @@ async def send_monthly_report_now(
         )
 
         return {
-            "message": f"Monthly report for {month_name} {y} sent to {len(settings['director_emails'])} directors"
+            "message": f"Monthly report for {month_name} {y} sent to {len(filtered_directors)} directors"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to send report: {str(e)}")
@@ -23712,21 +23782,23 @@ async def send_audit_alert_email(result: dict):
 
         html += "</div>"
 
-        await send_email(
-            to_emails=audit_settings["alert_emails"],
-            subject=f"Miles Capitals - Audit Alert (Score: {score}/100)",
-            html_content=html,
-            smtp_host=smtp_settings.get("smtp_host", "smtp.gmail.com"),
-            smtp_port=smtp_settings.get("smtp_port", 587),
-            smtp_email=smtp_settings["smtp_email"],
-            smtp_password=smtp_settings["smtp_password"],
-            smtp_from_email=smtp_settings.get(
-                "smtp_from_email", smtp_settings["smtp_email"]
-            ),
-        )
-        logger.info(
-            f"Audit alert sent to {len(audit_settings['alert_emails'])} recipients"
-        )
+        filtered_alert_emails = await _filter_emails_by_preference(audit_settings["alert_emails"])
+        if filtered_alert_emails:
+            await send_email(
+                to_emails=filtered_alert_emails,
+                subject=f"Miles Capitals - Audit Alert (Score: {score}/100)",
+                html_content=html,
+                smtp_host=smtp_settings.get("smtp_host", "smtp.gmail.com"),
+                smtp_port=smtp_settings.get("smtp_port", 587),
+                smtp_email=smtp_settings["smtp_email"],
+                smtp_password=smtp_settings["smtp_password"],
+                smtp_from_email=smtp_settings.get(
+                    "smtp_from_email", smtp_settings["smtp_email"]
+                ),
+            )
+            logger.info(
+                f"Audit alert sent to {len(filtered_alert_emails)} recipients"
+            )
     except Exception as e:
         logger.error(f"Failed to send audit alert: {e}")
 
