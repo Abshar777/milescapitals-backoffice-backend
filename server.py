@@ -307,6 +307,7 @@ class RoleCreate(BaseModel):
     permissions: dict = {}  # {module: [actions]}
     is_system_role: bool = False
     hierarchy_level: int = 0  # Higher = more access
+    treasury_account_ids: Optional[List[str]] = None  # None = all accounts; list = specific only
 
 
 class RoleUpdate(BaseModel):
@@ -315,6 +316,7 @@ class RoleUpdate(BaseModel):
     permissions: Optional[dict] = None
     hierarchy_level: Optional[int] = None
     is_active: Optional[bool] = None
+    treasury_account_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific
 
 
 class UserPermissionOverride(BaseModel):
@@ -2835,6 +2837,13 @@ async def get_treasury_accounts(
     page_size: int = Query(50, ge=1, le=200),
 ):
     query = {}
+    # Restrict to role-allowed treasury accounts (non-admin only)
+    if user.get("role") != "admin":
+        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+        allowed_ids = user_role.get("treasury_account_ids") if user_role else None
+        if allowed_ids:
+            query["account_id"] = {"$in": allowed_ids}
+
     if search:
         query["$or"] = [
             {"account_name": {"$regex": search, "$options": "i"}},
@@ -2888,6 +2897,13 @@ async def get_treasury_account(
     account_id: str,
     user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW)),
 ):
+    # Enforce role-level treasury account restriction
+    if user.get("role") != "admin":
+        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+        allowed_ids = user_role.get("treasury_account_ids") if user_role else None
+        if allowed_ids and account_id not in allowed_ids:
+            raise HTTPException(status_code=403, detail="Access to this treasury account is not permitted")
+
     account = await db.treasury_accounts.find_one(
         {"account_id": account_id}, {"_id": 0}
     )
@@ -21039,7 +21055,11 @@ async def update_role(
         raise HTTPException(status_code=400, detail="Cannot deactivate system roles")
 
     now = datetime.now(timezone.utc)
+    # Allow treasury_account_ids=[] to explicitly clear the restriction
     updates = {k: v for k, v in role_data.model_dump().items() if v is not None}
+    if role_data.treasury_account_ids is not None:
+        # Explicitly set even if empty list (clearing restriction)
+        updates["treasury_account_ids"] = role_data.treasury_account_ids if role_data.treasury_account_ids else None
     updates["updated_at"] = now.isoformat()
 
     await db.roles.update_one({"role_id": role_id}, {"$set": updates})
