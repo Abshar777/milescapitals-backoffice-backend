@@ -308,6 +308,7 @@ class RoleCreate(BaseModel):
     is_system_role: bool = False
     hierarchy_level: int = 0  # Higher = more access
     treasury_account_ids: Optional[List[str]] = None  # None = all accounts; list = specific only
+    borrower_ids: Optional[List[str]] = None  # None = all borrower companies; list = specific only
 
 
 class RoleUpdate(BaseModel):
@@ -317,6 +318,7 @@ class RoleUpdate(BaseModel):
     hierarchy_level: Optional[int] = None
     is_active: Optional[bool] = None
     treasury_account_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific
+    borrower_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific
 
 
 class UserPermissionOverride(BaseModel):
@@ -15171,7 +15173,14 @@ async def get_vendor_borrowers(
     user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW))
 ):
     """Get all vendors that can be borrowers with their loan stats"""
-    vendors = await db.vendors.find({}, {"_id": 0}).to_list(1000)
+    vendor_query = {}
+    # Restrict to role-allowed borrower companies (non-admin only)
+    if user.get("role") != "admin":
+        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+        allowed_borrowers = user_role.get("borrower_ids") if user_role else None
+        if allowed_borrowers:
+            vendor_query["vendor_id"] = {"$in": allowed_borrowers}
+    vendors = await db.vendors.find(vendor_query, {"_id": 0}).to_list(1000)
 
     # Get loan stats for each vendor
     vendor_stats = {}
@@ -15263,12 +15272,25 @@ async def get_loans(
 ):
     """Get all loans with optional filters"""
     query = {}
+
+    # Restrict to role-allowed borrower companies (non-admin only)
+    if user.get("role") != "admin":
+        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+        allowed_borrowers = user_role.get("borrower_ids") if user_role else None
+        if allowed_borrowers:
+            query["vendor_id"] = {"$in": allowed_borrowers}
+
     if status:
         query["status"] = status
     if borrower:
         query["borrower_name"] = {"$regex": borrower, "$options": "i"}
     if vendor_id:
-        query["vendor_id"] = vendor_id
+        # Only allow if vendor_id is within allowed borrowers
+        if "vendor_id" in query and isinstance(query["vendor_id"], dict):
+            if vendor_id in query["vendor_id"]["$in"]:
+                query["vendor_id"] = vendor_id
+        else:
+            query["vendor_id"] = vendor_id
     if search:
         query["$or"] = [
             {"borrower_name": {"$regex": search, "$options": "i"}},
@@ -15394,6 +15416,13 @@ async def create_loan(
     user: dict = Depends(require_permission(Modules.LOANS, Actions.CREATE)),
 ):
     """Create a new loan and deduct from treasury or vendor"""
+
+    # Enforce borrower restriction for non-admin roles
+    if user.get("role") != "admin" and loan_data.vendor_id:
+        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+        allowed_borrowers = user_role.get("borrower_ids") if user_role else None
+        if allowed_borrowers and loan_data.vendor_id not in allowed_borrowers:
+            raise HTTPException(status_code=403, detail="You are not permitted to create loans for this borrower company")
 
     # Validate that at least one source is provided
     if not loan_data.treasury_account_id and not loan_data.disburse_from_vendor_id:
@@ -21055,11 +21084,12 @@ async def update_role(
         raise HTTPException(status_code=400, detail="Cannot deactivate system roles")
 
     now = datetime.now(timezone.utc)
-    # Allow treasury_account_ids=[] to explicitly clear the restriction
+    # Allow _ids=[] to explicitly clear restrictions
     updates = {k: v for k, v in role_data.model_dump().items() if v is not None}
     if role_data.treasury_account_ids is not None:
-        # Explicitly set even if empty list (clearing restriction)
         updates["treasury_account_ids"] = role_data.treasury_account_ids if role_data.treasury_account_ids else None
+    if role_data.borrower_ids is not None:
+        updates["borrower_ids"] = role_data.borrower_ids if role_data.borrower_ids else None
     updates["updated_at"] = now.isoformat()
 
     await db.roles.update_one({"role_id": role_id}, {"$set": updates})
