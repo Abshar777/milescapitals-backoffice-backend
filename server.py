@@ -1702,6 +1702,7 @@ async def get_notification_preferences(user: dict = Depends(get_current_user)):
 async def update_notification_preferences(
     data: dict = Body(...), user: dict = Depends(get_current_user)
 ):
+
     """Update current user's notification preferences"""
     now = datetime.now(timezone.utc)
     updates = {"user_id": user["user_id"], "updated_at": now.isoformat()}
