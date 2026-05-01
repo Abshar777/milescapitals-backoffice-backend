@@ -18997,7 +18997,24 @@ async def get_reconciliation_history_endpoint(
     #          - reserve_fund_amount
     #          - withdrawal_amount
     #          - withdrawal_extra_commission
+    #
+    #    Per-PSP currency overrides: amounts stored in USD but displayed
+    #    in the target currency using the manual FX rate.
+    #    Override map: { psp_id: target_currency }
     # ════════════════════════════════════════════════════════════════
+    # Currency overrides for specific PSPs (USD → target_currency)
+    _PSP_CURRENCY_OVERRIDES: dict = {
+        "psp_38939aefc5f3": "EUR",  # UNIPAYMENT: display in EUR
+    }
+
+    # Load manual FX rates: { "EUR": 1.15, "AED": 0.2722, ... }
+    # Rate meaning: 1 target_currency = rate USD
+    # So: amount_target = amount_usd / rate
+    _psp_fx_settings = await db.app_settings.find_one(
+        {"setting_type": "manual_fx_rates"}, {"_id": 0}
+    )
+    _psp_manual_rates: dict = _psp_fx_settings.get("rates", {}) if _psp_fx_settings else {}
+
     psps = await db.psps.find({}, {"_id": 0, "psp_id": 1, "psp_name": 1}).to_list(100)
     psp_map = {p["psp_id"]: p for p in psps}
 
@@ -19041,18 +19058,34 @@ async def get_reconciliation_history_endpoint(
         date = r["_id"]["date"]
         psp  = psp_map.get(pid, {})
         stmt = stmt_lookup.get((pid, date))
-        net  = round(
-            r["deposit_net"] - r["reserve_fund"]
-            - r["withdrawal_amount"] - r["withdrawal_extra_comm"],
-            2,
-        )
+
+        dep_net  = r["deposit_net"]
+        res_fund = r["reserve_fund"]
+        wth_amt  = r["withdrawal_amount"]
+        wth_comm = r["withdrawal_extra_comm"]
+
+        # Apply per-PSP currency override (convert from USD → target currency)
+        override_currency = _PSP_CURRENCY_OVERRIDES.get(pid)
+        if override_currency and override_currency != "USD":
+            fx_rate = _psp_manual_rates.get(override_currency)
+            if fx_rate and fx_rate > 0:
+                dep_net  = round(dep_net  / fx_rate, 2)
+                res_fund = round(res_fund / fx_rate, 2)
+                wth_amt  = round(wth_amt  / fx_rate, 2)
+                wth_comm = round(wth_comm / fx_rate, 2)
+            row_currency = override_currency
+        else:
+            row_currency = "USD"
+
+        net = round(dep_net - res_fund - wth_amt - wth_comm, 2)
+
         all_rows.append({
             "key":              f"{pid}-{date}",
             "account_id":       pid,
             "account_name":     psp.get("psp_name", "Unknown"),
             "account_type":     "psp",
             "date":             date,
-            "currency":         "USD",
+            "currency":         row_currency,
             "net_amount":       net,
             "tx_count":         r["tx_count"],
             "statement":        stmt,
