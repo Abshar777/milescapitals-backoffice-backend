@@ -23523,6 +23523,7 @@ async def run_audit_checks() -> dict:
                         "description": f"PSP rate is {expected_rate}%, but transaction shows {actual_rate}% ({reserve_fund:,.2f} of {amount:,.2f})",
                         "transaction_id": tx["transaction_id"],
                         "reference": tx.get("reference"),
+              
                     }
                 )
                 stats["warning"] += 1
