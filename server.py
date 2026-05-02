@@ -2507,6 +2507,20 @@ async def create_client(
     if existing:
         raise HTTPException(status_code=400, detail="Client email already exists")
 
+    # CRM Customer ID is required
+    crm_id = (client_data.crm_customer_id or "").strip()
+    if not crm_id:
+        raise HTTPException(status_code=400, detail="CRM Customer ID is required")
+
+    # CRM Customer ID must be unique (case-insensitive)
+    crm_conflict = await db.clients.find_one(
+        {"crm_customer_id": crm_id},
+        {"_id": 0, "client_id": 1},
+        collation={"locale": "en", "strength": 2},
+    )
+    if crm_conflict:
+        raise HTTPException(status_code=400, detail="CRM Customer ID already exists")
+
     client_id = f"client_{uuid.uuid4().hex[:12]}"
     now = datetime.now(timezone.utc)
 
@@ -2542,6 +2556,19 @@ async def update_client(
 
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
+
+    # If CRM Customer ID is being changed, check uniqueness (case-insensitive, exclude self)
+    if "crm_customer_id" in updates:
+        new_crm = (updates["crm_customer_id"] or "").strip()
+        if new_crm:
+            crm_conflict = await db.clients.find_one(
+                {"crm_customer_id": new_crm, "client_id": {"$ne": client_id}},
+                {"_id": 0, "client_id": 1},
+                collation={"locale": "en", "strength": 2},
+            )
+            if crm_conflict:
+                raise HTTPException(status_code=400, detail="CRM Customer ID already exists")
+            updates["crm_customer_id"] = new_crm  # store trimmed value
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -2659,11 +2686,14 @@ async def bulk_upload_clients(
     skipped = 0
     errors = []
 
-    # Get existing emails for duplicate check
+    # Pre-load existing emails AND CRM IDs for duplicate checks
     existing_emails = set()
-    async for doc in db.clients.find({}, {"email": 1, "_id": 0}):
+    existing_crm_ids = set()   # lower-cased for case-insensitive comparison
+    async for doc in db.clients.find({}, {"email": 1, "crm_customer_id": 1, "_id": 0}):
         if doc.get("email"):
             existing_emails.add(doc["email"].lower().strip())
+        if doc.get("crm_customer_id"):
+            existing_crm_ids.add(doc["crm_customer_id"].lower().strip())
 
     bulk_docs = []
     for idx, row in enumerate(data_rows):
@@ -2706,11 +2736,24 @@ async def bulk_upload_clients(
                 skipped += 1
                 continue
 
+            # CRM Customer ID is required for every row
+            if not crm_id:
+                errors.append(f"Row {idx + 2}: CRM Customer ID is required")
+                skipped += 1
+                continue
+
             if email in existing_emails:
                 skipped += 1
                 continue
 
+            # CRM Customer ID must be unique (case-insensitive, across DB + current batch)
+            if crm_id.lower() in existing_crm_ids:
+                errors.append(f"Row {idx + 2}: CRM Customer ID '{crm_id}' already exists")
+                skipped += 1
+                continue
+
             existing_emails.add(email)
+            existing_crm_ids.add(crm_id.lower())
             client_id = f"client_{uuid.uuid4().hex[:12]}"
 
             bulk_docs.append(
@@ -25163,6 +25206,215 @@ async def reinstate_psp_settlement(
     return {"message": "PSP settlement reinstated successfully", "settlement_id": settlement_id}
 
 
+# ── Treasury Internal Transfer reinstate ───────────────────────────────────
+
+@api_router.get("/reinstate/treasury-transfers")
+async def reinstate_list_treasury_transfers(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    search: str = Query(None),
+    user: dict = Depends(require_admin),
+):
+    """List treasury internal transfers available for reinstatement.
+    We list the transfer_out leg (one per transfer_id) and enrich it with the
+    matching transfer_in leg so the UI has both account names and amounts.
+    """
+    query: dict = {"transaction_type": "transfer_out"}
+    if search:
+        query["$or"] = [
+            {"transfer_id": {"$regex": search, "$options": "i"}},
+            {"reference": {"$regex": search, "$options": "i"}},
+            {"related_account_name": {"$regex": search, "$options": "i"}},
+            {"notes": {"$regex": search, "$options": "i"}},
+        ]
+
+    total = await db.treasury_transactions.count_documents(query)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    skip = (page - 1) * page_size
+
+    out_legs = (
+        await db.treasury_transactions.find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(page_size)
+        .to_list(page_size)
+    )
+
+    # Enrich with in-leg details so the frontend has both sides
+    transfer_ids = [t["transfer_id"] for t in out_legs if t.get("transfer_id")]
+    in_legs = await db.treasury_transactions.find(
+        {"transfer_id": {"$in": transfer_ids}, "transaction_type": "transfer_in"},
+        {"_id": 0},
+    ).to_list(len(transfer_ids))
+    in_map = {t["transfer_id"]: t for t in in_legs}
+
+    items = []
+    for out in out_legs:
+        tid = out.get("transfer_id")
+        in_leg = in_map.get(tid, {})
+        items.append({
+            "transfer_id": tid,
+            "source_account_id": out.get("account_id"),
+            "source_account_name": in_leg.get("related_account_name", out.get("account_id")),
+            "source_amount": abs(out.get("amount", 0)),
+            "source_currency": out.get("currency", "USD"),
+            "destination_account_id": in_leg.get("account_id", out.get("related_account_id")),
+            "destination_account_name": out.get("related_account_name", in_leg.get("account_id", "-")),
+            "destination_amount": in_leg.get("amount", out.get("destination_amount", 0)),
+            "destination_currency": in_leg.get("currency", out.get("destination_currency", "USD")),
+            "exchange_rate": out.get("exchange_rate"),
+            "notes": out.get("notes"),
+            "created_at": out.get("created_at"),
+            "created_by_name": out.get("created_by_name"),
+            # keep both leg IDs for reference
+            "out_tx_id": out.get("treasury_transaction_id"),
+            "in_tx_id": in_leg.get("treasury_transaction_id"),
+        })
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
+
+
+@api_router.get("/reinstate/treasury-transfers/{transfer_id}/preview")
+async def reinstate_treasury_transfer_preview(
+    transfer_id: str,
+    user: dict = Depends(require_admin),
+):
+    """Preview the balance changes that reinstating a treasury transfer would cause."""
+    legs = await db.treasury_transactions.find(
+        {"transfer_id": transfer_id}, {"_id": 0}
+    ).to_list(10)
+
+    if not legs:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+
+    out_leg = next((t for t in legs if t.get("transaction_type") == "transfer_out"), None)
+    in_leg  = next((t for t in legs if t.get("transaction_type") == "transfer_in"),  None)
+
+    if not out_leg or not in_leg:
+        raise HTTPException(status_code=400, detail="Transfer legs incomplete — cannot preview")
+
+    source_id = out_leg["account_id"]
+    dest_id   = in_leg["account_id"]
+
+    source_acc = await db.treasury_accounts.find_one({"account_id": source_id}, {"_id": 0})
+    dest_acc   = await db.treasury_accounts.find_one({"account_id": dest_id},   {"_id": 0})
+
+    source_amount = abs(out_leg.get("amount", 0))
+    dest_amount   = in_leg.get("amount", 0)
+
+    balance_changes = []
+    if source_acc:
+        balance_changes.append({
+            "type": "treasury",
+            "account_id": source_id,
+            "account_name": source_acc.get("account_name", source_id),
+            "currency": source_acc.get("currency", out_leg.get("currency", "USD")),
+            "balance_before": source_acc.get("balance", 0),
+            "balance_after": source_acc.get("balance", 0) + source_amount,
+            "change": source_amount,
+            "description": "Source account restored (transfer_out reversed)",
+        })
+    if dest_acc:
+        balance_changes.append({
+            "type": "treasury",
+            "account_id": dest_id,
+            "account_name": dest_acc.get("account_name", dest_id),
+            "currency": dest_acc.get("currency", in_leg.get("currency", "USD")),
+            "balance_before": dest_acc.get("balance", 0),
+            "balance_after": dest_acc.get("balance", 0) - dest_amount,
+            "change": -dest_amount,
+            "description": "Destination account reversed (transfer_in removed)",
+        })
+
+    # Surface item details for the preview header
+    item = {
+        "transfer_id": transfer_id,
+        "source_account": source_acc.get("account_name", source_id) if source_acc else source_id,
+        "destination_account": dest_acc.get("account_name", dest_id) if dest_acc else dest_id,
+        "source_amount": source_amount,
+        "source_currency": out_leg.get("currency", "USD"),
+        "destination_amount": dest_amount,
+        "destination_currency": in_leg.get("currency", "USD"),
+        "exchange_rate": out_leg.get("exchange_rate"),
+        "notes": out_leg.get("notes"),
+        "created_at": out_leg.get("created_at"),
+        "created_by_name": out_leg.get("created_by_name"),
+    }
+
+    return {
+        "item": item,
+        "balance_changes": balance_changes,
+        "affected_records": [
+            {
+                "type": "info",
+                "description": f"2 treasury transaction records (transfer_out + transfer_in) will be deleted for transfer {transfer_id}",
+            }
+        ],
+        "vendor_stats": None,
+        "psp_changes": None,
+        "loan_changes": None,
+    }
+
+
+@api_router.post("/reinstate/treasury-transfers/{transfer_id}")
+async def reinstate_treasury_transfer(
+    request: Request,
+    transfer_id: str,
+    user: dict = Depends(require_admin),
+):
+    """Reinstate a treasury internal transfer: reverse both account balance changes and delete both legs."""
+    legs = await db.treasury_transactions.find(
+        {"transfer_id": transfer_id}, {"_id": 0}
+    ).to_list(10)
+
+    if not legs:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+
+    out_leg = next((t for t in legs if t.get("transaction_type") == "transfer_out"), None)
+    in_leg  = next((t for t in legs if t.get("transaction_type") == "transfer_in"),  None)
+
+    if not out_leg or not in_leg:
+        raise HTTPException(
+            status_code=400,
+            detail="Transfer legs incomplete — cannot reinstate a partial transfer",
+        )
+
+    source_id     = out_leg["account_id"]
+    dest_id       = in_leg["account_id"]
+    source_amount = abs(out_leg.get("amount", 0))
+    dest_amount   = in_leg.get("amount", 0)
+
+    now = datetime.now(timezone.utc)
+
+    # Restore source account
+    await db.treasury_accounts.update_one(
+        {"account_id": source_id},
+        {"$inc": {"balance": source_amount}, "$set": {"updated_at": now.isoformat()}},
+    )
+    # Reverse destination account
+    await db.treasury_accounts.update_one(
+        {"account_id": dest_id},
+        {"$inc": {"balance": -dest_amount}, "$set": {"updated_at": now.isoformat()}},
+    )
+
+    # Delete both treasury_transaction legs
+    await db.treasury_transactions.delete_many({"transfer_id": transfer_id})
+
+    invalidate_treasury_cache()
+    await log_activity(
+        request, user, "reinstate", "treasury",
+        f"Reinstated treasury transfer {transfer_id}",
+        reference_id=transfer_id,
+    )
+    return {"message": "Treasury transfer reinstated successfully", "transfer_id": transfer_id}
+
+
 # Include router
 app.include_router(api_router)
 
@@ -25261,6 +25513,17 @@ async def startup_db_indexes():
         await db.clients.create_index(
             [("first_name", "text"), ("last_name", "text"), ("email", "text")]
         )
+        # CRM Customer ID: unique, case-insensitive, sparse (allows existing null records)
+        try:
+            await db.clients.create_index(
+                "crm_customer_id",
+                unique=True,
+                sparse=True,
+                collation={"locale": "en", "strength": 2},
+                name="crm_customer_id_unique_ci",
+            )
+        except Exception:
+            pass  # Index may already exist
 
         # Index for roles
         await db.roles.create_index("role_id", unique=True, sparse=True)

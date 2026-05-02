@@ -97,7 +97,8 @@ async def main():
         for i in range(0, len(remaining), 200):
             chunk = remaining[i : i + 200]
             extra = await db.clients.find(
-                {"email": {"$in": chunk}},
+                {"email": {"$regex": "|".join([f"^{re.escape(e)}$" for e in chunk]),
+                           "$options": "i"}},
                 {"_id": 0, "client_id": 1, "email": 1, "tags": 1}
             ).to_list(None)
             matched_docs.extend(extra)
