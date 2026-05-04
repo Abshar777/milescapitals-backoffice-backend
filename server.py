@@ -2627,6 +2627,43 @@ async def update_client_tags(
     return await db.clients.find_one({"client_id": client_id}, {"_id": 0})
 
 
+@api_router.post("/client-tags/fix-transaction-ids")
+async def fix_transaction_tag_ids(
+    request: Request,
+    user: dict = Depends(require_permission(Modules.CLIENTS, Actions.EDIT)),
+):
+    """
+    One-time migration: fix transactions where client_tags contains raw tag IDs
+    (e.g. 'tag_3726dd73') instead of human-readable tag names.
+    """
+    # Build ID → name map from all client tags
+    all_tag_docs = await db.client_tags.find({}, {"_id": 0, "tag_id": 1, "name": 1}).to_list(None)
+    id_to_name = {t["tag_id"]: t["name"] for t in all_tag_docs}
+
+    # Find all transactions with at least one tag that starts with "tag_"
+    bad_txns = await db.transactions.find(
+        {"client_tags": {"$elemMatch": {"$regex": "^tag_"}}},
+        {"_id": 0, "transaction_id": 1, "client_tags": 1},
+    ).to_list(None)
+
+    fixed_count = 0
+    for tx in bad_txns:
+        new_tags = [
+            id_to_name.get(t, t) if t.startswith("tag_") else t
+            for t in (tx.get("client_tags") or [])
+        ]
+        # Only update if something actually changed
+        if new_tags != tx.get("client_tags"):
+            await db.transactions.update_one(
+                {"transaction_id": tx["transaction_id"]},
+                {"$set": {"client_tags": new_tags}},
+            )
+            fixed_count += 1
+
+    await log_activity(request, user, "edit", "clients", f"Fixed tag IDs in {fixed_count} transactions")
+    return {"fixed": fixed_count, "total_scanned": len(bad_txns)}
+
+
 @api_router.delete("/clients/{client_id}")
 async def delete_client(
     request: Request,
@@ -11151,10 +11188,20 @@ async def _create_transaction_impl(
             vendor_commission_amount = round(
                 usd_amount * vendor_commission_rate / 100, 2
             )
-    # Parse client_tags: either from form (comma-separated names) or from client defaults (IDs → names)
+    # Parse client_tags: either from form (comma-separated names/IDs) or from client defaults (IDs → names)
     tx_client_tags = []
     if client_tags_str:
-        tx_client_tags = [t.strip() for t in client_tags_str.split(",") if t.strip()]
+        raw_tags = [t.strip() for t in client_tags_str.split(",") if t.strip()]
+        # If any entry looks like a tag_id, resolve all IDs to names
+        id_style = [t for t in raw_tags if t.startswith("tag_")]
+        if id_style:
+            tag_docs = await db.client_tags.find(
+                {"tag_id": {"$in": id_style}}, {"_id": 0, "tag_id": 1, "name": 1}
+            ).to_list(None)
+            id_to_name = {t["tag_id"]: t["name"] for t in tag_docs}
+            tx_client_tags = [id_to_name.get(t, t) for t in raw_tags if not t.startswith("tag_") or id_to_name.get(t)]
+        else:
+            tx_client_tags = raw_tags
     elif client.get("tags"):
         tag_docs = await db.client_tags.find(
             {"tag_id": {"$in": client["tags"]}}, {"_id": 0, "name": 1}
@@ -12312,10 +12359,19 @@ async def create_transaction_request(
     #         detail=f"Possible duplicate: Similar request created recently (Request ID: {recent_dup['request_id']}). Wait 5 minutes or use a unique reference.",
     #     )
 
-    # Parse client_tags: either from request (comma-separated names) or from client defaults (IDs → names)
+    # Parse client_tags: either from request (comma-separated names/IDs) or from client defaults (IDs → names)
     tx_client_tags = []
     if client_tags:
-        tx_client_tags = [t.strip() for t in client_tags.split(",") if t.strip()]
+        raw_tags = [t.strip() for t in client_tags.split(",") if t.strip()]
+        id_style = [t for t in raw_tags if t.startswith("tag_")]
+        if id_style:
+            tag_docs = await db.client_tags.find(
+                {"tag_id": {"$in": id_style}}, {"_id": 0, "tag_id": 1, "name": 1}
+            ).to_list(None)
+            id_to_name = {t["tag_id"]: t["name"] for t in tag_docs}
+            tx_client_tags = [id_to_name.get(t, t) for t in raw_tags if not t.startswith("tag_") or id_to_name.get(t)]
+        else:
+            tx_client_tags = raw_tags
     elif client.get("tags"):
         tag_docs = await db.client_tags.find(
             {"tag_id": {"$in": client["tags"]}}, {"_id": 0, "name": 1}
