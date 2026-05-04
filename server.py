@@ -1205,6 +1205,15 @@ async def require_vendor_or_admin(user: dict = Depends(get_current_user)) -> dic
 # ============== GRANULAR PERMISSION SYSTEM ==============
 
 
+async def get_role_for_user(user: dict) -> dict:
+    """Fetch the role document for a user using the same lookup pattern as get_user_permissions."""
+    role_name = user.get("role_id") or user.get("role", "")
+    role = await db.roles.find_one({"role_id": role_name}, {"_id": 0})
+    if not role:
+        role = await db.roles.find_one({"name": role_name}, {"_id": 0})
+    return role or {}
+
+
 async def get_user_permissions(user_id: str) -> dict:
     """Get all permissions for a user (role permissions + user overrides)"""
     user = await db.users.find_one({"user_id": user_id}, {"_id": 0})
@@ -2971,8 +2980,8 @@ async def get_treasury_accounts(
 ):
     query = {}
     # Restrict to role-allowed treasury accounts (non-admin only)
-    if user.get("role") != "admin":
-        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+    if not (user.get("role") == "admin" and not user.get("role_id")):
+        user_role = await get_role_for_user(user)
         allowed_ids = user_role.get("treasury_account_ids") if user_role else None
         if allowed_ids:
             query["account_id"] = {"$in": allowed_ids}
@@ -3031,8 +3040,8 @@ async def get_treasury_account(
     user: dict = Depends(require_permission(Modules.TREASURY, Actions.VIEW)),
 ):
     # Enforce role-level treasury account restriction
-    if user.get("role") != "admin":
-        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+    if not (user.get("role") == "admin" and not user.get("role_id")):
+        user_role = await get_role_for_user(user)
         allowed_ids = user_role.get("treasury_account_ids") if user_role else None
         if allowed_ids and account_id not in allowed_ids:
             raise HTTPException(status_code=403, detail="Access to this treasury account is not permitted")
@@ -15325,8 +15334,8 @@ async def get_vendor_borrowers(
     """Get all vendors that can be borrowers with their loan stats"""
     vendor_query = {}
     # Restrict to role-allowed borrower companies (non-admin only)
-    if user.get("role") != "admin":
-        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+    if not (user.get("role") == "admin" and not user.get("role_id")):
+        user_role = await get_role_for_user(user)
         allowed_borrowers = user_role.get("borrower_ids") if user_role else None
         if allowed_borrowers:
             vendor_query["vendor_id"] = {"$in": allowed_borrowers}
@@ -15424,8 +15433,8 @@ async def get_loans(
     query = {}
 
     # Restrict to role-allowed borrower companies (non-admin only)
-    if user.get("role") != "admin":
-        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+    if not (user.get("role") == "admin" and not user.get("role_id")):
+        user_role = await get_role_for_user(user)
         allowed_borrowers = user_role.get("borrower_ids") if user_role else None
         if allowed_borrowers:
             query["vendor_id"] = {"$in": allowed_borrowers}
@@ -15568,8 +15577,8 @@ async def create_loan(
     """Create a new loan and deduct from treasury or vendor"""
 
     # Enforce borrower restriction for non-admin roles
-    if user.get("role") != "admin" and loan_data.vendor_id:
-        user_role = await db.roles.find_one({"name": user.get("role")}, {"_id": 0})
+    if not (user.get("role") == "admin" and not user.get("role_id")) and loan_data.vendor_id:
+        user_role = await get_role_for_user(user)
         allowed_borrowers = user_role.get("borrower_ids") if user_role else None
         if allowed_borrowers and loan_data.vendor_id not in allowed_borrowers:
             raise HTTPException(status_code=403, detail="You are not permitted to create loans for this borrower company")
