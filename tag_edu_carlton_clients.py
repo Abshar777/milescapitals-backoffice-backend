@@ -19,7 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 # ── Config ────────────────────────────────────────────────────────────────────
 MONGO_URL  = "mongodb://delta:123@31.97.237.248:27017"
 DB_NAME    = "miles_ac_db"
-EXCEL      = "/Users/mhdabshar/Downloads/EDU CARLTON MILES.xlsx"
+EXCEL      = "/Users/mhdabshar/Downloads/master manage carlton.xlsx"
 TAG_NAME   = "EDU CARLTON"
 BATCH_SIZE = 100   # client IDs per transaction update batch
 

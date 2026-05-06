@@ -10853,6 +10853,7 @@ async def create_transaction(
     crm_reference: Optional[str] = Form(None),
     transaction_date: Optional[str] = Form(None),
     client_tags: Optional[str] = Form(None),
+    transaction_tags: Optional[str] = Form(None),
     proof_images: List[UploadFile] = File(default=[]),
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.CREATE)),
 ):
@@ -10894,6 +10895,7 @@ async def create_transaction(
             crm_reference,
             transaction_date,
             client_tags,
+            transaction_tags,
             proof_image_urls,
             user,
         )
@@ -10936,6 +10938,7 @@ async def _create_transaction_impl(
     crm_reference,
     transaction_date,
     client_tags_str,
+    transaction_tags_str,
     proof_image_urls,
     user,
 ):
@@ -11217,12 +11220,17 @@ async def _create_transaction_impl(
         ).to_list(None)
         tx_client_tags = [t["name"] for t in tag_docs]
 
+    # Parse transaction_tags from form input (comma-separated tag names)
+    tx_transaction_tags = []
+    if transaction_tags_str:
+        tx_transaction_tags = [t.strip() for t in transaction_tags_str.split(",") if t.strip()]
+
     tx_doc = {
         "transaction_id": tx_id,
         "client_id": client_id,
         "client_name": f"{client['first_name']} {client['last_name']}",
         "client_tags": tx_client_tags,
-        "transaction_tags": [],
+        "transaction_tags": tx_transaction_tags,
         "transaction_type": transaction_type,
         "amount": usd_amount,
         "currency": "USD",
@@ -12324,6 +12332,7 @@ async def create_transaction_request(
     client_usdt_network: Optional[str] = Form(None),
     transaction_date: Optional[str] = Form(None),
     client_tags: Optional[str] = Form(None),
+    transaction_tags: Optional[str] = Form(None),
     proof_images: List[UploadFile] = File(default=[]),
     user: dict = Depends(
         require_permission(Modules.TRANSACTION_REQUESTS, Actions.CREATE)
@@ -12387,6 +12396,11 @@ async def create_transaction_request(
         ).to_list(None)
         tx_client_tags = [t["name"] for t in tag_docs]
 
+    # Parse transaction_tags from form input (comma-separated tag names)
+    tx_transaction_tags = []
+    if transaction_tags:
+        tx_transaction_tags = [t.strip() for t in transaction_tags.split(",") if t.strip()]
+
     # Handle multiple proof images/PDFs upload
     proof_urls = []
     for img in (proof_images or []):
@@ -12404,7 +12418,7 @@ async def create_transaction_request(
         "client_id": client_id,
         "client_name": f"{client.get('first_name', '')} {client.get('last_name', '')}".strip(),
         "client_tags": tx_client_tags,
-        "transaction_tags": [],
+        "transaction_tags": tx_transaction_tags,
         "amount": amount,
         "currency": currency,
         "base_currency": base_currency,
