@@ -12246,12 +12246,21 @@ async def get_transaction_requests(
     if transaction_type and transaction_type != "all":
         query["transaction_type"] = transaction_type
     if search:
-        query["$or"] = [
+        # Resolve email search → client_id(s)
+        email_clients = await db.clients.find(
+            {"email": {"$regex": search, "$options": "i"}},
+            {"_id": 0, "client_id": 1},
+        ).to_list(200)
+        email_client_ids = [c["client_id"] for c in email_clients]
+        or_clauses = [
             {"client_name": {"$regex": search, "$options": "i"}},
             {"reference": {"$regex": search, "$options": "i"}},
             {"crm_reference": {"$regex": search, "$options": "i"}},
             {"description": {"$regex": search, "$options": "i"}},
         ]
+        if email_client_ids:
+            or_clauses.append({"client_id": {"$in": email_client_ids}})
+        query["$or"] = or_clauses
     if date_from or date_to:
         date_q = {}
         if date_from:
