@@ -14303,13 +14303,31 @@ async def delete_income_expense(
 
     now = datetime.now(timezone.utc)
 
+    # Determine the correct reversal amount in the treasury's currency
+    # Mirror the same logic used in approve_income_expense to avoid currency mismatch
+    ie_reversal_amount = entry["amount"]  # fallback: USD amount
+    treasury = await db.treasury_accounts.find_one(
+        {"account_id": entry["treasury_account_id"]}, {"_id": 0, "currency": 1}
+    )
+    if treasury:
+        treasury_currency = treasury.get("currency", "USD")
+        ie_base_currency = entry.get("base_currency")
+        ie_base_amount = entry.get("base_amount")
+        ie_currency = entry.get("currency", "USD")
+        if ie_base_currency and ie_base_currency.upper() == treasury_currency.upper() and ie_base_amount:
+            ie_reversal_amount = ie_base_amount   # e.g. AED base_amount for AED treasury
+        elif ie_currency.upper() == treasury_currency.upper():
+            ie_reversal_amount = entry["amount"]
+        else:
+            ie_reversal_amount = convert_currency(entry["amount"], ie_currency, treasury_currency)
+
     # Reverse the treasury balance change
     if entry["entry_type"] == IncomeExpenseType.INCOME:
         # Reverse income - deduct from treasury
         await db.treasury_accounts.update_one(
             {"account_id": entry["treasury_account_id"]},
             {
-                "$inc": {"balance": -entry["amount"]},
+                "$inc": {"balance": -ie_reversal_amount},
                 "$set": {"updated_at": now.isoformat()},
             },
         )
@@ -14318,7 +14336,7 @@ async def delete_income_expense(
         await db.treasury_accounts.update_one(
             {"account_id": entry["treasury_account_id"]},
             {
-                "$inc": {"balance": entry["amount"]},
+                "$inc": {"balance": ie_reversal_amount},
                 "$set": {"updated_at": now.isoformat()},
             },
         )
