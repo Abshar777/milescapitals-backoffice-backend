@@ -24977,7 +24977,17 @@ async def reinstate_transaction(
 
     if tx["transaction_type"] == TransactionType.WITHDRAWAL:
         source_id = tx.get("source_account_id")
-        withdrawal_amount = tx.get("withdrawal_amount_in_source_currency", tx["amount"])
+        # Prefer withdrawal_amount_in_source_currency (always set on modern transactions).
+        # For old records that lack this field, look up the treasury_transaction and use
+        # abs(ttx["amount"]) — which is already in the source account's currency — rather
+        # than falling back to tx["amount"] which is always in USD.
+        withdrawal_amount = tx.get("withdrawal_amount_in_source_currency")
+        if not withdrawal_amount and source_id:
+            _wtx = await db.treasury_transactions.find_one(
+                {"transaction_id": transaction_id, "account_id": source_id}, {"_id": 0}
+            )
+            if _wtx:
+                withdrawal_amount = abs(_wtx["amount"])
         if source_id and withdrawal_amount:
             if source_id.startswith("psp_"):
                 await db.psps.update_one(
@@ -25040,10 +25050,13 @@ async def reinstate_vendor_settlement(
 
     now = datetime.now(timezone.utc)
 
-    await db.treasury_accounts.update_one(
-        {"account_id": settlement["settlement_destination_id"]},
-        {"$inc": {"balance": -settlement["settlement_amount"]}, "$set": {"updated_at": now.isoformat()}},
-    )
+    # Mirror the approve_settlement guard: direct-transfer settlements never touched the
+    # treasury balance on approval, so do not reverse it on reinstate either.
+    if not settlement.get("is_direct_transfer"):
+        await db.treasury_accounts.update_one(
+            {"account_id": settlement["settlement_destination_id"]},
+            {"$inc": {"balance": -settlement["settlement_amount"]}, "$set": {"updated_at": now.isoformat()}},
+        )
 
     await db.vendors.update_one(
         {"vendor_id": settlement["vendor_id"]},
@@ -25099,8 +25112,11 @@ async def reinstate_income_expense_entry(
     entry = await db.income_expenses.find_one({"entry_id": entry_id}, {"_id": 0})
     if not entry:
         raise HTTPException(status_code=404, detail="Entry not found")
-    if entry.get("status") != "approved":
-        raise HTTPException(status_code=400, detail="Entry is not approved")
+    # Allow reinstate for both "approved" and "completed" (vendor-confirmed) entries.
+    # "completed" entries have a treasury_transaction created at the "approved" step —
+    # the vendor-approval step only records commission metadata, no new treasury operation.
+    if entry.get("status") not in ("approved", "completed"):
+        raise HTTPException(status_code=400, detail="Entry must be in 'approved' or 'completed' status to reinstate")
     if entry.get("settled"):
         raise HTTPException(status_code=400, detail="Cannot reinstate a settled entry")
 
@@ -25125,7 +25141,13 @@ async def reinstate_income_expense_entry(
                 "reinstated_by": user["user_id"],
                 "reinstated_by_name": user["name"],
             },
-            "$unset": {"approved_at": "", "approved_by": "", "approved_by_name": "", "approval_date": ""},
+            "$unset": {
+                "approved_at": "", "approved_by": "", "approved_by_name": "", "approval_date": "",
+                # Also clear vendor-approval fields so the entry can restart the full workflow
+                "vendor_approved_at": "", "vendor_approved_by": "", "vendor_commission_rate": "",
+                "vendor_commission_amount": "", "vendor_commission_base_amount": "",
+                "vendor_commission_base_currency": "",
+            },
         },
     )
 
