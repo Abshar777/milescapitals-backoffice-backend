@@ -319,6 +319,7 @@ class RoleUpdate(BaseModel):
     is_active: Optional[bool] = None
     treasury_account_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific
     borrower_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific
+    ie_own_entries_only: Optional[bool] = None  # None = no change; True = own entries only; False = all visible
 
 
 class UserPermissionOverride(BaseModel):
@@ -21300,6 +21301,8 @@ async def update_role(
         updates["treasury_account_ids"] = role_data.treasury_account_ids if role_data.treasury_account_ids else None
     if role_data.borrower_ids is not None:
         updates["borrower_ids"] = role_data.borrower_ids if role_data.borrower_ids else None
+    if role_data.ie_own_entries_only is not None:
+        updates["ie_own_entries_only"] = role_data.ie_own_entries_only
     updates["updated_at"] = now.isoformat()
 
     await db.roles.update_one({"role_id": role_id}, {"$set": updates})
