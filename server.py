@@ -13549,6 +13549,14 @@ async def get_income_expenses(
     """Get all income and expense entries with optional filters and pagination"""
     query = {}
 
+    # Own-entries-only restriction for data entry roles
+    ie_own_only = False
+    if user.get("role") != "admin":
+        user_role = await get_role_for_user(user)
+        if user_role.get("ie_own_entries_only"):
+            query["created_by"] = user["user_id"]
+            ie_own_only = True
+
     if entry_type:
         query["entry_type"] = entry_type
     if category:
@@ -13565,7 +13573,7 @@ async def get_income_expenses(
         else:
             query["date"] = {"$lte": end_date}
 
-    # Check cache
+    # Check cache — include user_id in key when restricted so each user gets their own cache
     cache_key = get_cache_key(
         "ie:list",
         page=page,
@@ -13576,6 +13584,7 @@ async def get_income_expenses(
         end_date=end_date,
         treasury_account_id=treasury_account_id,
         vendor_id=vendor_id,
+        **({"user_id": user["user_id"]} if ie_own_only else {}),
     )
     cached = get_cached(cache_key)
     if cached:
