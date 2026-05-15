@@ -309,6 +309,7 @@ class RoleCreate(BaseModel):
     hierarchy_level: int = 0  # Higher = more access
     treasury_account_ids: Optional[List[str]] = None  # None = all accounts; list = specific only
     borrower_ids: Optional[List[str]] = None  # None = all borrower companies; list = specific only
+    transaction_type_ids: Optional[List[str]] = None  # None = all types; list = specific types only
 
 
 class RoleUpdate(BaseModel):
@@ -320,6 +321,7 @@ class RoleUpdate(BaseModel):
     treasury_account_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific
     borrower_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific
     ie_own_entries_only: Optional[bool] = None  # None = no change; True = own entries only; False = all visible
+    transaction_type_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific types
 
 
 class UserPermissionOverride(BaseModel):
@@ -9283,6 +9285,19 @@ async def get_transactions(
 
     if and_clauses:
         query["$and"] = and_clauses
+
+    # Role-based transaction type restriction
+    if user.get("role") != "admin":
+        user_role = await get_role_for_user(user)
+        allowed_types = user_role.get("transaction_type_ids") if user_role else None
+        if allowed_types:
+            # Intersect with any existing type filter from query params
+            if "transaction_type" in query:
+                # Keep only if the requested type is in the allowed list
+                if query["transaction_type"] not in allowed_types:
+                    query["transaction_type"] = "__none__"  # Force empty result
+            else:
+                query["transaction_type"] = {"$in": allowed_types}
 
     # No caching — always return fresh data from DB
 
@@ -21256,6 +21271,9 @@ async def create_role(
         "updated_at": now.isoformat(),
         "created_by": user["user_id"],
         "created_by_name": user["name"],
+        "treasury_account_ids": role_data.treasury_account_ids,
+        "borrower_ids": role_data.borrower_ids,
+        "transaction_type_ids": role_data.transaction_type_ids,
     }
 
     await db.roles.insert_one(role_doc)
@@ -21303,6 +21321,8 @@ async def update_role(
         updates["borrower_ids"] = role_data.borrower_ids if role_data.borrower_ids else None
     if role_data.ie_own_entries_only is not None:
         updates["ie_own_entries_only"] = role_data.ie_own_entries_only
+    if role_data.transaction_type_ids is not None:
+        updates["transaction_type_ids"] = role_data.transaction_type_ids if role_data.transaction_type_ids else None
     updates["updated_at"] = now.isoformat()
 
     await db.roles.update_one({"role_id": role_id}, {"$set": updates})
