@@ -310,7 +310,7 @@ class RoleCreate(BaseModel):
     treasury_account_ids: Optional[List[str]] = None  # None = all accounts; list = specific only
     borrower_ids: Optional[List[str]] = None  # None = all borrower companies; list = specific only
     transaction_type_ids: Optional[List[str]] = None  # None = all types; list = specific types only
-    allowed_transaction_tags: Optional[List[str]] = None  # None = all tags; list = specific tag IDs only
+    allowed_client_tags: Optional[List[str]] = None  # None = all client tags; list = specific tag IDs only
 
 
 class RoleUpdate(BaseModel):
@@ -323,7 +323,7 @@ class RoleUpdate(BaseModel):
     borrower_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific
     ie_own_entries_only: Optional[bool] = None  # None = no change; True = own entries only; False = all visible
     transaction_type_ids: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = specific types
-    allowed_transaction_tags: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = tag IDs
+    allowed_client_tags: Optional[List[str]] = None  # None = no change; [] = clear restriction; list = client tag IDs
 
 
 class UserPermissionOverride(BaseModel):
@@ -9298,9 +9298,14 @@ async def get_transactions(
                     query["transaction_type"] = "__none__"
             else:
                 query["transaction_type"] = {"$in": allowed_types}
-        allowed_tags = user_role.get("allowed_transaction_tags") if user_role else None
-        if allowed_tags:
-            query["transaction_tags"] = {"$in": allowed_tags}
+        allowed_client_tag_ids = user_role.get("allowed_client_tags") if user_role else None
+        if allowed_client_tag_ids:
+            tag_docs = await db.client_tags.find(
+                {"tag_id": {"$in": allowed_client_tag_ids}}, {"_id": 0, "name": 1}
+            ).to_list(None)
+            allowed_tag_names = [t["name"] for t in tag_docs]
+            if allowed_tag_names:
+                query["client_tags"] = {"$in": allowed_tag_names}
 
     # No caching — always return fresh data from DB
 
@@ -21277,7 +21282,7 @@ async def create_role(
         "treasury_account_ids": role_data.treasury_account_ids,
         "borrower_ids": role_data.borrower_ids,
         "transaction_type_ids": role_data.transaction_type_ids,
-        "allowed_transaction_tags": role_data.allowed_transaction_tags,
+        "allowed_client_tags": role_data.allowed_client_tags,
     }
 
     await db.roles.insert_one(role_doc)
@@ -21327,8 +21332,8 @@ async def update_role(
         updates["ie_own_entries_only"] = role_data.ie_own_entries_only
     if role_data.transaction_type_ids is not None:
         updates["transaction_type_ids"] = role_data.transaction_type_ids if role_data.transaction_type_ids else None
-    if role_data.allowed_transaction_tags is not None:
-        updates["allowed_transaction_tags"] = role_data.allowed_transaction_tags if role_data.allowed_transaction_tags else None
+    if role_data.allowed_client_tags is not None:
+        updates["allowed_client_tags"] = role_data.allowed_client_tags if role_data.allowed_client_tags else None
     updates["updated_at"] = now.isoformat()
 
     await db.roles.update_one({"role_id": role_id}, {"$set": updates})
