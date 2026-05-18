@@ -11644,6 +11644,10 @@ async def assign_transaction_destination(
         updates["vendor_id"] = vendor_id
         updates["vendor_name"] = vendor.get("vendor_name")
         updates["destination_type"] = "vendor"
+        # Clear treasury destination when switching to vendor
+        updates["destination_account_id"] = None
+        updates["destination_account_name"] = None
+        updates["destination_bank_name"] = None
 
         # Calculate commission
         base_currency = tx.get("base_currency", "USD")
@@ -11682,6 +11686,15 @@ async def assign_transaction_destination(
                 },
             )
         )
+
+    elif dest_type and dest_type != "vendor":
+        # Switching away from vendor — clear all vendor-related fields
+        updates["vendor_id"] = None
+        updates["vendor_name"] = None
+        updates["vendor_commission_rate"] = None
+        updates["vendor_commission_amount"] = None
+        updates["vendor_commission_base_amount"] = None
+        updates["vendor_commission_base_currency"] = None
 
     if dest_account_id:
         updates["destination_account_id"] = dest_account_id
