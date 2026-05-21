@@ -5784,7 +5784,7 @@ async def batch_settle_psp_transactions(
         ]
         avg_rate = sum(rates) / len(rates) if rates else 1
         base_deductions = total_deductions / avg_rate if avg_rate else 0
-        treasury_amount = base_gross - base_deductions
+        treasury_amount = round(base_gross - base_deductions, 2)
     else:
         treasury_amount = convert_currency(net_amount, "USD", dest_currency)
 
