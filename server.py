@@ -11633,21 +11633,42 @@ async def assign_transaction_destination(
     dest_type = data.get("destination_type")
     vendor_id = data.get("vendor_id")
     dest_account_id = data.get("destination_account_id")
+    psp_id = data.get("psp_id")
 
     if dest_type:
         updates["destination_type"] = dest_type
 
-    if dest_type == "vendor" and vendor_id:
+    if dest_type == "psp" and psp_id:
+        psp = await db.psps.find_one({"psp_id": psp_id}, {"_id": 0})
+        if not psp:
+            raise HTTPException(status_code=404, detail="PSP not found")
+        updates["psp_id"] = psp_id
+        updates["psp_name"] = psp.get("psp_name")
+        updates["destination_type"] = "psp"
+        # Clear other destination fields when switching to PSP
+        updates["vendor_id"] = None
+        updates["vendor_name"] = None
+        updates["vendor_commission_rate"] = None
+        updates["vendor_commission_amount"] = None
+        updates["vendor_commission_base_amount"] = None
+        updates["vendor_commission_base_currency"] = None
+        updates["destination_account_id"] = None
+        updates["destination_account_name"] = None
+        updates["destination_bank_name"] = None
+
+    elif dest_type == "vendor" and vendor_id:
         vendor = await db.vendors.find_one({"vendor_id": vendor_id}, {"_id": 0})
         if not vendor:
             raise HTTPException(status_code=404, detail="Exchanger not found")
         updates["vendor_id"] = vendor_id
         updates["vendor_name"] = vendor.get("vendor_name")
         updates["destination_type"] = "vendor"
-        # Clear treasury destination when switching to vendor
+        # Clear treasury/PSP destination when switching to vendor
         updates["destination_account_id"] = None
         updates["destination_account_name"] = None
         updates["destination_bank_name"] = None
+        updates["psp_id"] = None
+        updates["psp_name"] = None
 
         # Calculate commission
         base_currency = tx.get("base_currency", "USD")
@@ -11687,14 +11708,16 @@ async def assign_transaction_destination(
             )
         )
 
-    elif dest_type and dest_type != "vendor":
-        # Switching away from vendor — clear all vendor-related fields
+    elif dest_type and dest_type not in ("vendor", "psp"):
+        # Switching away from vendor/PSP — clear all vendor/PSP-related fields
         updates["vendor_id"] = None
         updates["vendor_name"] = None
         updates["vendor_commission_rate"] = None
         updates["vendor_commission_amount"] = None
         updates["vendor_commission_base_amount"] = None
         updates["vendor_commission_base_currency"] = None
+        updates["psp_id"] = None
+        updates["psp_name"] = None
 
     if dest_account_id:
         updates["destination_account_id"] = dest_account_id
