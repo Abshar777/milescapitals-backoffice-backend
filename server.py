@@ -11835,18 +11835,18 @@ async def approve_transaction(
 
                 withdrawal_amount = round(withdrawal_amount, 2)
 
-                psp_balance = psp_account.get("current_balance", 0)
+                psp_balance = psp_account.get("pending_settlement", 0)
                 if psp_balance < withdrawal_amount:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Insufficient PSP balance. Required: {withdrawal_amount:,.2f} {psp_currency}, Available: {psp_balance:,.2f} {psp_currency}",
                     )
 
-                # Deduct from PSP balance
+                # Deduct from PSP pending_settlement balance
                 await db.psps.update_one(
                     {"psp_id": psp_id},
                     {
-                        "$inc": {"current_balance": -withdrawal_amount},
+                        "$inc": {"pending_settlement": -withdrawal_amount},
                         "$set": {"updated_at": now.isoformat()},
                     },
                 )
@@ -12065,11 +12065,11 @@ async def approve_transaction(
         if psp:
             withdrawal_amount = round(tx["amount"], 2)
 
-            # Deduct from PSP current_balance
+            # Deduct from PSP pending_settlement balance
             await db.psps.update_one(
                 {"psp_id": tx["psp_id"]},
                 {
-                    "$inc": {"current_balance": -withdrawal_amount},
+                    "$inc": {"pending_settlement": -withdrawal_amount},
                     "$set": {"updated_at": now.isoformat()},
                 },
             )
@@ -24761,8 +24761,8 @@ async def reinstate_transaction_preview(
                         "account_id": source_id,
                         "account_name": acc.get("name", source_id),
                         "currency": acc.get("currency", ""),
-                        "balance_before": acc.get("current_balance", 0),
-                        "balance_after": acc.get("current_balance", 0) + withdrawal_amount,
+                        "balance_before": acc.get("pending_settlement", 0),
+                        "balance_after": acc.get("pending_settlement", 0) + withdrawal_amount,
                         "change": withdrawal_amount,
                         "description": "PSP balance restored (withdrawal reversed)",
                     })
@@ -25071,7 +25071,7 @@ async def reinstate_transaction(
             if source_id.startswith("psp_"):
                 await db.psps.update_one(
                     {"psp_id": source_id},
-                    {"$inc": {"current_balance": withdrawal_amount}, "$set": {"updated_at": now.isoformat()}},
+                    {"$inc": {"pending_settlement": withdrawal_amount}, "$set": {"updated_at": now.isoformat()}},
                 )
             else:
                 await db.treasury_accounts.update_one(
