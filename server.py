@@ -4532,6 +4532,47 @@ async def get_psps(user: dict = Depends(require_listing_or_view(Modules.PSP))):
             )
             psp["settlement_destination_bank"] = dest.get("bank_name") if dest else None
 
+    # Compute available_balance dynamically for all PSPs in one aggregation
+    # Formula mirrors PSP detail page: deposits_net - deductions - withdrawals
+    balance_pipeline = [
+        {"$match": {
+            "destination_type": "psp",
+            "psp_id": {"$exists": True, "$ne": None},
+            "status": {"$in": [TransactionStatus.APPROVED, "completed"]},
+            "settled": {"$ne": True},
+        }},
+        {"$group": {
+            "_id": {"psp_id": "$psp_id", "tx_type": "$transaction_type"},
+            "total_amount":      {"$sum": "$amount"},
+            "total_comm":        {"$sum": {"$ifNull": ["$psp_commission_amount", 0]}},
+            "total_extra_chg":   {"$sum": {"$ifNull": ["$psp_extra_charges", 0]}},
+            "total_extra_comm":  {"$sum": {"$ifNull": ["$psp_extra_commission", 0]}},
+            "total_wdr_extra":   {"$sum": {"$ifNull": ["$psp_withdrawal_extra_commission", 0]}},
+            "total_reserve":     {"$sum": {"$ifNull": ["$psp_reserve_fund_amount",
+                                    {"$ifNull": ["$psp_chargeback_amount", 0]}]}},
+        }},
+    ]
+    balance_results = await db.transactions.aggregate(balance_pipeline).to_list(2000)
+    balance_map: dict = {}
+    for r in balance_results:
+        pid    = r["_id"]["psp_id"]
+        tx_type = r["_id"]["tx_type"]
+        if pid not in balance_map:
+            balance_map[pid] = 0.0
+        if tx_type == TransactionType.DEPOSIT:
+            balance_map[pid] += (
+                r["total_amount"]
+                - r["total_comm"]
+                - r["total_extra_chg"]
+                - r["total_extra_comm"]
+                - r["total_reserve"]
+            )
+        elif tx_type == TransactionType.WITHDRAWAL:
+            balance_map[pid] -= (r["total_amount"] + r["total_wdr_extra"])
+
+    for psp in psps:
+        psp["available_balance"] = round(balance_map.get(psp["psp_id"], 0.0), 2)
+
     # Strip sensitive fields for listing-only users
     if user.get("_listing_only"):
         safe = LISTING_SAFE_FIELDS[Modules.PSP]
@@ -11835,21 +11876,57 @@ async def approve_transaction(
 
                 withdrawal_amount = round(withdrawal_amount, 2)
 
-                psp_balance = psp_account.get("pending_settlement", 0)
+                # Compute available PSP balance dynamically (mirrors PSP detail page)
+                _dep_agg = await db.transactions.aggregate([
+                    {"$match": {
+                        "psp_id": psp_id,
+                        "destination_type": "psp",
+                        "transaction_type": TransactionType.DEPOSIT,
+                        "status": TransactionStatus.APPROVED,
+                        "settled": {"$ne": True},
+                    }},
+                    {"$group": {
+                        "_id": None,
+                        "total":      {"$sum": "$amount"},
+                        "comm":       {"$sum": {"$ifNull": ["$psp_commission_amount", 0]}},
+                        "extra_chg":  {"$sum": {"$ifNull": ["$psp_extra_charges", 0]}},
+                        "extra_comm": {"$sum": {"$ifNull": ["$psp_extra_commission", 0]}},
+                        "reserve":    {"$sum": {"$ifNull": ["$psp_reserve_fund_amount",
+                                          {"$ifNull": ["$psp_chargeback_amount", 0]}]}},
+                    }},
+                ]).to_list(1)
+                _wdr_agg = await db.transactions.aggregate([
+                    {"$match": {
+                        "psp_id": psp_id,
+                        "destination_type": "psp",
+                        "transaction_type": TransactionType.WITHDRAWAL,
+                        "status": TransactionStatus.APPROVED,
+                        "settled": {"$ne": True},
+                    }},
+                    {"$group": {
+                        "_id": None,
+                        "total":      {"$sum": "$amount"},
+                        "extra_comm": {"$sum": {"$ifNull": ["$psp_withdrawal_extra_commission", 0]}},
+                    }},
+                ]).to_list(1)
+                _d = _dep_agg[0] if _dep_agg else {}
+                _w = _wdr_agg[0] if _wdr_agg else {}
+                psp_balance = round(
+                    _d.get("total", 0)
+                    - _d.get("comm", 0)
+                    - _d.get("extra_chg", 0)
+                    - _d.get("extra_comm", 0)
+                    - _d.get("reserve", 0)
+                    - _w.get("total", 0)
+                    - _w.get("extra_comm", 0),
+                    2,
+                )
+
                 if psp_balance < withdrawal_amount:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Insufficient PSP balance. Required: {withdrawal_amount:,.2f} {psp_currency}, Available: {psp_balance:,.2f} {psp_currency}",
                     )
-
-                # Deduct from PSP pending_settlement balance
-                await db.psps.update_one(
-                    {"psp_id": psp_id},
-                    {
-                        "$inc": {"pending_settlement": -withdrawal_amount},
-                        "$set": {"updated_at": now.isoformat()},
-                    },
-                )
 
                 updates["source_account_id"] = psp_id
                 updates["source_account_name"] = psp_account.get("psp_name")
