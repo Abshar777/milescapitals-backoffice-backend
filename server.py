@@ -11033,9 +11033,14 @@ async def _create_transaction_impl(
 
     # ===== DUPLICATE DETECTION =====
     # Check 1: If reference is provided, ensure it's unique
+    # Only active transactions block reuse — cancelled/rejected/failed free up their reference
     if reference:
         existing_by_ref = await db.transactions.find_one(
-            {"reference": reference}, {"_id": 0}
+            {
+                "reference": reference.strip(),
+                "status": {"$nin": ["cancelled", "rejected", "failed"]},
+            },
+            {"_id": 0},
         )
         if existing_by_ref:
             raise HTTPException(
@@ -11539,11 +11544,13 @@ async def update_transaction(
         updates["crm_reference"] = updates["crm_reference"].strip()
 
     # Validate reference uniqueness if being updated
+    # Only active transactions block reuse — cancelled/rejected/failed free up their reference
     if "reference" in updates and updates["reference"]:
         existing_ref = await db.transactions.find_one(
             {
                 "reference": updates["reference"].strip(),
                 "transaction_id": {"$ne": transaction_id},
+                "status": {"$nin": ["cancelled", "rejected", "failed"]},
             },
             {"_id": 0},
         )
