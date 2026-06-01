@@ -1647,6 +1647,51 @@ async def verify_otp(request: Request, data: dict = Body(...)):
     }
 
 
+@api_router.post("/auth/sso-login")
+async def sso_login(data: dict = Body(...)):
+    """Root ERP SSO — exchange a short-lived SSO token for a local JWT."""
+    sso_token = data.get("ssoToken")
+    if not sso_token:
+        raise HTTPException(status_code=400, detail="ssoToken is required")
+
+    root_erp_url = os.environ.get("ROOT_ERP_API_URL", "http://localhost:5001")
+    try:
+        async with httpx.AsyncClient(timeout=5) as http:
+            resp = await http.get(
+                f"{root_erp_url}/api/auth/verify-sso-token",
+                params={"token": sso_token},
+            )
+        if resp.status_code != 200:
+            raise HTTPException(status_code=401, detail="Invalid or expired SSO token")
+        admin = resp.json().get("data", {})
+        if not admin.get("email"):
+            raise HTTPException(status_code=401, detail="Invalid SSO payload")
+    except httpx.RequestError:
+        raise HTTPException(status_code=503, detail="Could not reach Root ERP for SSO verification")
+
+    # Find or create admin user
+    user = await db.users.find_one({"email": admin["email"]}, {"_id": 0})
+    if not user:
+        import uuid
+        user_id = str(uuid.uuid4())
+        from passlib.context import CryptContext as _CC
+        _pwd = _CC(schemes=["bcrypt"], deprecated="auto")
+        new_user = {
+            "user_id": user_id,
+            "email": admin["email"],
+            "name": admin.get("name", "Super Admin"),
+            "role": "admin",
+            "password_hash": _pwd.hash(os.urandom(32).hex()),
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.users.insert_one(new_user)
+        user = new_user
+
+    token = create_jwt_token(user["user_id"], user["email"], user["role"])
+    return {"access_token": token, "token_type": "bearer", "user": {"email": user["email"], "role": user["role"]}}
+
+
 @api_router.post("/auth/change-password")
 async def change_password(
     request: Request, data: dict = Body(...), user: dict = Depends(get_current_user)
