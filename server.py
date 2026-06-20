@@ -11812,7 +11812,8 @@ async def assign_transaction_destination(
         updates["psp_id"] = None
         updates["psp_name"] = None
 
-    if dest_account_id:
+    # Only apply dest_account_id for treasury/usdt types — vendor/PSP blocks above already handle their own clearing
+    if dest_account_id and dest_type not in ("vendor", "psp"):
         updates["destination_account_id"] = dest_account_id
         dest_acc = await db.treasury_accounts.find_one(
             {"account_id": dest_account_id}, {"_id": 0}
@@ -11826,6 +11827,12 @@ async def assign_transaction_destination(
         updates["description"] = data["description"]
     if data.get("crm_reference") is not None:
         updates["crm_reference"] = data["crm_reference"]
+
+    # Add "Edited" tag so destination changes are clearly visible in the transaction list
+    current_tags = tx.get("transaction_tags") or []
+    if "Edited" not in current_tags:
+        current_tags = list(current_tags) + ["Edited"]
+    updates["transaction_tags"] = current_tags
 
     await db.transactions.update_one(
         {"transaction_id": transaction_id}, {"$set": updates}
