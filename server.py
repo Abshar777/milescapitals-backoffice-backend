@@ -17750,6 +17750,60 @@ async def get_vendor_summary_report(
     }
 
 
+@api_router.get("/reports/vendor-transactions")
+async def get_vendor_transactions_report(
+    user: dict = Depends(require_permission(Modules.REPORTS, Actions.VIEW)),
+    vendor_id: Optional[str] = None,
+    category: Optional[str] = None,      # vendor | treasury | psp | bank | usdt | all
+    transaction_type: Optional[str] = None,  # deposit | withdrawal | all
+    status: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
+    export: bool = False,
+):
+    """Exchanger transactions with server-side filtering and optional full export"""
+    query: dict = {"vendor_id": {"$exists": True, "$ne": None}}
+
+    if vendor_id and vendor_id != "all":
+        query["vendor_id"] = vendor_id
+
+    if category and category != "all":
+        query["destination_type"] = category
+
+    if transaction_type and transaction_type != "all":
+        query["transaction_type"] = transaction_type
+
+    if status and status != "all":
+        query["status"] = status
+
+    if start_date or end_date:
+        date_f: dict = {}
+        if start_date:
+            date_f["$gte"] = start_date
+        if end_date:
+            date_f["$lte"] = end_date
+        query["created_at"] = date_f
+
+    projection = {
+        "_id": 0,
+        "transaction_id": 1, "transaction_type": 1, "status": 1,
+        "amount": 1, "currency": 1, "base_amount": 1, "base_currency": 1,
+        "client_name": 1, "vendor_id": 1, "vendor_name": 1,
+        "destination_type": 1, "destination_account_name": 1,
+        "psp_name": 1, "vendor_commission_amount": 1, "vendor_commission_base_amount": 1,
+        "transaction_date": 1, "created_at": 1, "reference": 1,
+        "transaction_tags": 1, "settled": 1,
+    }
+
+    if export:
+        items = await db.transactions.find(query, projection).sort("created_at", -1).to_list(10000)
+        return {"items": items, "total": len(items)}
+
+    return await paginate_query(db.transactions, query, page, page_size, projection=projection)
+
+
 @api_router.get("/reports/vendor-commissions")
 async def get_vendor_commissions_report(
     user: dict = Depends(require_permission(Modules.REPORTS, Actions.VIEW)),
