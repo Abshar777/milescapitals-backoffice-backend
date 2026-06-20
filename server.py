@@ -9297,6 +9297,9 @@ async def get_transactions(
     transaction_type: Optional[str] = None,
     status: Optional[str] = None,
     destination_type: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    psp_id: Optional[str] = None,
+    destination_account_id: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -9334,6 +9337,12 @@ async def get_transactions(
         query["status"] = status
     if destination_type:
         query["destination_type"] = destination_type
+    if vendor_id:
+        query["vendor_id"] = vendor_id
+    if psp_id:
+        query["psp_id"] = psp_id
+    if destination_account_id:
+        query["destination_account_id"] = destination_account_id
 
     if client_tag:
         query["client_tags"] = client_tag
@@ -10163,6 +10172,9 @@ async def export_transactions(
     transaction_type: Optional[str] = None,
     status: Optional[str] = None,
     destination_type: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    psp_id: Optional[str] = None,
+    destination_account_id: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -10193,6 +10205,12 @@ async def export_transactions(
         query["status"] = status
     if destination_type:
         query["destination_type"] = destination_type
+    if vendor_id:
+        query["vendor_id"] = vendor_id
+    if psp_id:
+        query["psp_id"] = psp_id
+    if destination_account_id:
+        query["destination_account_id"] = destination_account_id
     if client_tag:
         query["client_tags"] = client_tag
     if transaction_tag:
