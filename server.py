@@ -17773,8 +17773,11 @@ async def get_vendor_transactions_report(
     user: dict = Depends(require_permission(Modules.REPORTS, Actions.VIEW)),
     vendor_id: Optional[str] = None,
     category: Optional[str] = None,      # vendor | treasury | psp | bank | usdt | all
+    psp_id: Optional[str] = None,
+    destination_account_id: Optional[str] = None,
     transaction_type: Optional[str] = None,  # deposit | withdrawal | all
     status: Optional[str] = None,
+    search: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     page: int = 1,
@@ -17790,11 +17793,24 @@ async def get_vendor_transactions_report(
     if category and category != "all":
         query["destination_type"] = category
 
+    if psp_id and psp_id != "all":
+        query["psp_id"] = psp_id
+
+    if destination_account_id and destination_account_id != "all":
+        query["destination_account_id"] = destination_account_id
+
     if transaction_type and transaction_type != "all":
         query["transaction_type"] = transaction_type
 
     if status and status != "all":
         query["status"] = status
+
+    if search:
+        query["$or"] = [
+            {"client_name": {"$regex": search, "$options": "i"}},
+            {"reference": {"$regex": search, "$options": "i"}},
+            {"transaction_id": {"$regex": search, "$options": "i"}},
+        ]
 
     if start_date or end_date:
         date_f: dict = {}
