@@ -15690,6 +15690,12 @@ async def get_loans(
     borrower: Optional[str] = None,
     vendor_id: Optional[str] = None,
     search: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    outstanding_min: Optional[float] = None,
+    outstanding_max: Optional[float] = None,
+    repaid_min: Optional[float] = None,
+    repaid_max: Optional[float] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW)),
@@ -15720,6 +15726,27 @@ async def get_loans(
             {"borrower_name": {"$regex": search, "$options": "i"}},
             {"loan_id": {"$regex": search, "$options": "i"}},
         ]
+    if amount_min is not None or amount_max is not None:
+        amount_range: dict = {}
+        if amount_min is not None:
+            amount_range["$gte"] = amount_min
+        if amount_max is not None:
+            amount_range["$lte"] = amount_max
+        query["amount"] = amount_range
+    if outstanding_min is not None or outstanding_max is not None:
+        out_range: dict = {}
+        if outstanding_min is not None:
+            out_range["$gte"] = outstanding_min
+        if outstanding_max is not None:
+            out_range["$lte"] = outstanding_max
+        query["outstanding_balance"] = out_range
+    if repaid_min is not None or repaid_max is not None:
+        rep_range: dict = {}
+        if repaid_min is not None:
+            rep_range["$gte"] = repaid_min
+        if repaid_max is not None:
+            rep_range["$lte"] = repaid_max
+        query["total_repaid"] = rep_range
 
     skip = (page - 1) * page_size
     total = await db.loans.count_documents(query)
