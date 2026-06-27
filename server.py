@@ -9303,6 +9303,8 @@ async def get_transactions(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    approved_date_from: Optional[str] = None,
+    approved_date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
     page: int = 1,
@@ -9367,6 +9369,13 @@ async def get_transactions(
                 ]
             }
         )
+    if approved_date_from or approved_date_to:
+        appr_q = {}
+        if approved_date_from:
+            appr_q["$gte"] = approved_date_from + "T00:00:00"
+        if approved_date_to:
+            appr_q["$lte"] = approved_date_to + "T23:59:59.999"
+        and_clauses.append({"processed_at": appr_q})
 
     if search:
         and_clauses.append(
@@ -11874,6 +11883,7 @@ async def approve_transaction(
     transaction_id: str,
     source_account_id: Optional[str] = None,
     bank_receipt_date: Optional[str] = None,
+    approval_comment: Optional[str] = None,
     require_proof: bool = True,
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE)),
 ):
@@ -11907,6 +11917,8 @@ async def approve_transaction(
 
     if bank_receipt_date:
         updates["bank_receipt_date"] = bank_receipt_date
+    if approval_comment:
+        updates["approval_comment"] = approval_comment
 
     # For deposits, require proof of payment screenshot
     if tx["transaction_type"] == TransactionType.DEPOSIT:
@@ -12442,6 +12454,8 @@ async def get_transaction_requests(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    processed_date_from: Optional[str] = None,
+    processed_date_to: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     user: dict = Depends(
@@ -12482,6 +12496,13 @@ async def get_transaction_requests(
         if date_to:
             date_q["$lte"] = date_to + "T23:59:59"
         query["created_at"] = date_q
+    if processed_date_from or processed_date_to:
+        proc_q = {}
+        if processed_date_from:
+            proc_q["$gte"] = processed_date_from + "T00:00:00"
+        if processed_date_to:
+            proc_q["$lte"] = processed_date_to + "T23:59:59"
+        query["processed_at"] = proc_q
     result = await paginate_query(db.transaction_requests, query, page, page_size)
 
     # Enrich processed requests with their transaction's approval status
