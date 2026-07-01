@@ -8,17 +8,86 @@ executes `from chat import chat_router`, the three names we need from it
 reference is safe.
 """
 
+import asyncio
+import jwt as _jwt
 import uuid
 import base64
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse, Response
 
-from server import db, get_current_user, upload_to_r2
+from server import db, get_current_user, upload_to_r2, JWT_SECRET, JWT_ALGORITHM
 
 chat_router = APIRouter()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WEBSOCKET MANAGER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class _ConnManager:
+    def __init__(self):
+        self._conns: dict = {}
+
+    async def connect(self, ws: WebSocket, uid: str):
+        await ws.accept()
+        self._conns.setdefault(uid, []).append(ws)
+
+    def disconnect(self, ws: WebSocket, uid: str):
+        lst = self._conns.get(uid, [])
+        if ws in lst:
+            lst.remove(ws)
+        if not lst:
+            self._conns.pop(uid, None)
+
+    async def send_to(self, uid: str, payload: dict):
+        for ws in list(self._conns.get(uid, [])):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                self.disconnect(ws, uid)
+
+    async def broadcast(self, uids: list, payload: dict):
+        for uid in set(uids):
+            await self.send_to(uid, payload)
+
+
+manager = _ConnManager()
+
+
+@chat_router.websocket("/ws")
+async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
+    uid = None
+    # Try session token
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if session:
+        exp = session.get("expires_at")
+        if isinstance(exp, str):
+            exp = datetime.fromisoformat(exp)
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp > datetime.now(timezone.utc):
+            uid = session["user_id"]
+    # Try JWT
+    if not uid:
+        try:
+            payload = _jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            uid = payload.get("user_id")
+        except Exception:
+            pass
+    if not uid:
+        await ws.close(code=4001)
+        return
+    await manager.connect(ws, uid)
+    try:
+        while True:
+            msg = await ws.receive_text()
+            if msg == "ping":
+                await ws.send_text("pong")
+    except WebSocketDisconnect:
+        manager.disconnect(ws, uid)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -181,7 +250,13 @@ async def send_user_message(
         )
 
     await db.user_messages.insert_one(message_doc)
-    return {"message": "Message sent", "message_id": message_id}
+    message_doc.pop("_id", None)
+    if attachment_data:
+        message_doc["attachment"] = {**message_doc.get("attachment", {}), "url": attachment_data.get("url", "")}
+    asyncio.create_task(manager.broadcast([recipient_id, user["user_id"]], {
+        "type": "dm_message", "message": message_doc,
+    }))
+    return message_doc
 
 
 @chat_router.get("/messages/attachment/{message_id}")
@@ -221,6 +296,9 @@ async def mark_conversation_read(
         {"sender_id": recipient_id, "recipient_id": user["user_id"], "read": False},
         {"$set": {"read": True}},
     )
+    asyncio.create_task(manager.send_to(recipient_id, {
+        "type": "dm_read", "reader_id": user["user_id"],
+    }))
     return {"message": "Messages marked as read"}
 
 
@@ -528,6 +606,9 @@ async def send_channel_message(
     }
     await db.channel_messages.insert_one(msg_doc)
     msg_doc.pop("_id", None)
+    asyncio.create_task(manager.broadcast(channel.get("members", []), {
+        "type": "channel_message", "message": msg_doc,
+    }))
     return msg_doc
 
 
@@ -613,6 +694,9 @@ async def send_thread_reply(
         {"msg_id": msg_id}, {"$inc": {"reply_count": 1}}
     )
     reply_doc.pop("_id", None)
+    asyncio.create_task(manager.broadcast(channel.get("members", []), {
+        "type": "thread_reply", "message": reply_doc,
+    }))
     return reply_doc
 
 
