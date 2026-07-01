@@ -20652,6 +20652,284 @@ async def get_conversation_messages_admin(
     return messages
 
 
+# ============== GROUP CHANNELS ==============
+
+@api_router.get("/channels")
+async def get_channels(user: dict = Depends(get_current_user)):
+    """Get all channels the current user is a member of"""
+    user_id = user["user_id"]
+    channels = await db.channels.find(
+        {"members": user_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(100)
+
+    result = []
+    for ch in channels:
+        channel_id = ch["channel_id"]
+        last_msg = await db.channel_messages.find_one(
+            {"channel_id": channel_id, "thread_root_id": None},
+            {"_id": 0},
+            sort=[("created_at", -1)],
+        )
+        last_read_ts = ch.get("last_read", {}).get(user_id, "")
+        if last_read_ts:
+            unread_count = await db.channel_messages.count_documents({
+                "channel_id": channel_id,
+                "thread_root_id": None,
+                "sender_id": {"$ne": user_id},
+                "created_at": {"$gt": last_read_ts},
+            })
+        else:
+            unread_count = await db.channel_messages.count_documents({
+                "channel_id": channel_id,
+                "thread_root_id": None,
+                "sender_id": {"$ne": user_id},
+            })
+        result.append({
+            **ch,
+            "last_message": last_msg.get("content", "")[:60] if last_msg else "",
+            "last_message_at": last_msg.get("created_at") if last_msg else ch.get("created_at"),
+            "unread_count": unread_count,
+        })
+    return result
+
+
+@api_router.post("/channels")
+async def create_channel(
+    request: Request,
+    data: dict = Body(...),
+    user: dict = Depends(get_current_user),
+):
+    """Create a new group channel"""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Channel name is required")
+
+    channel_id = f"ch_{uuid.uuid4().hex[:12]}"
+    members = list(set(data.get("members", []) + [user["user_id"]]))
+    now = datetime.now(timezone.utc).isoformat()
+
+    channel_doc = {
+        "channel_id": channel_id,
+        "name": name,
+        "description": data.get("description", ""),
+        "members": members,
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+        "created_at": now,
+        "last_read": {},
+    }
+    await db.channels.insert_one(channel_doc)
+    channel_doc.pop("_id", None)
+    return channel_doc
+
+
+@api_router.post("/channels/{channel_id}/members")
+async def add_channel_members(
+    channel_id: str,
+    data: dict = Body(...),
+    user: dict = Depends(get_current_user),
+):
+    """Add members to a channel"""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+
+    new_members = data.get("members", [])
+    await db.channels.update_one(
+        {"channel_id": channel_id},
+        {"$addToSet": {"members": {"$each": new_members}}},
+    )
+    return {"message": "Members added"}
+
+
+@api_router.get("/channels/{channel_id}/messages")
+async def get_channel_messages(
+    channel_id: str,
+    page: int = 1,
+    page_size: int = 50,
+    user: dict = Depends(get_current_user),
+):
+    """Get paginated messages for a channel (top-level only)"""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+
+    skip = (page - 1) * page_size
+    messages = (
+        await db.channel_messages.find(
+            {"channel_id": channel_id, "thread_root_id": None},
+            {"_id": 0},
+        )
+        .sort("created_at", 1)
+        .skip(skip)
+        .to_list(page_size)
+    )
+    return messages
+
+
+@api_router.post("/channels/{channel_id}/messages")
+async def send_channel_message(
+    request: Request,
+    channel_id: str,
+    content: str = Form(""),
+    files: List[UploadFile] = File(default=[]),
+    user: dict = Depends(get_current_user),
+):
+    """Send a message with optional multiple file attachments to a channel"""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+
+    if not content.strip() and not files:
+        raise HTTPException(status_code=400, detail="Message or attachment required")
+
+    now = datetime.now(timezone.utc).isoformat()
+    msg_id = f"cmsg_{uuid.uuid4().hex[:12]}"
+
+    attachments = []
+    for f in files:
+        if not f.filename:
+            continue
+        file_content = await f.read()
+        ct = f.content_type or "application/octet-stream"
+        max_size = 100 * 1024 * 1024 if ct.startswith("video/") else 20 * 1024 * 1024
+        if len(file_content) > max_size:
+            raise HTTPException(
+                status_code=400, detail=f"{f.filename} exceeds size limit"
+            )
+        url = upload_to_r2(file_content, f.filename, ct, "channel-media")
+        attachments.append({
+            "filename": f.filename,
+            "content_type": ct,
+            "size": len(file_content),
+            "url": url,
+        })
+
+    msg_doc = {
+        "msg_id": msg_id,
+        "channel_id": channel_id,
+        "sender_id": user["user_id"],
+        "sender_name": user["name"],
+        "content": content,
+        "attachments": attachments,
+        "thread_root_id": None,
+        "reply_count": 0,
+        "created_at": now,
+    }
+    await db.channel_messages.insert_one(msg_doc)
+    msg_doc.pop("_id", None)
+    return msg_doc
+
+
+@api_router.get("/channels/{channel_id}/messages/{msg_id}/replies")
+async def get_thread_replies(
+    channel_id: str,
+    msg_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Get all replies in a message thread"""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+
+    replies = (
+        await db.channel_messages.find(
+            {"channel_id": channel_id, "thread_root_id": msg_id},
+            {"_id": 0},
+        )
+        .sort("created_at", 1)
+        .to_list(200)
+    )
+    return replies
+
+
+@api_router.post("/channels/{channel_id}/messages/{msg_id}/replies")
+async def send_thread_reply(
+    request: Request,
+    channel_id: str,
+    msg_id: str,
+    content: str = Form(""),
+    files: List[UploadFile] = File(default=[]),
+    user: dict = Depends(get_current_user),
+):
+    """Send a reply in a message thread"""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+
+    parent = await db.channel_messages.find_one(
+        {"msg_id": msg_id, "channel_id": channel_id}
+    )
+    if not parent:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    if not content.strip() and not files:
+        raise HTTPException(status_code=400, detail="Reply content or attachment required")
+
+    now = datetime.now(timezone.utc).isoformat()
+    reply_id = f"cmsg_{uuid.uuid4().hex[:12]}"
+
+    attachments = []
+    for f in files:
+        if not f.filename:
+            continue
+        file_content = await f.read()
+        ct = f.content_type or "application/octet-stream"
+        max_size = 100 * 1024 * 1024 if ct.startswith("video/") else 20 * 1024 * 1024
+        if len(file_content) > max_size:
+            raise HTTPException(
+                status_code=400, detail=f"{f.filename} exceeds size limit"
+            )
+        url = upload_to_r2(file_content, f.filename, ct, "channel-media")
+        attachments.append({
+            "filename": f.filename,
+            "content_type": ct,
+            "size": len(file_content),
+            "url": url,
+        })
+
+    reply_doc = {
+        "msg_id": reply_id,
+        "channel_id": channel_id,
+        "sender_id": user["user_id"],
+        "sender_name": user["name"],
+        "content": content,
+        "attachments": attachments,
+        "thread_root_id": msg_id,
+        "created_at": now,
+    }
+    await db.channel_messages.insert_one(reply_doc)
+    await db.channel_messages.update_one(
+        {"msg_id": msg_id}, {"$inc": {"reply_count": 1}}
+    )
+    reply_doc.pop("_id", None)
+    return reply_doc
+
+
+@api_router.put("/channels/{channel_id}/mark-read")
+async def mark_channel_read(
+    channel_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Update the user's last-read timestamp for a channel"""
+    now = datetime.now(timezone.utc).isoformat()
+    await db.channels.update_one(
+        {"channel_id": channel_id},
+        {"$set": {f"last_read.{user['user_id']}": now}},
+    )
+    return {"message": "Marked as read"}
+
+
 # ============== ENHANCED RECONCILIATION FEATURES ==============
 
 
