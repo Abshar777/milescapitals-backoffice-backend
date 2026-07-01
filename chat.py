@@ -507,6 +507,50 @@ async def create_channel(
     return channel_doc
 
 
+@chat_router.patch("/channels/{channel_id}")
+async def update_channel(
+    channel_id: str,
+    data: dict = Body(...),
+    user: dict = Depends(get_current_user),
+):
+    """Edit channel name, description, or members"""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+
+    update: dict = {}
+    if data.get("name", "").strip():
+        update["name"] = data["name"].strip()
+    if "description" in data:
+        update["description"] = data["description"]
+    if "members" in data:
+        update["members"] = list(set(data["members"] + [user["user_id"]]))
+
+    if update:
+        await db.channels.update_one({"channel_id": channel_id}, {"$set": update})
+
+    updated = await db.channels.find_one({"channel_id": channel_id}, {"_id": 0})
+    return updated
+
+
+@chat_router.delete("/channels/{channel_id}")
+async def delete_channel(
+    channel_id: str,
+    user: dict = Depends(get_current_user),
+):
+    """Delete a channel (creator only)"""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if channel.get("created_by") != user["user_id"] and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only the channel creator can delete it")
+    await db.channels.delete_one({"channel_id": channel_id})
+    await db.channel_messages.delete_many({"channel_id": channel_id})
+    return {"message": "Channel deleted"}
+
+
 @chat_router.post("/channels/{channel_id}/members")
 async def add_channel_members(
     channel_id: str,
