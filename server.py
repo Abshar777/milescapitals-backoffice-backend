@@ -9305,6 +9305,8 @@ async def get_transactions(
     date_to: Optional[str] = None,
     approved_date_from: Optional[str] = None,
     approved_date_to: Optional[str] = None,
+    bank_receipt_date_from: Optional[str] = None,
+    bank_receipt_date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
     page: int = 1,
@@ -9376,6 +9378,13 @@ async def get_transactions(
         if approved_date_to:
             appr_q["$lte"] = approved_date_to + "T23:59:59.999"
         and_clauses.append({"processed_at": appr_q})
+    if bank_receipt_date_from or bank_receipt_date_to:
+        brd_q = {}
+        if bank_receipt_date_from:
+            brd_q["$gte"] = bank_receipt_date_from
+        if bank_receipt_date_to:
+            brd_q["$lte"] = bank_receipt_date_to
+        and_clauses.append({"bank_receipt_date": brd_q})
 
     if search:
         and_clauses.append(
