@@ -651,7 +651,7 @@ async def send_channel_message(
     await db.channel_messages.insert_one(msg_doc)
     msg_doc.pop("_id", None)
     asyncio.create_task(manager.broadcast(channel.get("members", []), {
-        "type": "channel_message", "message": msg_doc,
+        "type": "channel_message", "message": msg_doc, "channel_name": channel.get("name", ""),
     }))
     return msg_doc
 
@@ -739,7 +739,7 @@ async def send_thread_reply(
     )
     reply_doc.pop("_id", None)
     asyncio.create_task(manager.broadcast(channel.get("members", []), {
-        "type": "thread_reply", "message": reply_doc,
+        "type": "thread_reply", "message": reply_doc, "parent_sender_id": parent["sender_id"],
     }))
     return reply_doc
 
