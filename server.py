@@ -9307,6 +9307,8 @@ async def get_transactions(
     approved_date_to: Optional[str] = None,
     bank_receipt_date_from: Optional[str] = None,
     bank_receipt_date_to: Optional[str] = None,
+    request_processed_date_from: Optional[str] = None,
+    request_processed_date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
     page: int = 1,
@@ -9385,6 +9387,13 @@ async def get_transactions(
         if bank_receipt_date_to:
             brd_q["$lte"] = bank_receipt_date_to
         and_clauses.append({"bank_receipt_date": brd_q})
+    if request_processed_date_from or request_processed_date_to:
+        rpd_q = {}
+        if request_processed_date_from:
+            rpd_q["$gte"] = request_processed_date_from + "T00:00:00"
+        if request_processed_date_to:
+            rpd_q["$lte"] = request_processed_date_to + "T23:59:59.999"
+        and_clauses.append({"request_processed_at": rpd_q})
 
     if search:
         and_clauses.append(
@@ -13188,6 +13197,7 @@ async def process_transaction_request(
         "request_id": request_id,
         "created_at": now.isoformat(),
         "processed_at": None,
+        "request_processed_at": now.isoformat(),
     }
 
     await db.transactions.insert_one(tx_doc)
