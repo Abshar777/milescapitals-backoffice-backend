@@ -18373,6 +18373,78 @@ async def get_financial_summary_report(
     }
 
 
+@api_router.get("/reports/daily-pnl")
+async def get_daily_pnl_report(
+    user: dict = Depends(require_permission(Modules.REPORTS, Actions.VIEW)),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """Day-by-day profit & loss from income/expense entries.
+
+    Groups the income_expenses collection by its `date` (YYYY-MM-DD) field and
+    returns per-day income, expenses and net (income - expense) — the same
+    Net P&L definition used by /reports/financial-summary.
+    """
+    query = {}
+    if start_date:
+        query["date"] = {"$gte": start_date}
+    if end_date:
+        if "date" in query:
+            query["date"]["$lte"] = end_date
+        else:
+            query["date"] = {"$lte": end_date}
+
+    pipeline = [
+        {"$match": query} if query else {"$match": {}},
+        {
+            "$group": {
+                "_id": "$date",
+                "income": {
+                    "$sum": {
+                        "$cond": [{"$eq": ["$entry_type", "income"]}, "$amount", 0]
+                    }
+                },
+                "expenses": {
+                    "$sum": {
+                        "$cond": [{"$eq": ["$entry_type", "expense"]}, "$amount", 0]
+                    }
+                },
+            }
+        },
+        {"$sort": {"_id": 1}},
+    ]
+
+    grouped = await db.income_expenses.aggregate(pipeline).to_list(2000)
+
+    rows = []
+    total_income = 0.0
+    total_expenses = 0.0
+    for g in grouped:
+        if not g.get("_id"):
+            continue
+        income = g.get("income", 0) or 0
+        expenses = g.get("expenses", 0) or 0
+        rows.append(
+            {
+                "date": g["_id"],
+                "income": income,
+                "expenses": expenses,
+                "net": income - expenses,
+            }
+        )
+        total_income += income
+        total_expenses += expenses
+
+    return {
+        "rows": rows,
+        "totals": {
+            "income": total_income,
+            "expenses": total_expenses,
+            "net": total_income - total_expenses,
+        },
+    }
+
+
 # ============== RECONCILIATION MODULE ==============
 
 import csv
