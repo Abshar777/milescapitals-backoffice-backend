@@ -3186,6 +3186,13 @@ async def get_treasury_history(
     if not account:
         raise HTTPException(status_code=404, detail="Treasury account not found")
 
+    # Enforce role-level treasury account restriction (same guard as get_treasury_account)
+    if not (user.get("role") == "admin" and not user.get("role_id")):
+        user_role = await get_role_for_user(user)
+        allowed_ids = user_role.get("treasury_account_ids") if user_role else None
+        if allowed_ids and account_id not in allowed_ids:
+            raise HTTPException(status_code=403, detail="Access to this treasury account is not permitted")
+
     # Build query for treasury transactions
     query = {"account_id": account_id}
 
