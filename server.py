@@ -3333,131 +3333,6 @@ async def delete_treasury_account(
 
     return {"message": "Treasury account deleted"}
 
-# Balance Fix / Opening Balance Adjustment
-class BalanceFixRequest(BaseModel):
-    actual_balance: float
-    effective_date: Optional[str] = None
-    reason: Optional[str] = None
-
-@api_router.post("/treasury/{account_id}/balance-fix")
-async def fix_treasury_balance(request: Request, account_id: str, fix: BalanceFixRequest, user: dict = Depends(require_admin)):
-    """Fix treasury opening balance at effective date.
-    Inserts an adjustment so the opening balance on that date matches the input.
-    Then recalculates all running balances and the final account balance."""
-    account = await db.treasury_accounts.find_one({"account_id": account_id}, {"_id": 0})
-    if not account:
-        raise HTTPException(status_code=404, detail="Treasury account not found")
-
-    # Effective date → adjustment placed at start-of-day (opening balance)
-    raw_date = fix.effective_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    day_str = raw_date[:10]  # YYYY-MM-DD
-    day_start = f"{day_str}T00:00:00"
-
-    outflow_types = ["debt_payment", "withdrawal", "transfer_out", "expense", "balance_adjustment_debit", "loan_disbursement"]
-
-    # Get all transactions for this account sorted by date
-    all_txs = await db.treasury_transactions.find(
-        {"account_id": account_id},
-        {"_id": 0, "treasury_transaction_id": 1, "created_at": 1, "amount": 1, "transaction_type": 1}
-    ).sort("created_at", 1).to_list(None)
-
-    # Remove any existing balance adjustments on the same date (re-fix scenario)
-    existing_adj_ids = []
-    for tx in all_txs:
-        tx_date = tx.get("created_at", "")[:10]
-        tx_type = tx.get("transaction_type", "")
-        if tx_date == day_str and tx_type in ("balance_adjustment", "balance_adjustment_debit"):
-            existing_adj_ids.append(tx["treasury_transaction_id"])
-
-    if existing_adj_ids:
-        await db.treasury_transactions.delete_many(
-            {"treasury_transaction_id": {"$in": existing_adj_ids}}
-        )
-        # Refresh the transaction list after deletion
-        all_txs = await db.treasury_transactions.find(
-            {"account_id": account_id},
-            {"_id": 0, "treasury_transaction_id": 1, "created_at": 1, "amount": 1, "transaction_type": 1}
-        ).sort("created_at", 1).to_list(None)
-
-    # Calculate running balance BEFORE the selected date's real transactions start.
-    # Include any existing midnight adjustments (they are prior opening fixes).
-    # "Real" transactions on this day start after 00:00:00.
-    running_before_date = 0.0
-    for tx in all_txs:
-        tx_date = tx.get("created_at", "")
-        # Include everything strictly before the day, PLUS any midnight entries (00:00:00)
-        if tx_date > day_start:
-            break
-        amt = tx.get("amount", 0)
-        if tx.get("transaction_type") in outflow_types:
-            running_before_date -= abs(amt)
-        else:
-            running_before_date += abs(amt)
-
-    running_before_date = round(running_before_date, 2)
-    adjustment = round(fix.actual_balance - running_before_date, 2)
-
-    if adjustment == 0:
-        raise HTTPException(status_code=400, detail=f"Opening balance on {day_str} already matches {fix.actual_balance:,.2f}. No adjustment needed.")
-
-    tx_id = f"ttx_{uuid.uuid4().hex[:12]}"
-    # Place slightly after midnight so it sorts after any existing midnight entries
-    adjustment_timestamp = f"{day_str}T00:00:00.500000"
-
-    adjustment_entry = {
-        "treasury_transaction_id": tx_id,
-        "account_id": account_id,
-        "transaction_type": "balance_adjustment",
-        "amount": abs(adjustment),
-        "currency": account.get("currency", "USD"),
-        "reference": f"Opening Balance Fix: {fix.reason or 'Manual correction'}",
-        "description": f"Opening balance on {day_str} fixed to {fix.actual_balance:,.2f}. Was {running_before_date:,.2f}. Reason: {fix.reason or 'Manual correction'}",
-        "created_at": adjustment_timestamp,
-        "created_by": user.get("email"),
-        "created_by_name": user.get("name", user.get("email")),
-        "adjustment_direction": "credit" if adjustment > 0 else "debit",
-        "previous_balance": running_before_date,
-        "new_balance": fix.actual_balance,
-    }
-
-    if adjustment < 0:
-        adjustment_entry["transaction_type"] = "balance_adjustment_debit"
-
-    await db.treasury_transactions.insert_one(adjustment_entry)
-
-    # Recalculate and update the account's current balance from all transactions
-    all_txs_after = await db.treasury_transactions.find(
-        {"account_id": account_id},
-        {"_id": 0, "amount": 1, "transaction_type": 1}
-    ).to_list(None)
-
-    new_balance = 0.0
-    for tx in all_txs_after:
-        amt = tx.get("amount", 0)
-        if tx.get("transaction_type") in outflow_types:
-            new_balance -= abs(amt)
-        else:
-            new_balance += abs(amt)
-
-    new_balance = round(new_balance, 2)
-    await db.treasury_accounts.update_one(
-        {"account_id": account_id},
-        {"$set": {"balance": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
-
-    await log_activity(request, user, "edit", "treasury", f"Fixed opening balance on {day_str} to {fix.actual_balance:,.2f}. Adjustment: {adjustment:+,.2f}", reference_id=account_id)
-
-    return {
-        "message": f"Opening balance on {day_str} fixed successfully",
-        "previous_running_balance": running_before_date,
-        "target_balance": fix.actual_balance,
-        "adjustment": adjustment,
-        "adjustment_type": "credit" if adjustment > 0 else "debit",
-        "new_account_balance": new_balance,
-        "transaction_id": tx_id
-    }
-
-
 # Inter-Treasury Transfer
 class TreasuryTransferRequest(BaseModel):
     source_account_id: str
@@ -18379,12 +18254,12 @@ async def get_daily_pnl_report(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ):
-    """Day-by-day profit & loss from income/expense entries.
-
-    Groups the income_expenses collection by its `date` (YYYY-MM-DD) field and
-    returns per-day income, expenses and net (income - expense) — the same
-    Net P&L definition used by /reports/financial-summary.
+    """Day-by-day profit & loss from income/expense entries, broken down by the
+    actual transaction currency (base_currency / base_amount, in native units),
+    plus a USD grand total (amount_usd) since currencies can't be summed together.
     """
+    from collections import defaultdict
+
     query = {}
     if start_date:
         query["date"] = {"$gte": start_date}
@@ -18394,53 +18269,80 @@ async def get_daily_pnl_report(
         else:
             query["date"] = {"$lte": end_date}
 
-    pipeline = [
-        {"$match": query} if query else {"$match": {}},
+    entries = await db.income_expenses.find(
+        query,
         {
-            "$group": {
-                "_id": "$date",
-                "income": {
-                    "$sum": {
-                        "$cond": [{"$eq": ["$entry_type", "income"]}, "$amount", 0]
-                    }
-                },
-                "expenses": {
-                    "$sum": {
-                        "$cond": [{"$eq": ["$entry_type", "expense"]}, "$amount", 0]
-                    }
-                },
-            }
+            "_id": 0, "date": 1, "entry_type": 1, "amount": 1, "currency": 1,
+            "base_amount": 1, "base_currency": 1, "amount_usd": 1,
         },
-        {"$sort": {"_id": 1}},
-    ]
+    ).to_list(None)
 
-    grouped = await db.income_expenses.aggregate(pipeline).to_list(2000)
+    # (date, currency) -> native income/expenses + usd income/expenses
+    buckets = defaultdict(lambda: {"income": 0.0, "expenses": 0.0, "income_usd": 0.0, "expenses_usd": 0.0})
+    cur_tot = defaultdict(lambda: {"income": 0.0, "expenses": 0.0})
+    g_income_usd = 0.0
+    g_expenses_usd = 0.0
+
+    for e in entries:
+        d = e.get("date")
+        if not d:
+            continue
+        currency = e.get("base_currency") or e.get("currency") or "USD"
+        native = e.get("base_amount")
+        if native is None:
+            native = e.get("amount", 0) or 0
+        usd = e.get("amount_usd")
+        if usd is None:
+            usd = e.get("amount", 0) or 0
+        key = (d, currency)
+        if e.get("entry_type") == "income":
+            buckets[key]["income"] += native
+            buckets[key]["income_usd"] += usd
+            cur_tot[currency]["income"] += native
+            g_income_usd += usd
+        elif e.get("entry_type") == "expense":
+            buckets[key]["expenses"] += native
+            buckets[key]["expenses_usd"] += usd
+            cur_tot[currency]["expenses"] += native
+            g_expenses_usd += usd
 
     rows = []
-    total_income = 0.0
-    total_expenses = 0.0
-    for g in grouped:
-        if not g.get("_id"):
-            continue
-        income = g.get("income", 0) or 0
-        expenses = g.get("expenses", 0) or 0
-        rows.append(
-            {
-                "date": g["_id"],
-                "income": income,
-                "expenses": expenses,
-                "net": income - expenses,
-            }
-        )
-        total_income += income
-        total_expenses += expenses
+    for d, currency in sorted(buckets.keys()):
+        b = buckets[(d, currency)]
+        inc = round(b["income"], 2)
+        exp = round(b["expenses"], 2)
+        inc_usd = round(b["income_usd"], 2)
+        exp_usd = round(b["expenses_usd"], 2)
+        rows.append({
+            "date": d,
+            "currency": currency,
+            "income": inc,
+            "expenses": exp,
+            "net": round(inc - exp, 2),
+            "income_usd": inc_usd,
+            "expenses_usd": exp_usd,
+            "net_usd": round(inc_usd - exp_usd, 2),
+        })
+
+    currency_totals = []
+    for currency in sorted(cur_tot.keys()):
+        t = cur_tot[currency]
+        inc = round(t["income"], 2)
+        exp = round(t["expenses"], 2)
+        currency_totals.append({
+            "currency": currency,
+            "income": inc,
+            "expenses": exp,
+            "net": round(inc - exp, 2),
+        })
 
     return {
         "rows": rows,
-        "totals": {
-            "income": total_income,
-            "expenses": total_expenses,
-            "net": total_income - total_expenses,
+        "currency_totals": currency_totals,
+        "grand_total_usd": {
+            "income": round(g_income_usd, 2),
+            "expenses": round(g_expenses_usd, 2),
+            "net": round(g_income_usd - g_expenses_usd, 2),
         },
     }
 
