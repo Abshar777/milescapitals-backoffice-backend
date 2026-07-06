@@ -9431,6 +9431,14 @@ async def get_pending_transactions(
     query = {}
     and_clauses = []
 
+    # Approvals scoping (this endpoint only): restrict to the role's allowed
+    # treasury accounts. Admin and roles with no restriction see everything.
+    if not (user.get("role") == "admin" and not user.get("role_id")):
+        _user_role = await get_role_for_user(user)
+        _allowed_ids = _user_role.get("treasury_account_ids") if _user_role else None
+        if _allowed_ids:
+            query["destination_account_id"] = {"$in": _allowed_ids}
+
     if status:
         query["status"] = status
     if transaction_type:
