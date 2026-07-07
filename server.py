@@ -18362,6 +18362,54 @@ async def get_daily_pnl_report(
     }
 
 
+@api_router.get("/reports/daily-pnl/entries")
+async def get_daily_pnl_entries(
+    user: dict = Depends(require_permission(Modules.REPORTS, Actions.VIEW)),
+    date: Optional[str] = None,
+    currency: Optional[str] = None,
+):
+    """Individual income/expense entries for a single day (optionally one
+    transaction currency) — powers the Daily P&L drill-down."""
+    if not date:
+        return {"entries": [], "date": date, "currency": currency}
+
+    raw = await db.income_expenses.find(
+        {"date": date},
+        {
+            "_id": 0, "entry_id": 1, "entry_type": 1, "description": 1,
+            "category": 1, "ie_category_name": 1, "custom_category": 1, "reference": 1,
+            "amount": 1, "currency": 1, "base_amount": 1, "base_currency": 1,
+            "amount_usd": 1, "created_by_name": 1,
+        },
+    ).to_list(5000)
+
+    entries = []
+    for e in raw:
+        if e.get("entry_type") not in ("income", "expense"):
+            continue
+        cur = e.get("base_currency") or e.get("currency") or "USD"
+        if currency and cur != currency:
+            continue
+        native = e.get("base_amount")
+        if native is None:
+            native = e.get("amount", 0) or 0
+        cat = e.get("ie_category_name") or e.get("category") or e.get("custom_category") or ""
+        entries.append({
+            "entry_id": e.get("entry_id"),
+            "entry_type": e.get("entry_type"),
+            "description": e.get("description") or e.get("reference") or "",
+            "category": cat,
+            "currency": cur,
+            "amount": round(native, 2) if isinstance(native, (int, float)) else 0,
+            "amount_usd": round(e.get("amount_usd", 0) or 0, 2),
+            "created_by_name": e.get("created_by_name") or "",
+        })
+
+    # income first, then by USD magnitude
+    entries.sort(key=lambda x: (x["entry_type"] != "income", -(x.get("amount_usd") or 0)))
+    return {"entries": entries, "date": date, "currency": currency}
+
+
 # ============== RECONCILIATION MODULE ==============
 
 import csv
