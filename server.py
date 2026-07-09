@@ -999,6 +999,27 @@ def convert_to_usd(amount: float, currency: str) -> float:
     return round(amount * rate, 2)
 
 
+async def manual_fx_usd(base_amount, base_currency, entered_rate=None):
+    """Option A — normalize a native amount to USD using the admin-set MANUAL FX rate
+    (Settings → Manual FX Rates), instead of the per-transaction entered rate.
+    Falls back to the entered rate, then the live/cache rate, if the currency has no
+    manual rate configured. Returns (usd_amount, rate_used) or (None, entered_rate)
+    when there is nothing to convert (USD / missing base)."""
+    if not base_currency or base_currency == "USD" or not base_amount:
+        return None, entered_rate
+    fx = await db.app_settings.find_one(
+        {"setting_type": "manual_fx_rates"}, {"_id": 0}
+    )
+    rates = fx.get("rates", {}) if fx else {}
+    mr = rates.get(base_currency)
+    if mr and mr > 0:
+        return round(base_amount * mr, 2), mr
+    if entered_rate and entered_rate > 0:
+        return round(base_amount * entered_rate, 2), entered_rate
+    usd = convert_to_usd(base_amount, base_currency)
+    return usd, (round(usd / base_amount, 6) if base_amount else entered_rate)
+
+
 def convert_from_usd(amount: float, target_currency: str) -> float:
     """Convert USD amount to target currency."""
     rates = _fx_cache.get("rates") or FALLBACK_RATES_TO_USD
@@ -11148,18 +11169,16 @@ async def _create_transaction_impl(
     proof_image_urls = proof_image_urls or []
     proof_image_url = proof_image_urls[0] if proof_image_urls else None
 
-    # Calculate USD amount if base currency is different
+    # Calculate USD amount if base currency is different.
+    # Option A: normalize using the admin-set MANUAL FX rate (ignore any entered rate);
+    # manual_fx_usd() falls back to the entered/live rate only if no manual rate exists.
     usd_amount = amount
     actual_exchange_rate = exchange_rate
     if base_currency and base_currency != "USD" and base_amount:
-        # Use user-provided exchange rate if available, otherwise fall back to convert_to_usd
-        if exchange_rate and exchange_rate > 0:
-            usd_amount = round(base_amount * exchange_rate, 2)
-        else:
-            usd_amount = convert_to_usd(base_amount, base_currency)
-            # Calculate the implicit exchange rate for storage
-            if base_amount > 0:
-                actual_exchange_rate = round(usd_amount / base_amount, 6)
+        _mr_usd, _mr_rate = await manual_fx_usd(base_amount, base_currency, exchange_rate)
+        if _mr_usd is not None:
+            usd_amount = _mr_usd
+            actual_exchange_rate = _mr_rate
 
     # Calculate PSP commission if applicable
     commission_amount = 0.0
@@ -12573,6 +12592,12 @@ async def create_transaction_request(
 
     request_id = f"txreq_{uuid.uuid4().hex[:12]}"
 
+    # Option A: store the request's USD amount at the manual FX rate
+    _mr_usd, _mr_rate = await manual_fx_usd(base_amount, base_currency, exchange_rate)
+    if _mr_usd is not None:
+        amount = _mr_usd
+        exchange_rate = _mr_rate
+
     doc = {
         "request_id": request_id,
         "transaction_type": transaction_type,
@@ -12954,6 +12979,12 @@ async def process_transaction_request(
     usd_amount = req["amount"]
     base_currency = req.get("base_currency", "USD")
     base_amount = req.get("base_amount")
+    proc_exchange_rate = req.get("exchange_rate")
+    # Option A: re-normalize to USD using the manual FX rate at processing time
+    _mr_usd, _mr_rate = await manual_fx_usd(base_amount, base_currency, proc_exchange_rate)
+    if _mr_usd is not None:
+        usd_amount = _mr_usd
+        proc_exchange_rate = _mr_rate
 
     # Get vendor info if exchanger destination
     vendor_info = None
@@ -13030,7 +13061,7 @@ async def process_transaction_request(
         "currency": "USD",
         "base_currency": base_currency,
         "base_amount": base_amount if base_currency != "USD" else None,
-        "exchange_rate": req.get("exchange_rate"),
+        "exchange_rate": proc_exchange_rate,
         "destination_type": req.get("destination_type", "bank"),
         "destination_account_id": (
             req.get("destination_account_id")
