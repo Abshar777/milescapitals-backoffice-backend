@@ -4924,6 +4924,7 @@ async def get_psp_pending_transactions(
     page_size: int = 20,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    fetch_all: bool = False,
     user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW))
 ):
     """Get approved DEPOSIT transactions for a PSP that haven't been settled"""
@@ -4940,6 +4941,9 @@ async def get_psp_pending_transactions(
         query.setdefault("transaction_date", {})["$lte"] = date_to
     
     total = await db.transactions.count_documents(query)
+    if fetch_all:
+        transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(None)
+        return {"items": transactions, "total": total, "page": 1, "page_size": total, "total_pages": 1}
     skip = (page - 1) * page_size
     transactions = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
     return {"items": transactions, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, -(-total // page_size))}
