@@ -1087,6 +1087,7 @@ class TransactionCreate(BaseModel):
     client_bank_account_name: Optional[str] = None
     client_bank_account_number: Optional[str] = None
     client_bank_swift_iban: Optional[str] = None
+    client_bank_branch: Optional[str] = None
     client_bank_currency: Optional[str] = None
     # Client USDT details (for withdrawal to USDT)
     client_usdt_address: Optional[str] = None
@@ -10885,6 +10886,7 @@ async def create_transaction(
     client_bank_account_name: Optional[str] = Form(None),
     client_bank_account_number: Optional[str] = Form(None),
     client_bank_swift_iban: Optional[str] = Form(None),
+    client_bank_branch: Optional[str] = Form(None),
     client_bank_currency: Optional[str] = Form(None),
     save_bank_to_client: Optional[str] = Form(
         None
@@ -10930,6 +10932,7 @@ async def create_transaction(
             client_bank_account_name,
             client_bank_account_number,
             client_bank_swift_iban,
+            client_bank_branch,
             client_bank_currency,
             save_bank_to_client,
             client_usdt_address,
@@ -10973,6 +10976,7 @@ async def _create_transaction_impl(
     client_bank_account_name,
     client_bank_account_number,
     client_bank_swift_iban,
+    client_bank_branch,
     client_bank_currency,
     save_bank_to_client,
     client_usdt_address,
@@ -11130,6 +11134,7 @@ async def _create_transaction_impl(
                 "account_name": client_bank_account_name,
                 "account_number": client_bank_account_number,
                 "swift_iban": client_bank_swift_iban,
+                "branch": client_bank_branch,
                 "currency": client_bank_currency or "USD",
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "created_by": user["user_id"],
@@ -11313,6 +11318,9 @@ async def _create_transaction_impl(
         ),
         "client_bank_swift_iban": (
             client_bank_swift_iban if destination_type in ["bank", "vendor"] else None
+        ),
+        "client_bank_branch": (
+            client_bank_branch if destination_type in ["bank", "vendor"] else None
         ),
         "client_bank_currency": (
             client_bank_currency if destination_type in ["bank", "vendor"] else None
@@ -12479,6 +12487,7 @@ async def create_transaction_request(
     client_bank_account_name: Optional[str] = Form(None),
     client_bank_account_number: Optional[str] = Form(None),
     client_bank_swift_iban: Optional[str] = Form(None),
+    client_bank_branch: Optional[str] = Form(None),
     client_bank_currency: Optional[str] = Form(None),
     client_usdt_address: Optional[str] = Form(None),
     client_usdt_network: Optional[str] = Form(None),
@@ -12588,6 +12597,7 @@ async def create_transaction_request(
         "client_bank_account_name": client_bank_account_name,
         "client_bank_account_number": client_bank_account_number,
         "client_bank_swift_iban": client_bank_swift_iban,
+        "client_bank_branch": client_bank_branch,
         "client_bank_currency": client_bank_currency,
         "client_usdt_address": client_usdt_address,
         "client_usdt_network": client_usdt_network,
@@ -12713,6 +12723,7 @@ async def create_transaction_request(
             "client_bank_account_name": client_bank_account_name,
             "client_bank_account_number": client_bank_account_number,
             "client_bank_swift_iban": client_bank_swift_iban,
+            "client_bank_branch": client_bank_branch,
             "client_bank_currency": client_bank_currency,
             "client_usdt_address": client_usdt_address,
             "client_usdt_network": client_usdt_network,
@@ -12854,6 +12865,7 @@ async def update_transaction_request(
         "client_bank_account_name",
         "client_bank_account_number",
         "client_bank_swift_iban",
+        "client_bank_branch",
         "client_bank_currency",
         "client_usdt_address",
         "client_usdt_network",
@@ -13051,6 +13063,7 @@ async def process_transaction_request(
         "client_bank_account_name": req.get("client_bank_account_name"),
         "client_bank_account_number": req.get("client_bank_account_number"),
         "client_bank_swift_iban": req.get("client_bank_swift_iban"),
+        "client_bank_branch": req.get("client_bank_branch"),
         "client_bank_currency": req.get("client_bank_currency"),
         "client_usdt_address": req.get("client_usdt_address"),
         "client_usdt_network": req.get("client_usdt_network"),
