@@ -14703,8 +14703,12 @@ async def delete_income_expense(
         else:
             ie_reversal_amount = convert_currency(entry["amount"], ie_currency, treasury_currency)
 
-    # Reverse the treasury balance change
-    if entry["entry_type"] == IncomeExpenseType.INCOME:
+    # Reverse the treasury balance ONLY if the entry's money is currently
+    # applied (approved/completed). Pending, reinstated-to-pending, and
+    # rejected entries never applied a balance change (or it was already
+    # reversed by reinstate), so deleting them must not touch the balance.
+    effect_applied = entry.get("status") in ("approved", "completed")
+    if effect_applied and entry["entry_type"] == IncomeExpenseType.INCOME:
         # Reverse income - deduct from treasury
         await db.treasury_accounts.update_one(
             {"account_id": entry["treasury_account_id"]},
@@ -14713,7 +14717,7 @@ async def delete_income_expense(
                 "$set": {"updated_at": now.isoformat()},
             },
         )
-    else:
+    elif effect_applied:
         # Reverse expense - credit to treasury
         await db.treasury_accounts.update_one(
             {"account_id": entry["treasury_account_id"]},
