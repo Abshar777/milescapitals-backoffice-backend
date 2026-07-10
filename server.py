@@ -3218,13 +3218,20 @@ async def get_treasury_history(
     # Build query for treasury transactions
     query = {"account_id": account_id}
 
+    # created_at holds full ISO timestamps; a bare YYYY-MM-DD end_date would
+    # string-compare BELOW every timestamp on that day and exclude the whole
+    # end day (e.g. transfers stamped T00:00:00). Pad it to end-of-day.
+    end_ts = None
+    if end_date:
+        end_ts = end_date if "T" in end_date else f"{end_date}T23:59:59.999999"
+
     if start_date:
         query["created_at"] = {"$gte": start_date}
-    if end_date:
+    if end_ts:
         if "created_at" in query:
-            query["created_at"]["$lte"] = end_date
+            query["created_at"]["$lte"] = end_ts
         else:
-            query["created_at"] = {"$lte": end_date}
+            query["created_at"] = {"$lte": end_ts}
     if transaction_type:
         query["transaction_type"] = transaction_type
 
@@ -3255,11 +3262,11 @@ async def get_treasury_history(
     }
     if start_date:
         tx_query["created_at"] = {"$gte": start_date}
-    if end_date:
+    if end_ts:
         if "created_at" in tx_query:
-            tx_query["created_at"]["$lte"] = end_date
+            tx_query["created_at"]["$lte"] = end_ts
         else:
-            tx_query["created_at"] = {"$lte": end_date}
+            tx_query["created_at"] = {"$lte": end_ts}
 
     regular_txs = (
         await db.transactions.find(tx_query, {"_id": 0})
