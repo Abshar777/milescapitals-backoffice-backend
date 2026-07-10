@@ -135,3 +135,5 @@ async-timeout==5.0.1
 pdf2image==1.17.0
 pytesseract==0.3.13
 redis==7.2.1
+pyotp==2.10.0
+qrcode==8.2

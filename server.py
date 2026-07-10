@@ -1150,6 +1150,41 @@ def create_jwt_token(user_id: str, email: str, role: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
+def create_mfa_setup_token(user_id: str, email: str) -> str:
+    """Short-lived token that ONLY authorizes MFA enrollment during login."""
+    payload = {
+        "user_id": user_id,
+        "email": email,
+        "scope": "mfa_setup",
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+async def resolve_mfa_user(request: Request, setup_token: Optional[str]):
+    """Return (user, via_setup_token). Accepts either a full session/JWT
+    (Profile flow) or an mfa_setup_token issued during login (enrollment flow)."""
+    try:
+        u = await get_current_user(request)
+        return u, False
+    except HTTPException:
+        pass
+    if setup_token:
+        try:
+            payload = jwt.decode(
+                setup_token, JWT_SECRET, algorithms=[JWT_ALGORITHM]
+            )
+            if payload.get("scope") == "mfa_setup":
+                u = await db.users.find_one(
+                    {"user_id": payload["user_id"]}, {"_id": 0}
+                )
+                if u:
+                    return u, True
+        except jwt.InvalidTokenError:
+            pass
+    raise HTTPException(status_code=401, detail="Not authenticated")
+
+
 async def get_current_user(request: Request) -> dict:
     # Check cookie first
     session_token = request.cookies.get("session_token")
@@ -1192,9 +1227,13 @@ async def get_current_user(request: Request) -> dict:
         # Try JWT token
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            user = await db.users.find_one({"user_id": payload["user_id"]}, {"_id": 0})
-            if user:
-                return user
+            # MFA setup tokens are scoped and must NOT grant general API access
+            if payload.get("scope") != "mfa_setup":
+                user = await db.users.find_one(
+                    {"user_id": payload["user_id"]}, {"_id": 0}
+                )
+                if user:
+                    return user
         except jwt.ExpiredSignatureError:
             pass
         except jwt.InvalidTokenError:
@@ -1491,110 +1530,114 @@ async def login(credentials: UserLogin, request: Request):
     if not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Account is disabled")
 
-    # Check if 2FA is enabled
-    security_settings = await db.app_settings.find_one(
-        {"setting_type": "security"}, {"_id": 0}
-    )
-    twofa_enabled = (
-        security_settings.get("twofa_enabled", False) if security_settings else False
-    )
+    # ===== Mandatory two-factor authentication (per-user) =====
+    mfa_method = user.get("mfa_method")
+    totp_confirmed = bool(user.get("totp_confirmed"))
+    is_set_up = (mfa_method == "totp" and totp_confirmed) or (mfa_method == "email")
 
-    if twofa_enabled:
-        import random
+    user_public = {
+        "user_id": user["user_id"],
+        "email": user["email"],
+        "name": user["name"],
+        "role": user.get("role", "viewer"),
+    }
 
-        otp_code = str(random.randint(100000, 999999))
-        now_otp = datetime.now(timezone.utc)
-        await db.otp_codes.delete_many({"user_id": user["user_id"]})
-        await db.otp_codes.insert_one(
-            {
-                "user_id": user["user_id"],
-                "email": user["email"],
-                "code": otp_code,
-                "attempts": 0,
-                "created_at": now_otp.isoformat(),
-                "expires_at": (now_otp + timedelta(minutes=5)).isoformat(),
-            }
-        )
-        smtp_settings = await db.app_settings.find_one(
-            {"setting_type": "email"}, {"_id": 0}
-        )
-        # Fallback to .env SMTP if DB settings not configured
-        smtp_host = (smtp_settings or {}).get("smtp_host") or os.environ.get(
-            "SMTP_HOST", "smtp.gmail.com"
-        )
-        smtp_port = (smtp_settings or {}).get("smtp_port") or int(
-            os.environ.get("SMTP_PORT", "587")
-        )
-        smtp_email = (smtp_settings or {}).get("smtp_email") or os.environ.get(
-            "SMTP_USER", ""
-        )
-        smtp_password = (smtp_settings or {}).get("smtp_password") or os.environ.get(
-            "SMTP_PASSWORD", ""
-        )
-        smtp_from = (smtp_settings or {}).get("smtp_from_email") or os.environ.get(
-            "SMTP_FROM_EMAIL", smtp_email
-        )
+    # 1) Not set up yet -> force enrollment on the login screen
+    if not is_set_up:
+        return {
+            "access_token": "",
+            "token_type": "bearer",
+            "requires_setup": True,
+            "mfa_setup_token": create_mfa_setup_token(
+                user["user_id"], user["email"]
+            ),
+            "message": "Set up two-factor authentication to continue",
+            "user": user_public,
+        }
 
-        if smtp_email and smtp_password:
-            try:
-                otp_html = f"""<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:30px;background:#ffffff;color:#0f172a;border-radius:8px;">
-                    <h2 style="color:#4f46e5;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
-                    <p style="color:#64748b;text-align:center;">Your login verification code:</p>
-                    <div style="background:#f8fafc;padding:20px;border-radius:8px;text-align:center;margin:20px 0;">
-                        <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#4f46e5;">{otp_code}</span>
-                    </div>
-                    <p style="color:#64748b;text-align:center;font-size:12px;">This code expires in 5 minutes. Do not share it.</p></div>"""
-                await send_email(
-                    to_emails=[user["email"]],
-                    subject="Miles Capitals - Login Verification Code",
-                    html_content=otp_html,
-                    smtp_host=smtp_host,
-                    smtp_port=smtp_port,
-                    smtp_email=smtp_email,
-                    smtp_password=smtp_password,
-                    smtp_from_email=smtp_from,
-                )
-                return {
-                    "access_token": "",
-                    "token_type": "bearer",
-                    "requires_2fa": True,
-                    "message": f"Verification code sent to {user['email']}",
-                    "user": {
-                        "user_id": user["user_id"],
-                        "email": user["email"],
-                        "name": user["name"],
-                        "role": user.get("role", "viewer"),
-                    },
-                }
-            except Exception as e:
-                logger.error(f"Failed to send OTP email: {e}")
+    # 2) Authenticator app -> challenge (no email needed)
+    if mfa_method == "totp":
+        return {
+            "access_token": "",
+            "token_type": "bearer",
+            "requires_2fa": True,
+            "mfa_method": "totp",
+            "message": "Enter the 6-digit code from your authenticator app",
+            "user": user_public,
+        }
 
-    token = create_jwt_token(user["user_id"], user["email"], user["role"])
+    # 3) Email OTP -> generate and send a code
+    import random
 
-    # Log successful login
-    await create_log(
-        log_type="auth",
-        action="login",
-        module="authentication",
-        user_id=user["user_id"],
-        user_email=user["email"],
-        user_name=user["name"],
-        user_role=user["role"],
-        description=f"User logged in successfully",
-        ip_address=ip_address,
-        user_agent=user_agent,
-        status="success",
-    )
-
-    return TokenResponse(
-        access_token=token,
-        user={
+    otp_code = str(random.randint(100000, 999999))
+    now_otp = datetime.now(timezone.utc)
+    await db.otp_codes.delete_many({"user_id": user["user_id"]})
+    await db.otp_codes.insert_one(
+        {
             "user_id": user["user_id"],
             "email": user["email"],
-            "name": user["name"],
-            "role": user["role"],
-        },
+            "code": otp_code,
+            "attempts": 0,
+            "created_at": now_otp.isoformat(),
+            "expires_at": (now_otp + timedelta(minutes=5)).isoformat(),
+        }
     )
+    smtp_settings = await db.app_settings.find_one(
+        {"setting_type": "email"}, {"_id": 0}
+    )
+    # Fallback to .env SMTP if DB settings not configured
+    smtp_host = (smtp_settings or {}).get("smtp_host") or os.environ.get(
+        "SMTP_HOST", "smtp.gmail.com"
+    )
+    smtp_port = (smtp_settings or {}).get("smtp_port") or int(
+        os.environ.get("SMTP_PORT", "587")
+    )
+    smtp_email = (smtp_settings or {}).get("smtp_email") or os.environ.get(
+        "SMTP_USER", ""
+    )
+    smtp_password = (smtp_settings or {}).get("smtp_password") or os.environ.get(
+        "SMTP_PASSWORD", ""
+    )
+    smtp_from = (smtp_settings or {}).get("smtp_from_email") or os.environ.get(
+        "SMTP_FROM_EMAIL", smtp_email
+    )
+    if not (smtp_email and smtp_password):
+        raise HTTPException(
+            status_code=503,
+            detail="Email verification is unavailable. Contact an administrator.",
+        )
+    try:
+        otp_html = f"""<div style="font-family:Arial,sans-serif;max-width:400px;margin:0 auto;padding:30px;background:#ffffff;color:#0f172a;border-radius:8px;">
+            <h2 style="color:#4f46e5;text-align:center;margin:0 0 20px;">MILES CAPITALS</h2>
+            <p style="color:#64748b;text-align:center;">Your login verification code:</p>
+            <div style="background:#f8fafc;padding:20px;border-radius:8px;text-align:center;margin:20px 0;">
+                <span style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#4f46e5;">{otp_code}</span>
+            </div>
+            <p style="color:#64748b;text-align:center;font-size:12px;">This code expires in 5 minutes. Do not share it.</p></div>"""
+        await send_email(
+            to_emails=[user["email"]],
+            subject="Miles Capitals - Login Verification Code",
+            html_content=otp_html,
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
+            smtp_email=smtp_email,
+            smtp_password=smtp_password,
+            smtp_from_email=smtp_from,
+        )
+    except Exception as e:
+        logger.error(f"Failed to send OTP email: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Could not send verification code. Please try again shortly.",
+        )
+    return {
+        "access_token": "",
+        "token_type": "bearer",
+        "requires_2fa": True,
+        "mfa_method": "email",
+        "message": f"Verification code sent to {user['email']}",
+        "user": user_public,
+    }
 
 
 @api_router.post("/auth/verify-otp")
@@ -1608,6 +1651,44 @@ async def verify_otp(request: Request, data: dict = Body(...)):
     user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # Authenticator (TOTP) challenge — verify against the user's secret
+    if (
+        user.get("mfa_method") == "totp"
+        and user.get("totp_confirmed")
+        and user.get("totp_secret")
+    ):
+        import pyotp
+
+        if not pyotp.TOTP(user["totp_secret"]).verify(otp_code, valid_window=1):
+            raise HTTPException(
+                status_code=401, detail="Invalid authenticator code."
+            )
+        token = create_jwt_token(user["user_id"], user["email"], user["role"])
+        ip_address = request.client.host if request.client else None
+        await create_log(
+            log_type="auth",
+            action="login",
+            module="authentication",
+            user_id=user["user_id"],
+            user_email=user["email"],
+            user_name=user["name"],
+            user_role=user["role"],
+            description="User logged in with authenticator (TOTP)",
+            ip_address=ip_address,
+            user_agent=request.headers.get("user-agent", ""),
+            status="success",
+        )
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {
+                "user_id": user["user_id"],
+                "email": user["email"],
+                "name": user["name"],
+                "role": user.get("role", "viewer"),
+            },
+        }
 
     otp_record = await db.otp_codes.find_one({"user_id": user["user_id"]}, {"_id": 0})
     if not otp_record:
@@ -1667,6 +1748,130 @@ async def verify_otp(request: Request, data: dict = Body(...)):
             "role": user.get("role", "viewer"),
         },
     }
+
+
+@api_router.post("/auth/mfa/setup")
+async def mfa_setup(request: Request, data: dict = Body(default={})):
+    """Generate a TOTP secret + QR. Works during login (setup_token) or from Profile (JWT)."""
+    setup_token = (data or {}).get("setup_token")
+    user, _via = await resolve_mfa_user(request, setup_token)
+    import pyotp, qrcode, qrcode.image.svg, io, base64
+
+    secret = pyotp.random_base32()
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"totp_secret": secret, "totp_confirmed": False}},
+    )
+    otpauth = pyotp.TOTP(secret).provisioning_uri(
+        name=user["email"], issuer_name="Miles Capitals"
+    )
+    img = qrcode.make(otpauth, image_factory=qrcode.image.svg.SvgImage)
+    buf = io.BytesIO()
+    img.save(buf)
+    qr_data = "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode()
+    return {"secret": secret, "otpauth_uri": otpauth, "qr_image": qr_data}
+
+
+@api_router.post("/auth/mfa/confirm")
+async def mfa_confirm(request: Request, data: dict = Body(...)):
+    """Confirm a TOTP code to finish enrollment. Issues a JWT when done during login."""
+    setup_token = data.get("setup_token")
+    code = (data.get("code") or "").strip()
+    user, via_setup = await resolve_mfa_user(request, setup_token)
+    secret = user.get("totp_secret")
+    if not secret:
+        raise HTTPException(
+            status_code=400, detail="No authenticator setup in progress."
+        )
+    import pyotp
+
+    if not pyotp.TOTP(secret).verify(code, valid_window=1):
+        raise HTTPException(status_code=401, detail="Invalid code. Try again.")
+    await db.users.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"totp_confirmed": True, "mfa_method": "totp"}},
+    )
+    if via_setup:
+        token = create_jwt_token(user["user_id"], user["email"], user["role"])
+        ip_address = request.client.host if request.client else None
+        await create_log(
+            log_type="auth",
+            action="login",
+            module="authentication",
+            user_id=user["user_id"],
+            user_email=user["email"],
+            user_name=user["name"],
+            user_role=user.get("role", "viewer"),
+            description="User enrolled authenticator and logged in",
+            ip_address=ip_address,
+            user_agent=request.headers.get("user-agent", ""),
+            status="success",
+        )
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {
+                "user_id": user["user_id"],
+                "email": user["email"],
+                "name": user["name"],
+                "role": user.get("role", "viewer"),
+            },
+        }
+    return {"message": "Authenticator enabled", "mfa_method": "totp"}
+
+
+@api_router.get("/auth/mfa/status")
+async def mfa_get_status(user: dict = Depends(get_current_user)):
+    """Current user's MFA method + whether the authenticator is confirmed."""
+    return {
+        "mfa_method": user.get("mfa_method") or "email",
+        "totp_confirmed": bool(user.get("totp_confirmed")),
+    }
+
+
+@api_router.post("/auth/mfa/method")
+async def mfa_set_method(
+    request: Request, data: dict = Body(...), user: dict = Depends(get_current_user)
+):
+    """Switch the current user's MFA method (email <-> totp)."""
+    method = (data.get("method") or "").strip()
+    if method == "email":
+        await db.users.update_one(
+            {"user_id": user["user_id"]}, {"$set": {"mfa_method": "email"}}
+        )
+        await log_activity(request, user, "edit", "users", "Switched MFA to Email OTP")
+        return {"message": "Switched to Email OTP", "mfa_method": "email"}
+    if method == "totp":
+        if not user.get("totp_confirmed"):
+            raise HTTPException(
+                status_code=400, detail="Set up the authenticator app first."
+            )
+        await db.users.update_one(
+            {"user_id": user["user_id"]}, {"$set": {"mfa_method": "totp"}}
+        )
+        await log_activity(
+            request, user, "edit", "users", "Switched MFA to Authenticator"
+        )
+        return {"message": "Switched to Authenticator app", "mfa_method": "totp"}
+    raise HTTPException(status_code=400, detail="Invalid method")
+
+
+@api_router.post("/auth/mfa/reset/{user_id}")
+async def mfa_admin_reset(
+    user_id: str, request: Request, admin: dict = Depends(require_admin)
+):
+    """Admin: reset a user's 2FA so they must re-enroll at next login."""
+    target = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {"mfa_method": None, "totp_secret": None, "totp_confirmed": False}},
+    )
+    await log_activity(
+        request, admin, "edit", "users", f"Reset 2FA for {target.get('email')}"
+    )
+    return {"message": "2FA reset. User must re-enroll at next login."}
 
 
 @api_router.post("/auth/sso-login")
