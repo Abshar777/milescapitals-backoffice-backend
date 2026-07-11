@@ -7746,7 +7746,10 @@ async def get_vendor_transactions(
     if date_from:
         query.setdefault("created_at", {})["$gte"] = date_from
     if date_to:
-        query.setdefault("created_at", {})["$lte"] = date_to
+        # pad bare dates to end-of-day (created_at is a full ISO timestamp)
+        query.setdefault("created_at", {})["$lte"] = (
+            date_to if "T" in date_to else f"{date_to}T23:59:59.999999"
+        )
 
     if amount_min is not None or amount_max is not None:
         amt_q = {}
@@ -13924,6 +13927,8 @@ async def seed_demo_data():
 @api_router.get("/income-expenses")
 async def get_income_expenses(
     entry_type: Optional[str] = None,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
     category: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -13947,6 +13952,15 @@ async def get_income_expenses(
 
     if entry_type:
         query["entry_type"] = entry_type
+    if status and status != "all":
+        query["status"] = status
+    if search:
+        query["$or"] = [
+            {"description": {"$regex": search, "$options": "i"}},
+            {"reference": {"$regex": search, "$options": "i"}},
+            {"entry_id": {"$regex": search, "$options": "i"}},
+            {"ie_category_name": {"$regex": search, "$options": "i"}},
+        ]
     if category:
         query["category"] = category
     if treasury_account_id:
@@ -13967,6 +13981,8 @@ async def get_income_expenses(
         page=page,
         page_size=page_size,
         entry_type=entry_type,
+        status=status,
+        search=search,
         category=category,
         start_date=start_date,
         end_date=end_date,
@@ -15658,6 +15674,9 @@ async def get_loan_transactions(
     loan_id: Optional[str] = None,
     transaction_type: Optional[str] = None,
     vendor_id: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     fetch_all: bool = False,
@@ -15674,6 +15693,24 @@ async def get_loan_transactions(
             {"source_vendor_id": vendor_id},
             {"credit_to_vendor_id": vendor_id},
         ]
+    if search:
+        # use $and so the search $or coexists with the vendor_id $or
+        query.setdefault("$and", []).append(
+            {
+                "$or": [
+                    {"description": {"$regex": search, "$options": "i"}},
+                    {"borrower_name": {"$regex": search, "$options": "i"}},
+                    {"transaction_id": {"$regex": search, "$options": "i"}},
+                ]
+            }
+        )
+    if date_from:
+        query.setdefault("created_at", {})["$gte"] = date_from
+    if date_to:
+        # pad bare dates to end-of-day (created_at is a full ISO timestamp)
+        query.setdefault("created_at", {})["$lte"] = (
+            date_to if "T" in date_to else f"{date_to}T23:59:59.999999"
+        )
 
     skip = (page - 1) * page_size
     total = await db.loan_transactions.count_documents(query)
