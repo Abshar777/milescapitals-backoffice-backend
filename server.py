@@ -7724,6 +7724,7 @@ async def get_vendor_transactions(
     transaction_tag: Optional[str] = None,
     page: int = 1,
     page_size: int = 20,
+    fetch_all: bool = False,
     user: dict = Depends(require_permission(Modules.EXCHANGERS, Actions.VIEW)),
 ):
     # Vendors can only see their own transactions
@@ -7770,6 +7771,19 @@ async def get_vendor_transactions(
         ]
 
     total = await db.transactions.count_documents(query)
+    if fetch_all:
+        transactions = (
+            await db.transactions.find(query, {"_id": 0})
+            .sort("created_at", -1)
+            .to_list(None)
+        )
+        return {
+            "items": transactions,
+            "total": total,
+            "page": 1,
+            "page_size": total,
+            "total_pages": 1,
+        }
     skip = (page - 1) * page_size
     transactions = (
         await db.transactions.find(query, {"_id": 0})
@@ -13917,6 +13931,7 @@ async def get_income_expenses(
     vendor_id: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    fetch_all: bool = False,
     user: dict = Depends(require_permission(Modules.INCOME_EXPENSES, Actions.VIEW)),
 ):
     """Get all income and expense entries with optional filters and pagination"""
@@ -13959,7 +13974,7 @@ async def get_income_expenses(
         vendor_id=vendor_id,
         **({"user_id": user["user_id"]} if ie_own_only else {}),
     )
-    cached = get_cached(cache_key)
+    cached = None if fetch_all else get_cached(cache_key)
     if cached:
         return cached
 
@@ -13967,13 +13982,20 @@ async def get_income_expenses(
     skip = (page - 1) * page_size
     total = await db.income_expenses.count_documents(query)
     # Sort by date descending, then by entry_id descending for stable pagination
-    entries = (
-        await db.income_expenses.find(query, {"_id": 0})
-        .sort([("date", -1), ("entry_id", -1)])
-        .skip(skip)
-        .limit(page_size)
-        .to_list(page_size)
-    )
+    if fetch_all:
+        entries = (
+            await db.income_expenses.find(query, {"_id": 0})
+            .sort([("date", -1), ("entry_id", -1)])
+            .to_list(None)
+        )
+    else:
+        entries = (
+            await db.income_expenses.find(query, {"_id": 0})
+            .sort([("date", -1), ("entry_id", -1)])
+            .skip(skip)
+            .limit(page_size)
+            .to_list(page_size)
+        )
 
     # Batch fetch treasury accounts to avoid N+1 queries
     treasury_ids = list(
@@ -14004,8 +14026,9 @@ async def get_income_expenses(
         "total_pages": (total + page_size - 1) // page_size if total > 0 else 1,
     }
 
-    # Cache response
-    set_cached(cache_key, response, CACHE_TTL["income_expenses"])
+    # Cache response (skip for fetch_all exports)
+    if not fetch_all:
+        set_cached(cache_key, response, CACHE_TTL["income_expenses"])
 
     return response
 
@@ -15637,6 +15660,7 @@ async def get_loan_transactions(
     vendor_id: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    fetch_all: bool = False,
     user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW)),
 ):
     """Get loan transactions log"""
@@ -15655,13 +15679,22 @@ async def get_loan_transactions(
     total = await db.loan_transactions.count_documents(query)
     total_pages = (total + page_size - 1) // page_size if total > 0 else 1
 
-    transactions = (
-        await db.loan_transactions.find(query, {"_id": 0})
-        .sort("created_at", -1)
-        .skip(skip)
-        .limit(page_size)
-        .to_list(page_size)
-    )
+    if fetch_all:
+        transactions = (
+            await db.loan_transactions.find(query, {"_id": 0})
+            .sort("created_at", -1)
+            .to_list(None)
+        )
+        page_size = max(total, 1)
+        total_pages = 1
+    else:
+        transactions = (
+            await db.loan_transactions.find(query, {"_id": 0})
+            .sort("created_at", -1)
+            .skip(skip)
+            .limit(page_size)
+            .to_list(page_size)
+        )
 
     # Enrich with treasury/vendor names
     treasury_ids = list(
