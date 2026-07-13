@@ -656,6 +656,145 @@ async def send_channel_message(
     return msg_doc
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# BUZZ  ("missed-call"-style attention ring)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# In-memory rate-limit: {f"{uid}:{scope}:{target}": datetime}
+_last_buzz: dict = {}
+BUZZ_COOLDOWN_SECONDS = 30
+
+
+def _buzz_rate_ok(key: str, now: datetime):
+    last = _last_buzz.get(key)
+    if last and (now - last).total_seconds() < BUZZ_COOLDOWN_SECONDS:
+        wait = int(BUZZ_COOLDOWN_SECONDS - (now - last).total_seconds()) + 1
+        raise HTTPException(status_code=429, detail=f"Please wait {wait}s before buzzing again")
+    _last_buzz[key] = now
+
+
+@chat_router.post("/channels/{channel_id}/buzz")
+async def buzz_channel(
+    channel_id: str,
+    data: dict = Body(default={}),
+    user: dict = Depends(get_current_user),
+):
+    """Ring every other member of a channel like an incoming call."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+
+    now = datetime.now(timezone.utc)
+    _buzz_rate_ok(f"{user['user_id']}:ch:{channel_id}", now)
+
+    reason = (data.get("reason") or "").strip()[:200]
+    buzz_id = f"buzz_{uuid.uuid4().hex[:12]}"
+    members = channel.get("members", [])
+    others = [m for m in members if m != user["user_id"]]
+
+    # System line doubles as the missed-call record in the channel history
+    sys_msg = {
+        "msg_id": f"cmsg_{uuid.uuid4().hex[:12]}",
+        "channel_id": channel_id,
+        "sender_id": user["user_id"],
+        "sender_name": user["name"],
+        "content": f"📞 {user['name']} buzzed the channel" + (f": {reason}" if reason else ""),
+        "attachments": [],
+        "thread_root_id": None,
+        "reply_count": 0,
+        "created_at": now.isoformat(),
+        "is_buzz": True,
+    }
+    await db.channel_messages.insert_one(sys_msg)
+    sys_msg.pop("_id", None)
+
+    asyncio.create_task(manager.broadcast(others, {
+        "type": "buzz",
+        "scope": "channel",
+        "buzz_id": buzz_id,
+        "channel_id": channel_id,
+        "channel_name": channel.get("name", ""),
+        "from_id": user["user_id"],
+        "from_name": user["name"],
+        "reason": reason,
+    }))
+    asyncio.create_task(manager.broadcast(members, {
+        "type": "channel_message", "message": sys_msg, "channel_name": channel.get("name", ""),
+    }))
+    return {"success": True, "buzz_id": buzz_id, "notified": len(others)}
+
+
+@chat_router.post("/messages/{recipient_id}/buzz")
+async def buzz_dm(
+    recipient_id: str,
+    data: dict = Body(default={}),
+    user: dict = Depends(get_current_user),
+):
+    """Ring a single user like an incoming call (direct message)."""
+    recipient = await db.users.find_one({"user_id": recipient_id})
+    if not recipient:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+
+    now = datetime.now(timezone.utc)
+    _buzz_rate_ok(f"{user['user_id']}:dm:{recipient_id}", now)
+
+    reason = (data.get("reason") or "").strip()[:200]
+    buzz_id = f"buzz_{uuid.uuid4().hex[:12]}"
+
+    sys_msg = {
+        "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+        "sender_id": user["user_id"],
+        "sender_name": user["name"],
+        "recipient_id": recipient_id,
+        "recipient_name": recipient.get("name", "Unknown"),
+        "content": f"📞 {user['name']} buzzed you" + (f": {reason}" if reason else ""),
+        "attachment": None,
+        "read": False,
+        "created_at": now.isoformat(),
+        "is_buzz": True,
+    }
+    await db.user_messages.insert_one(sys_msg)
+    sys_msg.pop("_id", None)
+
+    asyncio.create_task(manager.broadcast([recipient_id], {
+        "type": "buzz",
+        "scope": "dm",
+        "buzz_id": buzz_id,
+        "dm_peer_id": user["user_id"],       # recipient opens the conversation with the buzzer
+        "dm_peer_name": user["name"],
+        "from_id": user["user_id"],
+        "from_name": user["name"],
+        "reason": reason,
+    }))
+    asyncio.create_task(manager.broadcast([recipient_id, user["user_id"]], {
+        "type": "dm_message", "message": sys_msg,
+    }))
+    return {"success": True, "buzz_id": buzz_id}
+
+
+@chat_router.post("/buzz/ack")
+async def ack_buzz(
+    data: dict = Body(default={}),
+    user: dict = Depends(get_current_user),
+):
+    """Tell the buzzer that their ring was answered or declined."""
+    from_id = data.get("from_id")
+    action = data.get("action")
+    if not from_id or action not in ("answered", "declined"):
+        raise HTTPException(status_code=400, detail="from_id and action required")
+    asyncio.create_task(manager.broadcast([from_id], {
+        "type": "buzz_ack",
+        "action": action,
+        "by_id": user["user_id"],
+        "by_name": user["name"],
+        "scope": data.get("scope", ""),
+        "channel_name": data.get("channel_name", ""),
+    }))
+    return {"success": True}
+
+
 @chat_router.get("/channels/{channel_id}/messages/{msg_id}/replies")
 async def get_thread_replies(
     channel_id: str,
