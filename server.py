@@ -8748,6 +8748,8 @@ async def get_vendor_loan_transactions(
         if loan:
             tx["bank_details"] = loan.get("bank_details")
             tx["borrower_name"] = loan.get("borrower_name")
+            tx["loan_date"] = loan.get("loan_date")
+            tx["due_date"] = loan.get("due_date")
 
     return {
         "items": transactions,
