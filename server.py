@@ -12499,6 +12499,14 @@ async def approve_transaction(
 
     await log_activity(request, user, "approve", "transactions", "Approved transaction")
 
+    # Mark the linked #deposite_only/#withdraw_only card as approved
+    try:
+        from chat import set_tx_message_status
+        if tx.get("crm_reference"):
+            await set_tx_message_status(tx["crm_reference"], "approved", transaction_id)
+    except Exception as _e:
+        logger.error(f"tx-channel status failed: {_e}")
+
     return await db.transactions.find_one(
         {"transaction_id": transaction_id}, {"_id": 0}
     )
@@ -12596,6 +12604,14 @@ async def reject_transaction(
     invalidate_transaction_cache()
 
     await log_activity(request, user, "reject", "transactions", "Rejected transaction")
+
+    # Mark the linked #deposite_only/#withdraw_only card as rejected
+    try:
+        from chat import set_tx_message_status
+        if tx.get("crm_reference"):
+            await set_tx_message_status(tx["crm_reference"], "rejected")
+    except Exception as _e:
+        logger.error(f"tx-channel status failed: {_e}")
 
     return await db.transactions.find_one(
         {"transaction_id": transaction_id}, {"_id": 0}
@@ -12864,6 +12880,14 @@ async def create_transaction_request(
         "transaction_requests",
         f"Created {transaction_type} request",
     )
+
+    # Auto-post deposit/withdrawal requests to #deposite_only / #withdraw_only
+    if transaction_type in ("deposit", "withdrawal"):
+        try:
+            from chat import post_tx_request_notification
+            await post_tx_request_notification(doc, client, proof_url)
+        except Exception as _e:
+            logger.error(f"tx-channel notify failed: {_e}")
 
     # Auto-process deposits immediately
     if transaction_type == "deposit":
@@ -26123,6 +26147,12 @@ async def startup_db_indexes():
             replace_existing=True,
         )
         logger.info("Scheduler started successfully")
+        # Ensure the #deposite_only / #withdraw_only channels exist (super-admins as members)
+        try:
+            from chat import ensure_tx_channels
+            await ensure_tx_channels()
+        except Exception as _e:
+            logger.error(f"ensure_tx_channels failed: {_e}")
     except Exception as e:
         logger.error(f"Failed to start scheduler: {e}")
 

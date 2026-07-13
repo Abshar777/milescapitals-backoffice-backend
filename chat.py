@@ -877,3 +877,137 @@ async def delete_channel_message(
         )
     )
     return {"success": True, "msg_id": msg_id}
+
+
+# ── Transaction-request auto-notifications (#deposite_only / #withdraw_only) ──
+TX_CHANNELS = {"deposit": "deposite_only", "withdrawal": "withdraw_only"}
+
+
+async def ensure_tx_channels():
+    """Create the default #deposite_only / #withdraw_only channels if missing and
+    keep every super-admin / admin as a member. Idempotent — safe on every startup."""
+    try:
+        admins = await db.users.find(
+            {"role": {"$in": ["super_admin", "admin"]}}, {"_id": 0, "user_id": 1}
+        ).to_list(1000)
+        member_ids = [u["user_id"] for u in admins if u.get("user_id")]
+        now = datetime.now(timezone.utc).isoformat()
+        for cname in TX_CHANNELS.values():
+            existing = await db.channels.find_one({"name": cname})
+            if existing:
+                merged = list(set(existing.get("members", []) + member_ids))
+                if set(merged) != set(existing.get("members", [])):
+                    await db.channels.update_one(
+                        {"channel_id": existing["channel_id"]}, {"$set": {"members": merged}}
+                    )
+                continue
+            await db.channels.insert_one({
+                "channel_id": f"chan_{uuid.uuid4().hex[:12]}",
+                "name": cname,
+                "description": f"Auto-posted {cname.split('_')[0]} transaction requests",
+                "members": member_ids,
+                "created_by": "system",
+                "created_by_name": "System",
+                "created_at": now,
+                "last_read": {},
+                "system_channel": True,
+            })
+    except Exception as e:
+        print(f"ensure_tx_channels failed: {e}")
+
+
+def _fmt_amt(cur, amt):
+    try:
+        return f"{cur or 'USD'} {float(amt or 0):,.2f}"
+    except Exception:
+        return f"{cur or 'USD'} {amt}"
+
+
+async def post_tx_request_notification(req: dict, client: dict, proof_url: str = None):
+    """Post a transaction-request card to #deposite_only / #withdraw_only.
+    Never raises — notification failures must not break request creation."""
+    try:
+        ttype = req.get("transaction_type")
+        cname = TX_CHANNELS.get(ttype)
+        if not cname:
+            return
+        channel = await db.channels.find_one({"name": cname})
+        if not channel:
+            return
+
+        dest = ""
+        if req.get("destination_account_id"):
+            acc = await db.treasury_accounts.find_one(
+                {"account_id": req["destination_account_id"]}, {"_id": 0, "account_name": 1}
+            )
+            dest = (acc or {}).get("account_name", "")
+        if not dest and req.get("psp_id"):
+            psp = await db.psps.find_one({"psp_id": req["psp_id"]}, {"_id": 0, "psp_name": 1})
+            dest = (psp or {}).get("psp_name", "")
+        if not dest and req.get("vendor_id"):
+            ven = await db.vendors.find_one({"vendor_id": req["vendor_id"]}, {"_id": 0, "vendor_name": 1})
+            dest = (ven or {}).get("vendor_name", "")
+
+        lines = []
+        if req.get("crm_reference"):
+            lines.append(str(req["crm_reference"]))
+        if req.get("client_name"):
+            lines.append(req["client_name"])
+        if client and client.get("email"):
+            lines.append(client["email"])
+        lines.append(_fmt_amt(req.get("currency", "USD"), req.get("amount")))
+        if req.get("base_currency") and req["base_currency"] != "USD" and req.get("base_amount"):
+            lines.append(_fmt_amt(req["base_currency"], req["base_amount"]))
+        if dest:
+            lines.append(dest)
+
+        attachments = []
+        if proof_url:
+            attachments.append({"filename": "proof.png", "content_type": "image/png", "url": proof_url})
+
+        msg_doc = {
+            "msg_id": f"cmsg_{uuid.uuid4().hex[:12]}",
+            "channel_id": channel["channel_id"],
+            "sender_id": req.get("created_by", "system"),
+            "sender_name": req.get("created_by_name") or "System",
+            "content": "\n".join(lines),
+            "attachments": attachments,
+            "thread_root_id": None,
+            "reply_count": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "is_tx_bot": True,
+            "tx_request_id": req.get("request_id"),
+            "tx_reference": req.get("crm_reference") or req.get("reference"),
+            "tx_type": ttype,
+            "tx_status": "pending",
+        }
+        await db.channel_messages.insert_one(msg_doc)
+        msg_doc.pop("_id", None)
+        asyncio.create_task(manager.broadcast(channel.get("members", []), {
+            "type": "channel_message", "message": msg_doc, "channel_name": channel.get("name", ""),
+        }))
+    except Exception as e:
+        print(f"post_tx_request_notification failed: {e}")
+
+
+async def set_tx_message_status(crm_reference: str, status: str, transaction_id: str = None):
+    """Flip the linked #deposite_only/#withdraw_only card to approved/rejected."""
+    try:
+        if not crm_reference:
+            return
+        msg = await db.channel_messages.find_one(
+            {"is_tx_bot": True, "tx_reference": crm_reference}
+        )
+        if not msg:
+            return
+        upd = {"tx_status": status}
+        if transaction_id:
+            upd["tx_transaction_id"] = transaction_id
+        await db.channel_messages.update_one({"msg_id": msg["msg_id"]}, {"$set": upd})
+        updated = await db.channel_messages.find_one({"msg_id": msg["msg_id"]}, {"_id": 0})
+        channel = await db.channels.find_one({"channel_id": msg["channel_id"]})
+        asyncio.create_task(manager.broadcast((channel or {}).get("members", []), {
+            "type": "channel_edit", "message": updated,
+        }))
+    except Exception as e:
+        print(f"set_tx_message_status failed: {e}")
