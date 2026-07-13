@@ -756,3 +756,124 @@ async def mark_channel_read(
         {"$set": {f"last_read.{user['user_id']}": now}},
     )
     return {"message": "Marked as read"}
+
+
+# ── Message edit / delete ───────────────────────────────────────────────────
+@chat_router.put("/messages/{message_id}")
+async def edit_user_message(
+    message_id: str, request: Request, user: dict = Depends(get_current_user)
+):
+    """Edit a direct message (sender only)."""
+    data = await request.json()
+    content = (data.get("content") or "").strip()
+    msg = await db.user_messages.find_one({"message_id": message_id})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.get("sender_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only edit your own messages")
+    if msg.get("deleted"):
+        raise HTTPException(status_code=400, detail="Cannot edit a deleted message")
+    if not content and not msg.get("attachment"):
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.user_messages.update_one(
+        {"message_id": message_id},
+        {"$set": {"content": content, "edited": True, "edited_at": now}},
+    )
+    updated = await db.user_messages.find_one({"message_id": message_id}, {"_id": 0})
+    asyncio.create_task(
+        manager.broadcast(
+            [msg["recipient_id"], msg["sender_id"]],
+            {"type": "dm_edit", "message": updated},
+        )
+    )
+    return updated
+
+
+@chat_router.delete("/messages/{message_id}")
+async def delete_user_message(
+    message_id: str, user: dict = Depends(get_current_user)
+):
+    """Soft-delete a direct message (sender, or any admin)."""
+    msg = await db.user_messages.find_one({"message_id": message_id})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.get("sender_id") != user["user_id"] and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.user_messages.update_one(
+        {"message_id": message_id},
+        {"$set": {
+            "deleted": True, "deleted_at": now, "deleted_by": user["user_id"],
+            "content": "", "attachment": None,
+        }},
+    )
+    updated = await db.user_messages.find_one({"message_id": message_id}, {"_id": 0})
+    asyncio.create_task(
+        manager.broadcast(
+            [msg["recipient_id"], msg["sender_id"]],
+            {"type": "dm_delete", "message": updated},
+        )
+    )
+    return {"success": True, "message_id": message_id}
+
+
+@chat_router.put("/channels/{channel_id}/messages/{msg_id}")
+async def edit_channel_message(
+    channel_id: str, msg_id: str, request: Request, user: dict = Depends(get_current_user)
+):
+    """Edit a channel message (sender only)."""
+    data = await request.json()
+    content = (data.get("content") or "").strip()
+    msg = await db.channel_messages.find_one({"msg_id": msg_id, "channel_id": channel_id})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.get("sender_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail="You can only edit your own messages")
+    if msg.get("deleted"):
+        raise HTTPException(status_code=400, detail="Cannot edit a deleted message")
+    if not content and not msg.get("attachments"):
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.channel_messages.update_one(
+        {"msg_id": msg_id},
+        {"$set": {"content": content, "edited": True, "edited_at": now}},
+    )
+    updated = await db.channel_messages.find_one({"msg_id": msg_id}, {"_id": 0})
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    asyncio.create_task(
+        manager.broadcast(
+            (channel or {}).get("members", []),
+            {"type": "channel_edit", "message": updated},
+        )
+    )
+    return updated
+
+
+@chat_router.delete("/channels/{channel_id}/messages/{msg_id}")
+async def delete_channel_message(
+    channel_id: str, msg_id: str, user: dict = Depends(get_current_user)
+):
+    """Soft-delete a channel message (sender, or any admin)."""
+    msg = await db.channel_messages.find_one({"msg_id": msg_id, "channel_id": channel_id})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if msg.get("sender_id") != user["user_id"] and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="You can only delete your own messages")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.channel_messages.update_one(
+        {"msg_id": msg_id},
+        {"$set": {
+            "deleted": True, "deleted_at": now, "deleted_by": user["user_id"],
+            "content": "", "attachments": [],
+        }},
+    )
+    updated = await db.channel_messages.find_one({"msg_id": msg_id}, {"_id": 0})
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    asyncio.create_task(
+        manager.broadcast(
+            (channel or {}).get("members", []),
+            {"type": "channel_delete", "message": updated},
+        )
+    )
+    return {"success": True, "msg_id": msg_id}
