@@ -8750,6 +8750,7 @@ async def get_vendor_loan_transactions(
             tx["borrower_name"] = loan.get("borrower_name")
             tx["loan_date"] = loan.get("loan_date")
             tx["due_date"] = loan.get("due_date")
+            tx["loan_approved_at"] = loan.get("approved_at")
 
     return {
         "items": transactions,
@@ -10034,7 +10035,7 @@ async def approve_loan_disbursement(request: Request, loan_id: str, approval_dat
     # Update loan transaction status
     await db.loan_transactions.update_one(
         {"loan_id": loan_id, "transaction_type": LoanTransactionType.DISBURSEMENT, "status": "pending_approval"},
-        {"$set": {"status": "completed"}}
+        {"$set": {"status": "completed", "approved_at": now.isoformat()}}
     )
 
     await log_activity(request, user, "approve", "loans", f"Approved loan disbursement to {loan['borrower_name']}: {loan['amount']} {loan['currency']}", reference_id=loan_id)
@@ -10166,7 +10167,7 @@ async def approve_loan_repayment(request: Request, repayment_id: str, approval_d
     # Update loan transaction status
     await db.loan_transactions.update_one(
         {"loan_id": repayment["loan_id"], "transaction_type": LoanTransactionType.REPAYMENT, "status": "pending_approval"},
-        {"$set": {"status": "completed"}}
+        {"$set": {"status": "completed", "approved_at": now.isoformat()}}
     )
 
     await log_activity(request, user, "approve", "loans", f"Approved loan repayment from {loan['borrower_name']}: {repayment['amount']} {repayment['currency']}", reference_id=repayment_id)
