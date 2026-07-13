@@ -26085,10 +26085,10 @@ async def startup_db_indexes():
         _scheduler_started = True
         await reschedule_daily_report()
         await reschedule_audit_scan()
-        # Schedule database backup every 12 hours (2 AM & 2 PM UTC)
+        # Schedule database backup hourly (top of every hour, UTC) — R2 + Telegram
         scheduler.add_job(
             _run_backup_job,
-            CronTrigger(hour="2,14", minute=0),
+            CronTrigger(minute=0),
             id="db_backup",
             replace_existing=True,
         )
