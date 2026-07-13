@@ -9659,6 +9659,9 @@ async def get_pending_transactions(
     transaction_type: Optional[str] = None,
     status: Optional[str] = "pending",
     destination_type: Optional[str] = None,
+    destination_account_ids: Optional[str] = None,
+    psp_ids: Optional[str] = None,
+    vendor_ids: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     page: int = 1,
@@ -9695,6 +9698,23 @@ async def get_pending_transactions(
         query["transaction_type"] = transaction_type
     if destination_type:
         query["destination_type"] = destination_type
+    # Multi-select specific destinations (AND-ed with role scoping above)
+    if destination_account_ids:
+        _sel_acct = [x for x in destination_account_ids.split(",") if x]
+        if _sel_acct:
+            _existing = query.get("destination_account_id")
+            if isinstance(_existing, dict) and "$in" in _existing:
+                _allowed = set(_existing["$in"])
+                _sel_acct = [x for x in _sel_acct if x in _allowed] or ["__none__"]
+            query["destination_account_id"] = {"$in": _sel_acct}
+    if psp_ids:
+        _sel_psp = [x for x in psp_ids.split(",") if x]
+        if _sel_psp:
+            query["psp_id"] = {"$in": _sel_psp}
+    if vendor_ids:
+        _sel_vendor = [x for x in vendor_ids.split(",") if x]
+        if _sel_vendor:
+            query["vendor_id"] = {"$in": _sel_vendor}
     if email_client_ids is not None:
         query["client_id"] = {"$in": email_client_ids}
 
