@@ -15689,6 +15689,7 @@ async def get_loan_transactions(
     loan_id: Optional[str] = None,
     transaction_type: Optional[str] = None,
     vendor_id: Optional[str] = None,
+    currency: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -15703,6 +15704,8 @@ async def get_loan_transactions(
         query["loan_id"] = loan_id
     if transaction_type:
         query["transaction_type"] = transaction_type
+    if currency:
+        query["currency"] = currency
     if vendor_id:
         query["$or"] = [
             {"source_vendor_id": vendor_id},
@@ -15938,6 +15941,9 @@ async def get_loans(
     borrower: Optional[str] = None,
     vendor_id: Optional[str] = None,
     search: Optional[str] = None,
+    currency: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
     outstanding_min: Optional[float] = None,
@@ -15995,6 +16001,15 @@ async def get_loans(
         if repaid_max is not None:
             rep_range["$lte"] = repaid_max
         query["total_repaid"] = rep_range
+    if currency:
+        query["currency"] = currency
+    if date_from or date_to:
+        loan_date_range: dict = {}
+        if date_from:
+            loan_date_range["$gte"] = date_from
+        if date_to:
+            loan_date_range["$lte"] = date_to
+        query["loan_date"] = loan_date_range
 
     skip = (page - 1) * page_size
     total = await db.loans.count_documents(query)
