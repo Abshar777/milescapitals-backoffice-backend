@@ -8698,6 +8698,7 @@ async def get_vendor_loan_transactions(
     request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    fetch_all: bool = False,
     user: dict = Depends(require_vendor),
 ):
     """Get loan transactions assigned to this vendor (disbursements from or repayments to)"""
@@ -8711,17 +8712,25 @@ async def get_vendor_loan_transactions(
             {"credit_to_vendor_id": vendor["vendor_id"]},
         ]
     }
-    skip = (page - 1) * page_size
-    total = await db.loan_transactions.count_documents(query)
-    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
-
-    transactions = (
-        await db.loan_transactions.find(query, {"_id": 0})
-        .sort("created_at", -1)
-        .skip(skip)
-        .limit(page_size)
-        .to_list(page_size)
-    )
+    if fetch_all:
+        transactions = (
+            await db.loan_transactions.find(query, {"_id": 0})
+            .sort("created_at", -1)
+            .to_list(None)
+        )
+        total = len(transactions)
+        page, page_size, total_pages = 1, (total or 1), 1
+    else:
+        skip = (page - 1) * page_size
+        total = await db.loan_transactions.count_documents(query)
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+        transactions = (
+            await db.loan_transactions.find(query, {"_id": 0})
+            .sort("created_at", -1)
+            .skip(skip)
+            .limit(page_size)
+            .to_list(page_size)
+        )
 
     # Enrich with loan details
     loan_ids = list(
@@ -15177,6 +15186,7 @@ async def upload_ie_invoice(
 async def get_vendor_ie_entries(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    fetch_all: bool = False,
     user: dict = Depends(require_vendor),
 ):
     """Get income/expense entries linked to this vendor"""
@@ -15184,9 +15194,14 @@ async def get_vendor_ie_entries(
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
 
-    return await paginate_query(
-        db.income_expenses, {"vendor_id": vendor["vendor_id"]}, page, page_size
-    )
+    q = {"vendor_id": vendor["vendor_id"]}
+    if fetch_all:
+        items = (
+            await db.income_expenses.find(q, {"_id": 0}).sort("created_at", -1).to_list(None)
+        )
+        return {"items": items, "total": len(items), "page": 1,
+                "page_size": len(items) or 1, "total_pages": 1}
+    return await paginate_query(db.income_expenses, q, page, page_size)
 
 
 # ============== VENDOR SUPPLIERS (Service Suppliers) ROUTES ==============
