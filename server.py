@@ -13077,6 +13077,13 @@ async def create_transaction_request(
             },
         )
 
+        # #crm_desk card + creator DM (deposit auto-processes on create)
+        try:
+            from chat import post_tx_processed_notification
+            await post_tx_processed_notification(doc, user["user_id"], user["name"])
+        except Exception as _e:
+            logger.error(f"tx-processed notify failed: {_e}")
+
         # Send notifications
         import asyncio
 
@@ -13442,6 +13449,13 @@ async def process_transaction_request(
             }
         },
     )
+
+    # #crm_desk card + creator DM on processing
+    try:
+        from chat import post_tx_processed_notification
+        await post_tx_processed_notification(req, user["user_id"], user["name"])
+    except Exception as _e:
+        logger.error(f"tx-processed notify failed: {_e}")
 
     # Send notifications
     import asyncio
