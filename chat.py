@@ -1143,7 +1143,7 @@ async def post_tx_request_notification(req: dict, client: dict, proof_url: str =
             "content": _render_tx_card(comp), "attachments": attachments,
             "is_tx_bot": True, "tx_request_id": req.get("request_id"),
             "tx_reference": ref, "tx_type": ttype, "tx_status": "pending",
-            "tx_comp": comp,
+            "tx_comp": comp, "tx_owner_id": req.get("created_by"),
         }
 
         # 1) Channel card (admins act on it)
@@ -1235,3 +1235,44 @@ async def update_tx_message_content(old_ref: str, changes: dict, new_ref: str = 
         await _update_tx_cards(old_ref, set_fields)
     except Exception as e:
         print(f"update_tx_message_content failed: {e}")
+
+
+@chat_router.post("/chat/tx-complete")
+async def tx_complete(data: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Owner-only: mark a transaction card complete and post a completion reply in the
+    channel thread. Does NOT change the transaction — chat is notes/replies only."""
+    ref = (data.get("crm_reference") or "").strip()
+    note = (data.get("note") or "").strip()[:500]
+    if not ref:
+        raise HTTPException(status_code=400, detail="crm_reference required")
+    card = await db.channel_messages.find_one({"is_tx_bot": True, "tx_reference": ref}, {"_id": 0})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    if card.get("tx_owner_id") and card["tx_owner_id"] != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Only the request owner can complete this")
+    now = datetime.now(timezone.utc).isoformat()
+    # 1) completion reply in the card's channel thread
+    reply = {
+        "msg_id": f"cmsg_{uuid.uuid4().hex[:12]}",
+        "channel_id": card["channel_id"],
+        "sender_id": user["user_id"], "sender_name": user["name"],
+        "content": "✅ Completed" + (f" — {note}" if note else ""),
+        "attachments": [], "thread_root_id": card["msg_id"], "reply_count": 0,
+        "created_at": now,
+    }
+    await db.channel_messages.insert_one(reply)
+    reply.pop("_id", None)
+    await db.channel_messages.update_one({"msg_id": card["msg_id"]}, {"$inc": {"reply_count": 1}})
+    # 2) mark both channel + DM cards completed
+    await _update_tx_cards(ref, {
+        "tx_completed_by": user["user_id"], "tx_completed_by_name": user["name"],
+        "tx_completed_at": now, "tx_completed_note": note,
+    })
+    # 3) broadcast the thread reply
+    channel = await db.channels.find_one({"channel_id": card["channel_id"]})
+    asyncio.create_task(manager.broadcast((channel or {}).get("members", []), {
+        "type": "thread_reply", "message": reply,
+        "channel_id": card["channel_id"], "thread_root_id": card["msg_id"],
+        "parent_sender_id": card.get("sender_id"),
+    }))
+    return {"success": True, "msg_id": reply["msg_id"]}
