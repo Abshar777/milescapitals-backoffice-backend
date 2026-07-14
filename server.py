@@ -11884,6 +11884,23 @@ async def update_transaction(
                 {"$set": request_sync},
             )
 
+    # Reflect the edit on the #deposite_only / #withdraw_only + creator-DM cards
+    try:
+        old_ref = tx.get("crm_reference")
+        if old_ref:
+            from chat import update_tx_message_content
+            await update_tx_message_content(
+                old_ref,
+                {
+                    "amount": updates.get("amount"),
+                    "base_amount": updates.get("base_amount"),
+                    "base_currency": updates.get("base_currency"),
+                },
+                new_ref=updates.get("crm_reference"),
+            )
+    except Exception as _e:
+        logger.error(f"tx-card edit sync failed: {_e}")
+
     await log_activity(request, user, "edit", "transactions", "Updated transaction")
 
     return await db.transactions.find_one(
@@ -12641,6 +12658,27 @@ async def reject_transaction(
     )
 
 
+@api_router.post("/chat/tx-action")
+async def chat_tx_action(
+    request: Request,
+    data: dict = Body(...),
+    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE)),
+):
+    """Approve/reject a pending transaction straight from its #deposite_only /
+    #withdraw_only card (matched by CRM reference)."""
+    crm = (data.get("crm_reference") or "").strip()
+    action = data.get("action")
+    if not crm or action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="crm_reference and action (approve|reject) required")
+    tx = await db.transactions.find_one(
+        {"crm_reference": crm, "status": TransactionStatus.PENDING}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="No pending transaction for this reference")
+    if action == "approve":
+        return await approve_transaction(request, tx["transaction_id"], require_proof=False, user=user)
+    return await reject_transaction(request, tx["transaction_id"], reason=data.get("reason", ""), user=user)
+
+
 # ============== TRANSACTION REQUESTS ==============
 
 
@@ -13202,6 +13240,24 @@ async def update_transaction_request(
     await db.transaction_requests.update_one(
         {"request_id": request_id}, {"$set": updates}
     )
+
+    # Reflect the request edit on the #deposite_only / #withdraw_only + creator-DM cards
+    try:
+        old_ref = req.get("crm_reference") or req.get("reference")
+        if old_ref and req.get("transaction_type") in ("deposit", "withdrawal"):
+            from chat import update_tx_message_content, _resolve_tx_dest
+            changes = {
+                "amount": updates.get("amount"),
+                "currency": updates.get("currency"),
+                "base_amount": updates.get("base_amount"),
+                "base_currency": updates.get("base_currency"),
+            }
+            if any(k in updates for k in ("destination_account_id", "psp_id", "vendor_id", "destination_type")):
+                changes["dest"] = await _resolve_tx_dest({**req, **updates})
+            await update_tx_message_content(old_ref, changes, new_ref=updates.get("crm_reference"))
+    except Exception as _e:
+        logger.error(f"tx-card request-edit sync failed: {_e}")
+
     await log_activity(request, user, "edit", "transaction_requests", "Updated request")
     return await db.transaction_requests.find_one(
         {"request_id": request_id}, {"_id": 0}

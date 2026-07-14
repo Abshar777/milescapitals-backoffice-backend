@@ -98,7 +98,7 @@ async def ws_endpoint(ws: WebSocket, token: str = Query(...)):
 async def get_users_for_messaging(user: dict = Depends(get_current_user)):
     """Get all users for message recipient selection (lightweight, no admin permission needed)"""
     users = await db.users.find(
-        {}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "role": 1}
+        {"is_system": {"$ne": True}}, {"_id": 0, "user_id": 1, "name": 1, "email": 1, "role": 1}
     ).to_list(500)
     return [u for u in users if u.get("user_id") != user["user_id"]]
 
@@ -1020,12 +1020,30 @@ async def delete_channel_message(
 
 # ── Transaction-request auto-notifications (#deposite_only / #withdraw_only) ──
 TX_CHANNELS = {"deposit": "deposite_only", "withdrawal": "withdraw_only"}
+TX_BOT_ID = "user_txbot"
+TX_BOT_NAME = "Transactions"
+
+
+async def _ensure_tx_bot():
+    """Ensure the 'Transactions' system user exists so it can DM request creators."""
+    existing = await db.users.find_one({"user_id": TX_BOT_ID}, {"_id": 0, "user_id": 1})
+    if not existing:
+        await db.users.insert_one({
+            "user_id": TX_BOT_ID,
+            "name": TX_BOT_NAME,
+            "email": "tx-bot@system.local",
+            "role": "system",
+            "is_active": True,
+            "is_system": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
 
 
 async def ensure_tx_channels():
     """Create the default #deposite_only / #withdraw_only channels if missing and
     keep every super-admin / admin as a member. Idempotent — safe on every startup."""
     try:
+        await _ensure_tx_bot()
         admins = await db.users.find(
             {"role": {"$in": ["super_admin", "admin"]}}, {"_id": 0, "user_id": 1}
         ).to_list(1000)
@@ -1062,9 +1080,41 @@ def _fmt_amt(cur, amt):
         return f"{cur or 'USD'} {amt}"
 
 
+def _render_tx_card(comp: dict) -> str:
+    """Build the card text from stored components (reused on post + edit)."""
+    lines = []
+    if comp.get("crm"):
+        lines.append(str(comp["crm"]))
+    if comp.get("client_name"):
+        lines.append(comp["client_name"])
+    if comp.get("email"):
+        lines.append(comp["email"])
+    lines.append(_fmt_amt(comp.get("currency", "USD"), comp.get("amount")))
+    if comp.get("base_currency") and comp["base_currency"] != "USD" and comp.get("base_amount"):
+        lines.append(_fmt_amt(comp["base_currency"], comp["base_amount"]))
+    if comp.get("dest"):
+        lines.append(comp["dest"])
+    return "\n".join(lines)
+
+
+async def _resolve_tx_dest(req: dict) -> str:
+    dest = ""
+    if req.get("destination_account_id"):
+        acc = await db.treasury_accounts.find_one(
+            {"account_id": req["destination_account_id"]}, {"_id": 0, "account_name": 1})
+        dest = (acc or {}).get("account_name", "")
+    if not dest and req.get("psp_id"):
+        psp = await db.psps.find_one({"psp_id": req["psp_id"]}, {"_id": 0, "psp_name": 1})
+        dest = (psp or {}).get("psp_name", "")
+    if not dest and req.get("vendor_id"):
+        ven = await db.vendors.find_one({"vendor_id": req["vendor_id"]}, {"_id": 0, "vendor_name": 1})
+        dest = (ven or {}).get("vendor_name", "")
+    return dest
+
+
 async def post_tx_request_notification(req: dict, client: dict, proof_url: str = None):
-    """Post a transaction-request card to #deposite_only / #withdraw_only.
-    Never raises — notification failures must not break request creation."""
+    """Post a transaction-request card to #deposite_only / #withdraw_only AND DM the
+    request creator. Never raises — notification failures must not break request creation."""
     try:
         ttype = req.get("transaction_type")
         cname = TX_CHANNELS.get(ttype)
@@ -1074,79 +1124,114 @@ async def post_tx_request_notification(req: dict, client: dict, proof_url: str =
         if not channel:
             return
 
-        dest = ""
-        if req.get("destination_account_id"):
-            acc = await db.treasury_accounts.find_one(
-                {"account_id": req["destination_account_id"]}, {"_id": 0, "account_name": 1}
-            )
-            dest = (acc or {}).get("account_name", "")
-        if not dest and req.get("psp_id"):
-            psp = await db.psps.find_one({"psp_id": req["psp_id"]}, {"_id": 0, "psp_name": 1})
-            dest = (psp or {}).get("psp_name", "")
-        if not dest and req.get("vendor_id"):
-            ven = await db.vendors.find_one({"vendor_id": req["vendor_id"]}, {"_id": 0, "vendor_name": 1})
-            dest = (ven or {}).get("vendor_name", "")
-
-        lines = []
-        if req.get("crm_reference"):
-            lines.append(str(req["crm_reference"]))
-        if req.get("client_name"):
-            lines.append(req["client_name"])
-        if client and client.get("email"):
-            lines.append(client["email"])
-        lines.append(_fmt_amt(req.get("currency", "USD"), req.get("amount")))
-        if req.get("base_currency") and req["base_currency"] != "USD" and req.get("base_amount"):
-            lines.append(_fmt_amt(req["base_currency"], req["base_amount"]))
-        if dest:
-            lines.append(dest)
-
+        comp = {
+            "crm": req.get("crm_reference") or req.get("reference"),
+            "client_name": req.get("client_name"),
+            "email": (client or {}).get("email"),
+            "currency": req.get("currency", "USD"),
+            "amount": req.get("amount"),
+            "base_currency": req.get("base_currency"),
+            "base_amount": req.get("base_amount"),
+            "dest": await _resolve_tx_dest(req),
+        }
+        ref = req.get("crm_reference") or req.get("reference")
         attachments = []
         if proof_url:
             attachments.append({"filename": "proof.png", "content_type": "image/png", "url": proof_url})
+        now_iso = datetime.now(timezone.utc).isoformat()
+        common = {
+            "content": _render_tx_card(comp), "attachments": attachments,
+            "is_tx_bot": True, "tx_request_id": req.get("request_id"),
+            "tx_reference": ref, "tx_type": ttype, "tx_status": "pending",
+            "tx_comp": comp,
+        }
 
+        # 1) Channel card (admins act on it)
         msg_doc = {
             "msg_id": f"cmsg_{uuid.uuid4().hex[:12]}",
             "channel_id": channel["channel_id"],
             "sender_id": req.get("created_by", "system"),
             "sender_name": req.get("created_by_name") or "System",
-            "content": "\n".join(lines),
-            "attachments": attachments,
-            "thread_root_id": None,
-            "reply_count": 0,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "is_tx_bot": True,
-            "tx_request_id": req.get("request_id"),
-            "tx_reference": req.get("crm_reference") or req.get("reference"),
-            "tx_type": ttype,
-            "tx_status": "pending",
+            "thread_root_id": None, "reply_count": 0, "created_at": now_iso,
+            **common,
         }
         await db.channel_messages.insert_one(msg_doc)
         msg_doc.pop("_id", None)
         asyncio.create_task(manager.broadcast(channel.get("members", []), {
             "type": "channel_message", "message": msg_doc, "channel_name": channel.get("name", ""),
         }))
+
+        # 2) DM card to the creator (so they can track their own request's status)
+        creator = req.get("created_by")
+        if creator and creator != TX_BOT_ID:
+            await _ensure_tx_bot()
+            dm_doc = {
+                "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+                "sender_id": TX_BOT_ID, "sender_name": TX_BOT_NAME,
+                "recipient_id": creator, "recipient_name": req.get("created_by_name") or "",
+                "attachment": (attachments[0] if attachments else None),
+                "read": False, "created_at": now_iso,
+                **common,
+            }
+            await db.user_messages.insert_one(dm_doc)
+            dm_doc.pop("_id", None)
+            asyncio.create_task(manager.broadcast([creator], {
+                "type": "dm_message", "message": dm_doc,
+            }))
     except Exception as e:
         print(f"post_tx_request_notification failed: {e}")
 
 
+async def _update_tx_cards(ref: str, set_fields: dict):
+    """Apply set_fields to both the channel card and the creator DM card for a ref,
+    and broadcast the edits so all clients update live."""
+    cmsg = await db.channel_messages.find_one({"is_tx_bot": True, "tx_reference": ref})
+    if cmsg:
+        await db.channel_messages.update_one({"msg_id": cmsg["msg_id"]}, {"$set": set_fields})
+        updated = await db.channel_messages.find_one({"msg_id": cmsg["msg_id"]}, {"_id": 0})
+        channel = await db.channels.find_one({"channel_id": cmsg["channel_id"]})
+        asyncio.create_task(manager.broadcast((channel or {}).get("members", []), {
+            "type": "channel_edit", "message": updated,
+        }))
+    dmsg = await db.user_messages.find_one({"is_tx_bot": True, "tx_reference": ref})
+    if dmsg:
+        await db.user_messages.update_one({"message_id": dmsg["message_id"]}, {"$set": set_fields})
+        updated = await db.user_messages.find_one({"message_id": dmsg["message_id"]}, {"_id": 0})
+        asyncio.create_task(manager.broadcast(
+            [dmsg.get("recipient_id"), dmsg.get("sender_id")],
+            {"type": "dm_edit", "message": updated}))
+
+
 async def set_tx_message_status(crm_reference: str, status: str, transaction_id: str = None):
-    """Flip the linked #deposite_only/#withdraw_only card to approved/rejected."""
+    """Flip the linked channel + creator-DM cards to approved/rejected."""
     try:
         if not crm_reference:
-            return
-        msg = await db.channel_messages.find_one(
-            {"is_tx_bot": True, "tx_reference": crm_reference}
-        )
-        if not msg:
             return
         upd = {"tx_status": status}
         if transaction_id:
             upd["tx_transaction_id"] = transaction_id
-        await db.channel_messages.update_one({"msg_id": msg["msg_id"]}, {"$set": upd})
-        updated = await db.channel_messages.find_one({"msg_id": msg["msg_id"]}, {"_id": 0})
-        channel = await db.channels.find_one({"channel_id": msg["channel_id"]})
-        asyncio.create_task(manager.broadcast((channel or {}).get("members", []), {
-            "type": "channel_edit", "message": updated,
-        }))
+        await _update_tx_cards(crm_reference, upd)
     except Exception as e:
         print(f"set_tx_message_status failed: {e}")
+
+
+async def update_tx_message_content(old_ref: str, changes: dict, new_ref: str = None):
+    """Reflect a transaction/request edit on the cards: merge changed components,
+    re-render the text, and re-link the cards if the CRM reference itself changed."""
+    try:
+        if not old_ref:
+            return
+        cmsg = await db.channel_messages.find_one(
+            {"is_tx_bot": True, "tx_reference": old_ref}, {"_id": 0})
+        comp = dict((cmsg or {}).get("tx_comp") or {})
+        if not comp:
+            return
+        comp.update({k: v for k, v in changes.items() if v is not None})
+        if new_ref:
+            comp["crm"] = new_ref
+        set_fields = {"content": _render_tx_card(comp), "tx_comp": comp}
+        if new_ref and new_ref != old_ref:
+            set_fields["tx_reference"] = new_ref
+        await _update_tx_cards(old_ref, set_fields)
+    except Exception as e:
+        print(f"update_tx_message_content failed: {e}")
