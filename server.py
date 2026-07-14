@@ -12658,27 +12658,6 @@ async def reject_transaction(
     )
 
 
-@api_router.post("/chat/tx-action")
-async def chat_tx_action(
-    request: Request,
-    data: dict = Body(...),
-    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.APPROVE)),
-):
-    """Approve/reject a pending transaction straight from its #deposite_only /
-    #withdraw_only card (matched by CRM reference)."""
-    crm = (data.get("crm_reference") or "").strip()
-    action = data.get("action")
-    if not crm or action not in ("approve", "reject"):
-        raise HTTPException(status_code=400, detail="crm_reference and action (approve|reject) required")
-    tx = await db.transactions.find_one(
-        {"crm_reference": crm, "status": TransactionStatus.PENDING}, {"_id": 0})
-    if not tx:
-        raise HTTPException(status_code=404, detail="No pending transaction for this reference")
-    if action == "approve":
-        return await approve_transaction(request, tx["transaction_id"], require_proof=False, user=user)
-    return await reject_transaction(request, tx["transaction_id"], reason=data.get("reason", ""), user=user)
-
-
 # ============== TRANSACTION REQUESTS ==============
 
 
