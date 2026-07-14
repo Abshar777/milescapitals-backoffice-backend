@@ -132,7 +132,7 @@ async def send_message_to_telegram(text: str):
 
 # ── Main backup ───────────────────────────────────────────────────────────────
 
-async def run_backup():
+async def run_backup(to_r2: bool = True, to_telegram: bool = True):
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
     run_name = f"{DB_NAME}_{timestamp}"
     run_dir = BACKUP_DIR / run_name
@@ -180,29 +180,35 @@ async def run_backup():
     # Upload to R2 (authoritative — no size limit)
     r2_key = f"backups/{DB_NAME}/{run_name}.zip"
     r2_ok = False
-    try:
-        await asyncio.to_thread(_upload_r2, zip_path, r2_key)
-        r2_ok = True
-        logger.info(f"  ✓ R2: {r2_key} ({zip_mb:.1f} MB)")
-    except Exception as e:
-        logger.error(f"  ✗ R2 upload failed: {e}")
+    if to_r2:
+        try:
+            await asyncio.to_thread(_upload_r2, zip_path, r2_key)
+            r2_ok = True
+            logger.info(f"  ✓ R2: {r2_key} ({zip_mb:.1f} MB)")
+        except Exception as e:
+            logger.error(f"  ✗ R2 upload failed: {e}")
 
-    # Send to Telegram — the single zip if it fits, else a pointer to R2
-    caption = (
-        f"📦 *{DB_NAME}* full backup — `{timestamp} UTC`\n"
-        f"{len(names)} collections · {sum(counts.values())} docs · {zip_mb:.2f} MB\n"
-        f"R2: {'✅' if r2_ok else '❌'}"
-        + (f"\n⚠️ Failed: {', '.join(failed)}" if failed else "")
-    )
-    try:
-        if zip_path.stat().st_size <= TELEGRAM_MAX_BYTES:
-            await send_document_to_telegram(zip_path, caption)
-        else:
-            await send_message_to_telegram(
-                caption + f"\n_(zip {zip_mb:.1f} MB exceeds Telegram limit — stored in R2 only: `{r2_key}`)_"
-            )
-    except Exception as e:
-        logger.error(f"  ✗ Telegram send failed: {e}")
+    # Send to Telegram — the single zip if it fits, else a note
+    if to_telegram:
+        r2_line = f"\nR2: {'✅' if r2_ok else '❌'}" if to_r2 else ""
+        caption = (
+            f"📦 *{DB_NAME}* full backup — `{timestamp} UTC`\n"
+            f"{len(names)} collections · {sum(counts.values())} docs · {zip_mb:.2f} MB"
+            + r2_line
+            + (f"\n⚠️ Failed: {', '.join(failed)}" if failed else "")
+        )
+        try:
+            if zip_path.stat().st_size <= TELEGRAM_MAX_BYTES:
+                await send_document_to_telegram(zip_path, caption)
+            else:
+                note = (
+                    f"\n_(zip {zip_mb:.1f} MB exceeds Telegram limit — stored in R2: `{r2_key}`)_"
+                    if to_r2
+                    else f"\n_(zip {zip_mb:.1f} MB exceeds Telegram limit — see the scheduled R2 backups)_"
+                )
+                await send_message_to_telegram(caption + note)
+        except Exception as e:
+            logger.error(f"  ✗ Telegram send failed: {e}")
 
     # Clean up local files (R2 + Telegram are the stores)
     shutil.rmtree(run_dir, ignore_errors=True)

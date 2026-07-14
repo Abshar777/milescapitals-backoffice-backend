@@ -25991,30 +25991,33 @@ app.add_middleware(
 )
 
 
-async def _run_backup_job():
+async def _run_backup_job(to_r2: bool = True, to_telegram: bool = True):
     """Wrapper called by APScheduler to run the backup."""
     try:
         import sys, os
         sys.path.insert(0, os.path.dirname(__file__))
         from scripts.backup import run_backup
-        await run_backup()
+        await run_backup(to_r2=to_r2, to_telegram=to_telegram)
     except Exception as e:
         logger.error(f"Backup job failed: {e}")
 
 
 @app.get("/admin/backup/status")
 async def backup_status():
-    """Check scheduler status and next backup run time."""
-    job = scheduler.get_job("db_backup")
-    if not job:
-        return {"scheduler_running": scheduler.running, "job": None}
-    return {
-        "scheduler_running": scheduler.running,
-        "job": {
+    """Scheduler status + next run times (R2 3×/day IST, Telegram hourly)."""
+    def _info(jid):
+        job = scheduler.get_job(jid)
+        if not job:
+            return None
+        return {
             "id": job.id,
             "next_run_time": job.next_run_time.isoformat() if job.next_run_time else None,
             "trigger": str(job.trigger),
-        },
+        }
+    return {
+        "scheduler_running": scheduler.running,
+        "r2": _info("db_backup_r2"),
+        "telegram": _info("db_backup_telegram"),
     }
 
 
@@ -26162,11 +26165,20 @@ async def startup_db_indexes():
         _scheduler_started = True
         await reschedule_daily_report()
         await reschedule_audit_scan()
-        # Schedule database backup hourly (top of every hour, UTC) — R2 + Telegram
+        # Telegram backup — hourly (top of every hour)
         scheduler.add_job(
             _run_backup_job,
             CronTrigger(minute=0),
-            id="db_backup",
+            id="db_backup_telegram",
+            kwargs={"to_r2": False, "to_telegram": True},
+            replace_existing=True,
+        )
+        # R2 backup — 3×/day at 06:00 / 14:00 / 22:00 IST
+        scheduler.add_job(
+            _run_backup_job,
+            CronTrigger(hour="6,14,22", minute=0, timezone="Asia/Kolkata"),
+            id="db_backup_r2",
+            kwargs={"to_r2": True, "to_telegram": False},
             replace_existing=True,
         )
         logger.info("Scheduler started successfully")
