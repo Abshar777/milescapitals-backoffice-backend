@@ -1020,8 +1020,6 @@ async def delete_channel_message(
 
 # ── Transaction-request auto-notifications (#deposite_only / #withdraw_only) ──
 TX_CHANNELS = {"deposit": "deposite_only", "withdrawal": "withdraw_only"}
-CRM_DESK = "crm_desk"  # posted-to when a request is PROCESSED (CRM admins + super-admins)
-CRM_DESK_ROLES = ["super_admin", "admin", "crm_admin", "crm_sub_admin"]
 TX_BOT_ID = "user_txbot"
 TX_BOT_NAME = "Transactions"
 
@@ -1065,29 +1063,6 @@ async def ensure_tx_channels():
                 "name": cname,
                 "description": f"Auto-posted {cname.split('_')[0]} transaction requests",
                 "members": member_ids,
-                "created_by": "system",
-                "created_by_name": "System",
-                "created_at": now,
-                "last_read": {},
-                "system_channel": True,
-            })
-        # #crm_desk — CRM admins + super-admins; receives a card whenever a request is PROCESSED
-        crm_users = await db.users.find(
-            {"role": {"$in": CRM_DESK_ROLES}}, {"_id": 0, "user_id": 1}
-        ).to_list(1000)
-        crm_ids = [u["user_id"] for u in crm_users if u.get("user_id")]
-        crm_ch = await db.channels.find_one({"name": CRM_DESK})
-        if crm_ch:
-            merged = list(set(crm_ch.get("members", []) + crm_ids))
-            if set(merged) != set(crm_ch.get("members", [])):
-                await db.channels.update_one(
-                    {"channel_id": crm_ch["channel_id"]}, {"$set": {"members": merged}})
-        else:
-            await db.channels.insert_one({
-                "channel_id": f"chan_{uuid.uuid4().hex[:12]}",
-                "name": CRM_DESK,
-                "description": "Processed transaction requests — CRM desk",
-                "members": crm_ids,
                 "created_by": "system",
                 "created_by_name": "System",
                 "created_at": now,
@@ -1233,17 +1208,19 @@ async def post_tx_request_notification(req: dict, client: dict, proof_url: str =
         print(f"post_tx_request_notification failed: {e}")
 
 
-async def _update_tx_cards(ref: str, set_fields: dict):
-    """Apply set_fields to EVERY channel card (deposit/withdraw + crm_desk) and the
-    creator DM card(s) for a ref, and broadcast the edits so all clients update live."""
-    for cmsg in await db.channel_messages.find({"is_tx_bot": True, "tx_reference": ref}, {"_id": 0}).to_list(20):
+async def _update_tx_cards(request_id: str, set_fields: dict):
+    """Apply set_fields to EVERY channel + creator-DM card for a request_id (unique,
+    N/A-safe) and broadcast the edits so all clients update live."""
+    if not request_id:
+        return
+    for cmsg in await db.channel_messages.find({"is_tx_bot": True, "tx_request_id": request_id}, {"_id": 0}).to_list(20):
         await db.channel_messages.update_one({"msg_id": cmsg["msg_id"]}, {"$set": set_fields})
         updated = await db.channel_messages.find_one({"msg_id": cmsg["msg_id"]}, {"_id": 0})
         channel = await db.channels.find_one({"channel_id": cmsg["channel_id"]})
         asyncio.create_task(manager.broadcast((channel or {}).get("members", []), {
             "type": "channel_edit", "message": updated,
         }))
-    for dmsg in await db.user_messages.find({"is_tx_bot": True, "tx_reference": ref}, {"_id": 0}).to_list(20):
+    for dmsg in await db.user_messages.find({"is_tx_bot": True, "tx_request_id": request_id}, {"_id": 0}).to_list(20):
         await db.user_messages.update_one({"message_id": dmsg["message_id"]}, {"$set": set_fields})
         updated = await db.user_messages.find_one({"message_id": dmsg["message_id"]}, {"_id": 0})
         asyncio.create_task(manager.broadcast(
@@ -1252,50 +1229,17 @@ async def _update_tx_cards(ref: str, set_fields: dict):
 
 
 async def post_tx_processed_notification(req: dict, processor_id: str, processor_name: str):
-    """When a request is PROCESSED: mark existing cards processed, post a card to #crm_desk,
-    and DM the request creator. Never raises."""
+    """When a request is PROCESSED: mark its cards processed and DM the creator. Never raises."""
     try:
+        request_id = req.get("request_id")
         ref = req.get("crm_reference") or req.get("reference")
-        if not ref:
-            return
         now_iso = datetime.now(timezone.utc).isoformat()
-        # 1) flip existing cards (deposit/withdraw + DM) to processed
-        await _update_tx_cards(ref, {
+        # flip the deposit/withdraw + DM cards to processed
+        await _update_tx_cards(request_id, {
             "tx_processed_by": processor_id, "tx_processed_by_name": processor_name,
             "tx_processed_at": now_iso,
         })
-        # 2) post a card to #crm_desk (Complete visible to anyone there) — reuse the card's comp
-        crm_ch = await db.channels.find_one({"name": CRM_DESK})
-        existing = await db.channel_messages.find_one({"is_tx_bot": True, "tx_reference": ref}, {"_id": 0})
-        comp = (existing or {}).get("tx_comp") or {
-            "crm": ref, "client_name": req.get("client_name"),
-            "currency": req.get("currency", "USD"), "amount": req.get("amount"),
-            "base_currency": req.get("base_currency"), "base_amount": req.get("base_amount"),
-            "dest": await _resolve_tx_dest(req),
-            "bank": _tx_bank_block(req) if req.get("transaction_type") == "withdrawal" else None,
-        }
-        already = crm_ch and await db.channel_messages.find_one(
-            {"is_tx_bot": True, "tx_reference": ref, "channel_id": crm_ch["channel_id"]}, {"_id": 0})
-        if crm_ch and not already:
-            card = {
-                "msg_id": f"cmsg_{uuid.uuid4().hex[:12]}",
-                "channel_id": crm_ch["channel_id"],
-                "sender_id": processor_id or "system", "sender_name": processor_name or "System",
-                "content": _render_tx_card(comp), "attachments": [],
-                "thread_root_id": None, "reply_count": 0, "created_at": now_iso,
-                "is_tx_bot": True, "tx_request_id": req.get("request_id"),
-                "tx_reference": ref, "tx_type": req.get("transaction_type"),
-                "tx_status": (existing or {}).get("tx_status", "pending"),
-                "tx_comp": comp, "tx_owner_id": req.get("created_by"), "tx_crm_desk": True,
-                "tx_processed_by": processor_id, "tx_processed_by_name": processor_name,
-                "tx_processed_at": now_iso,
-            }
-            await db.channel_messages.insert_one(card)
-            card.pop("_id", None)
-            asyncio.create_task(manager.broadcast(crm_ch.get("members", []), {
-                "type": "channel_message", "message": card, "channel_name": CRM_DESK,
-            }))
-        # 3) DM the request creator that it's been processed
+        # DM the request creator that it's been processed
         creator = req.get("created_by")
         if creator and creator != TX_BOT_ID:
             await _ensure_tx_bot()
@@ -1313,37 +1257,37 @@ async def post_tx_processed_notification(req: dict, processor_id: str, processor
         print(f"post_tx_processed_notification failed: {e}")
 
 
-async def set_tx_message_status(crm_reference: str, status: str, transaction_id: str = None):
-    """Flip the linked channel + creator-DM cards to approved/rejected."""
+async def set_tx_message_status(request_id: str, status: str, transaction_id: str = None):
+    """Flip the linked channel + creator-DM cards to approved/rejected (keyed by request_id)."""
     try:
-        if not crm_reference:
+        if not request_id:
             return
         upd = {"tx_status": status}
         if transaction_id:
             upd["tx_transaction_id"] = transaction_id
-        await _update_tx_cards(crm_reference, upd)
+        await _update_tx_cards(request_id, upd)
     except Exception as e:
         print(f"set_tx_message_status failed: {e}")
 
 
-async def update_tx_message_content(old_ref: str, changes: dict, new_ref: str = None):
-    """Reflect a transaction/request edit on the cards: merge changed components,
-    re-render the text, and re-link the cards if the CRM reference itself changed."""
+async def update_tx_message_content(request_id: str, changes: dict, new_crm: str = None):
+    """Reflect a transaction/request edit on the cards (keyed by request_id): merge changed
+    components, re-render the text, and update the CRM ref shown if it changed."""
     try:
-        if not old_ref:
+        if not request_id:
             return
         cmsg = await db.channel_messages.find_one(
-            {"is_tx_bot": True, "tx_reference": old_ref}, {"_id": 0})
+            {"is_tx_bot": True, "tx_request_id": request_id}, {"_id": 0})
         comp = dict((cmsg or {}).get("tx_comp") or {})
         if not comp:
             return
         comp.update({k: v for k, v in changes.items() if v is not None})
-        if new_ref:
-            comp["crm"] = new_ref
+        if new_crm:
+            comp["crm"] = new_crm
         set_fields = {"content": _render_tx_card(comp), "tx_comp": comp}
-        if new_ref and new_ref != old_ref:
-            set_fields["tx_reference"] = new_ref
-        await _update_tx_cards(old_ref, set_fields)
+        if new_crm:
+            set_fields["tx_reference"] = new_crm
+        await _update_tx_cards(request_id, set_fields)
     except Exception as e:
         print(f"update_tx_message_content failed: {e}")
 
@@ -1352,18 +1296,15 @@ async def update_tx_message_content(old_ref: str, changes: dict, new_ref: str = 
 async def tx_complete(data: dict = Body(...), user: dict = Depends(get_current_user)):
     """Owner-only: mark a transaction card complete and post a completion reply in the
     channel thread. Does NOT change the transaction — chat is notes/replies only."""
-    ref = (data.get("crm_reference") or "").strip()
+    request_id = (data.get("request_id") or "").strip()
     note = (data.get("note") or "").strip()[:500]
-    if not ref:
-        raise HTTPException(status_code=400, detail="crm_reference required")
-    card = await db.channel_messages.find_one({"is_tx_bot": True, "tx_reference": ref}, {"_id": 0})
+    if not request_id:
+        raise HTTPException(status_code=400, detail="request_id required")
+    card = await db.channel_messages.find_one({"is_tx_bot": True, "tx_request_id": request_id}, {"_id": 0})
     if not card:
         raise HTTPException(status_code=404, detail="Card not found")
-    # Owner can always complete; anyone in #crm_desk can also complete
     if card.get("tx_owner_id") and card["tx_owner_id"] != user["user_id"]:
-        crm_ch = await db.channels.find_one({"name": CRM_DESK}, {"_id": 0, "members": 1})
-        if not (crm_ch and user["user_id"] in (crm_ch.get("members") or [])):
-            raise HTTPException(status_code=403, detail="Only the owner or a CRM-desk member can complete this")
+        raise HTTPException(status_code=403, detail="Only the request owner can complete this")
     now = datetime.now(timezone.utc).isoformat()
     # 1) completion reply in the card's channel thread
     reply = {
@@ -1377,12 +1318,17 @@ async def tx_complete(data: dict = Body(...), user: dict = Depends(get_current_u
     await db.channel_messages.insert_one(reply)
     reply.pop("_id", None)
     await db.channel_messages.update_one({"msg_id": card["msg_id"]}, {"$inc": {"reply_count": 1}})
-    # 2) mark both channel + DM cards completed
-    await _update_tx_cards(ref, {
+    # 2) mark the channel + DM cards completed
+    await _update_tx_cards(request_id, {
         "tx_completed_by": user["user_id"], "tx_completed_by_name": user["name"],
         "tx_completed_at": now, "tx_completed_note": note,
     })
-    # 3) broadcast the thread reply
+    # 3) flag the underlying transaction (Transactions Summary "Completed" column)
+    await db.transactions.update_one(
+        {"request_id": request_id},
+        {"$set": {"completed": True, "completed_by": user["user_id"],
+                  "completed_by_name": user["name"], "completed_at": now}})
+    # 4) broadcast the thread reply
     channel = await db.channels.find_one({"channel_id": card["channel_id"]})
     asyncio.create_task(manager.broadcast((channel or {}).get("members", []), {
         "type": "thread_reply", "message": reply,

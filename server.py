@@ -9439,6 +9439,8 @@ async def get_transactions(
     request_processed_date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
+    completed: Optional[str] = None,   # "yes" | "no" — chat Completed flag (deposit/withdrawal)
+    has_crm: Optional[str] = None,     # "yes" | "no" — has a real CRM ref vs blank/"N/A"
     page: int = 1,
     page_size: int = 25,
     limit: int = 100,
@@ -9477,6 +9479,14 @@ async def get_transactions(
         query["psp_id"] = psp_id
     if destination_account_id:
         query["destination_account_id"] = destination_account_id
+    if completed == "yes":
+        query["completed"] = True
+    elif completed == "no":
+        query["completed"] = {"$ne": True}
+    if has_crm == "yes":
+        and_clauses.append({"crm_reference": {"$nin": [None, "", "N/A", "n/a", "NA"]}})
+    elif has_crm == "no":
+        and_clauses.append({"crm_reference": {"$in": [None, "", "N/A", "n/a", "NA"]}})
 
     if client_tag:
         query["client_tags"] = client_tag
@@ -11886,17 +11896,17 @@ async def update_transaction(
 
     # Reflect the edit on the #deposite_only / #withdraw_only + creator-DM cards
     try:
-        old_ref = tx.get("crm_reference")
-        if old_ref:
+        rid = tx.get("request_id")
+        if rid:
             from chat import update_tx_message_content
             await update_tx_message_content(
-                old_ref,
+                rid,
                 {
                     "amount": updates.get("amount"),
                     "base_amount": updates.get("base_amount"),
                     "base_currency": updates.get("base_currency"),
                 },
-                new_ref=updates.get("crm_reference"),
+                new_crm=updates.get("crm_reference"),
             )
     except Exception as _e:
         logger.error(f"tx-card edit sync failed: {_e}")
@@ -12542,8 +12552,8 @@ async def approve_transaction(
     # Mark the linked #deposite_only/#withdraw_only card as approved
     try:
         from chat import set_tx_message_status
-        if tx.get("crm_reference"):
-            await set_tx_message_status(tx["crm_reference"], "approved", transaction_id)
+        if tx.get("request_id"):
+            await set_tx_message_status(tx.get("request_id"), "approved", transaction_id)
     except Exception as _e:
         logger.error(f"tx-channel status failed: {_e}")
 
@@ -12648,8 +12658,8 @@ async def reject_transaction(
     # Mark the linked #deposite_only/#withdraw_only card as rejected
     try:
         from chat import set_tx_message_status
-        if tx.get("crm_reference"):
-            await set_tx_message_status(tx["crm_reference"], "rejected")
+        if tx.get("request_id"):
+            await set_tx_message_status(tx.get("request_id"), "rejected")
     except Exception as _e:
         logger.error(f"tx-channel status failed: {_e}")
 
@@ -12799,10 +12809,11 @@ async def create_transaction_request(
 ):
     now = datetime.now(timezone.utc)
 
-    # CRM reference uniqueness
-    if crm_reference and crm_reference.strip():
+    # CRM reference: optional — default to "N/A"; skip the uniqueness check for "N/A"
+    crm_reference = crm_reference.strip() if (crm_reference and crm_reference.strip()) else "N/A"
+    if crm_reference.upper() != "N/A":
         existing = await db.transaction_requests.find_one(
-            {"crm_reference": crm_reference.strip()}, {"_id": 0}
+            {"crm_reference": crm_reference}, {"_id": 0}
         )
         if existing:
             raise HTTPException(
@@ -13229,8 +13240,8 @@ async def update_transaction_request(
 
     # Reflect the request edit on the #deposite_only / #withdraw_only + creator-DM cards
     try:
-        old_ref = req.get("crm_reference") or req.get("reference")
-        if old_ref and req.get("transaction_type") in ("deposit", "withdrawal"):
+        rid = req.get("request_id")
+        if rid and req.get("transaction_type") in ("deposit", "withdrawal"):
             from chat import update_tx_message_content, _resolve_tx_dest
             changes = {
                 "amount": updates.get("amount"),
@@ -13240,7 +13251,7 @@ async def update_transaction_request(
             }
             if any(k in updates for k in ("destination_account_id", "psp_id", "vendor_id", "destination_type")):
                 changes["dest"] = await _resolve_tx_dest({**req, **updates})
-            await update_tx_message_content(old_ref, changes, new_ref=updates.get("crm_reference"))
+            await update_tx_message_content(rid, changes, new_crm=updates.get("crm_reference"))
     except Exception as _e:
         logger.error(f"tx-card request-edit sync failed: {_e}")
 
