@@ -15913,12 +15913,19 @@ async def get_loan_transactions(
         for loan in loans:
             loan_map[loan["loan_id"]] = loan
 
+    # Warm FX cache so the INR-equivalent conversion below uses live rates
+    await get_fx_rates()
+
     # Enrich transactions
     for tx in transactions:
         tx["treasury_account_name"] = treasury_map.get(tx.get("treasury_account_id"))
         tx["credit_vendor_name"] = vendor_map.get(tx.get("credit_to_vendor_id"))
         tx["source_vendor_name"] = vendor_map.get(tx.get("source_vendor_id"))
         tx["status"] = tx.get("status", "completed")
+        # INR equivalent of the native amount (loan txs store amount in their own currency)
+        tx["amount_inr"] = convert_currency(
+            tx.get("amount") or 0, tx.get("currency") or "USD", "INR"
+        )
 
         # For disbursements, get source from loan
         if tx.get("transaction_type") == "disbursement" and tx.get("loan_id"):
