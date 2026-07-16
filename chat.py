@@ -160,19 +160,19 @@ async def get_conversation_messages(
 ):
     """Get messages between current user and recipient"""
     user_id = user["user_id"]
-    messages = (
-        await db.user_messages.find(
-            {
-                "$or": [
-                    {"sender_id": user_id, "recipient_id": recipient_id},
-                    {"sender_id": recipient_id, "recipient_id": user_id},
-                ]
-            },
-            {"_id": 0},
-        )
-        .sort("created_at", 1)
-        .to_list(limit)
-    )
+    # Newest window first, ordered by activity (a reaction bumps via last_activity_at);
+    # reverse to ascending for display.
+    messages = await db.user_messages.aggregate([
+        {"$match": {"$or": [
+            {"sender_id": user_id, "recipient_id": recipient_id},
+            {"sender_id": recipient_id, "recipient_id": user_id},
+        ]}},
+        {"$addFields": {"_activity": {"$ifNull": ["$last_activity_at", "$created_at"]}}},
+        {"$sort": {"_activity": -1}},
+        {"$limit": limit},
+        {"$project": {"_id": 0, "_activity": 0}},
+    ]).to_list(limit)
+    messages.reverse()
     return messages
 
 
@@ -587,17 +587,16 @@ async def get_channel_messages(
         raise HTTPException(status_code=403, detail="Not a member of this channel")
 
     skip = (page - 1) * page_size
-    # Return the NEWEST page_size messages, not the oldest. Sort descending so page 1
-    # is the latest window, then reverse to ascending for chronological display.
-    messages = (
-        await db.channel_messages.find(
-            {"channel_id": channel_id, "thread_root_id": None},
-            {"_id": 0},
-        )
-        .sort("created_at", -1)
-        .skip(skip)
-        .to_list(page_size)
-    )
+    # Newest window first, ordered by activity so a reaction bumps a message
+    # (last_activity_at, falling back to created_at); reverse to ascending for display.
+    messages = await db.channel_messages.aggregate([
+        {"$match": {"channel_id": channel_id, "thread_root_id": None}},
+        {"$addFields": {"_activity": {"$ifNull": ["$last_activity_at", "$created_at"]}}},
+        {"$sort": {"_activity": -1}},
+        {"$skip": skip},
+        {"$limit": page_size},
+        {"$project": {"_id": 0, "_activity": 0}},
+    ]).to_list(page_size)
     messages.reverse()
     return messages
 
@@ -1019,6 +1018,82 @@ async def delete_channel_message(
         )
     )
     return {"success": True, "msg_id": msg_id}
+
+
+# ── Emoji reactions ──────────────────────────────────────────────────────────
+def _toggle_reaction(reactions: dict, emoji: str, user: dict) -> dict:
+    """Add the user's reaction for `emoji` if absent, else remove it. Returns the
+    updated {emoji: [{user_id, name}]} map with empty emoji keys dropped."""
+    reactions = dict(reactions or {})
+    lst = list(reactions.get(emoji) or [])
+    uid = user["user_id"]
+    if any(r.get("user_id") == uid for r in lst):
+        lst = [r for r in lst if r.get("user_id") != uid]
+    else:
+        lst.append({"user_id": uid, "name": user.get("name") or ""})
+    if lst:
+        reactions[emoji] = lst
+    else:
+        reactions.pop(emoji, None)
+    return reactions
+
+
+@chat_router.post("/channels/{channel_id}/messages/{msg_id}/react")
+async def react_channel_message(
+    channel_id: str, msg_id: str, request: Request, user: dict = Depends(get_current_user)
+):
+    """Toggle an emoji reaction on a channel message (any member). Reacting bumps the
+    message to the latest via last_activity_at."""
+    data = await request.json()
+    emoji = (data.get("emoji") or "").strip()
+    if not emoji:
+        raise HTTPException(status_code=400, detail="Emoji required")
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+    msg = await db.channel_messages.find_one({"msg_id": msg_id, "channel_id": channel_id}, {"_id": 0})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    reactions = _toggle_reaction(msg.get("reactions") or {}, emoji, user)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.channel_messages.update_one(
+        {"msg_id": msg_id}, {"$set": {"reactions": reactions, "last_activity_at": now}}
+    )
+    payload = {
+        "type": "reaction", "scope": "channel", "channel_id": channel_id,
+        "msg_id": msg_id, "reactions": reactions, "last_activity_at": now,
+    }
+    asyncio.create_task(manager.broadcast(channel.get("members", []), payload))
+    return {"success": True, "reactions": reactions, "last_activity_at": now}
+
+
+@chat_router.post("/messages/{message_id}/react")
+async def react_user_message(
+    message_id: str, request: Request, user: dict = Depends(get_current_user)
+):
+    """Toggle an emoji reaction on a direct message (sender or recipient)."""
+    data = await request.json()
+    emoji = (data.get("emoji") or "").strip()
+    if not emoji:
+        raise HTTPException(status_code=400, detail="Emoji required")
+    msg = await db.user_messages.find_one({"message_id": message_id}, {"_id": 0})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if user["user_id"] not in (msg.get("sender_id"), msg.get("recipient_id")):
+        raise HTTPException(status_code=403, detail="Not part of this conversation")
+    reactions = _toggle_reaction(msg.get("reactions") or {}, emoji, user)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.user_messages.update_one(
+        {"message_id": message_id}, {"$set": {"reactions": reactions, "last_activity_at": now}}
+    )
+    payload = {
+        "type": "reaction", "scope": "dm", "message_id": message_id,
+        "reactions": reactions, "last_activity_at": now,
+    }
+    asyncio.create_task(manager.broadcast([msg["sender_id"], msg["recipient_id"]], payload))
+    return {"success": True, "reactions": reactions, "last_activity_at": now}
 
 
 # ── Transaction-request auto-notifications (#deposite_only / #withdraw_only) ──
