@@ -11786,22 +11786,20 @@ async def update_transaction(
 
     now = datetime.now(timezone.utc)
 
-    # Editable fields only allowed on pending transactions
-    editable_fields = {
-        "crm_reference",
+    # Amount/currency/date affect treasury balances → editable on pending only.
+    # Reference & CRM Reference are identifiers and may be corrected on any status.
+    pending_only_fields = {
         "amount",
         "base_amount",
         "base_currency",
         "exchange_rate",
-        "reference",
         "transaction_date",
     }
-    has_editable_fields = any(k in editable_fields for k in updates)
-    if has_editable_fields:
+    if any(k in pending_only_fields for k in updates):
         if tx["status"] != TransactionStatus.PENDING:
             raise HTTPException(
                 status_code=400,
-                detail="These fields can only be edited on pending transactions",
+                detail="Amount, currency and date can only be edited on pending transactions",
             )
       # client_tags can be updated on any status
     if "client_tags" in updates:
