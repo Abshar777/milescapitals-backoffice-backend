@@ -576,10 +576,10 @@ async def add_channel_members(
 async def get_channel_messages(
     channel_id: str,
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = 200,
     user: dict = Depends(get_current_user),
 ):
-    """Get paginated messages for a channel (top-level only)"""
+    """Get messages for a channel (top-level only) — newest window first."""
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
@@ -587,15 +587,18 @@ async def get_channel_messages(
         raise HTTPException(status_code=403, detail="Not a member of this channel")
 
     skip = (page - 1) * page_size
+    # Return the NEWEST page_size messages, not the oldest. Sort descending so page 1
+    # is the latest window, then reverse to ascending for chronological display.
     messages = (
         await db.channel_messages.find(
             {"channel_id": channel_id, "thread_root_id": None},
             {"_id": 0},
         )
-        .sort("created_at", 1)
+        .sort("created_at", -1)
         .skip(skip)
         .to_list(page_size)
     )
+    messages.reverse()
     return messages
 
 
