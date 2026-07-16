@@ -9560,12 +9560,21 @@ async def get_transactions(
                 query["transaction_type"] = {"$in": allowed_types}
         allowed_client_tag_ids = user_role.get("allowed_client_tags") if user_role else None
         if allowed_client_tag_ids:
+            # "__untagged__" is a sentinel meaning "also show transactions with no client tag"
+            include_untagged = "__untagged__" in allowed_client_tag_ids
+            real_tag_ids = [t for t in allowed_client_tag_ids if t != "__untagged__"]
             tag_docs = await db.client_tags.find(
-                {"tag_id": {"$in": allowed_client_tag_ids}}, {"_id": 0, "name": 1}
+                {"tag_id": {"$in": real_tag_ids}}, {"_id": 0, "name": 1}
             ).to_list(None)
             allowed_tag_names = [t["name"] for t in tag_docs]
+            tag_or = []
             if allowed_tag_names:
-                query["client_tags"] = {"$in": allowed_tag_names}
+                tag_or.append({"client_tags": {"$in": allowed_tag_names}})
+            if include_untagged:
+                # untagged = field null, missing, or empty array
+                tag_or.append({"client_tags": {"$in": [None, []]}})
+            if tag_or:
+                query.setdefault("$and", []).append({"$or": tag_or})
 
     # No caching — always return fresh data from DB
 
