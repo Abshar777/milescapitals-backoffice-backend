@@ -1243,9 +1243,10 @@ async def _resolve_tx_dest(req: dict) -> str:
     return dest
 
 
-async def post_tx_request_notification(req: dict, client: dict, proof_url: str = None):
-    """Post a transaction-request card to #deposite_only / #withdraw_only AND DM the
-    request creator. Never raises — notification failures must not break request creation."""
+async def post_tx_request_notification(req: dict, client: dict, proof_url: str = None, dm: bool = True):
+    """Post a transaction card to #deposite_only / #withdraw_only AND (unless dm=False) DM the
+    creator. Works for a request (keyed by request_id) or a direct transaction (keyed by
+    transaction_id). Never raises — notification failures must not break creation."""
     try:
         ttype = req.get("transaction_type")
         cname = TX_CHANNELS.get(ttype)
@@ -1273,8 +1274,11 @@ async def post_tx_request_notification(req: dict, client: dict, proof_url: str =
         now_iso = datetime.now(timezone.utc).isoformat()
         common = {
             "content": _render_tx_card(comp), "attachments": attachments,
-            "is_tx_bot": True, "tx_request_id": req.get("request_id"),
-            "tx_reference": ref, "tx_type": ttype, "tx_status": "pending",
+            "is_tx_bot": True,
+            "tx_request_id": req.get("request_id") or req.get("transaction_id"),
+            "tx_direct": not req.get("request_id"),
+            "tx_reference": ref, "tx_type": ttype,
+            "tx_status": req.get("status") or "pending",
             "tx_comp": comp, "tx_owner_id": req.get("created_by"),
         }
 
@@ -1293,9 +1297,9 @@ async def post_tx_request_notification(req: dict, client: dict, proof_url: str =
             "type": "channel_message", "message": msg_doc, "channel_name": channel.get("name", ""),
         }))
 
-        # 2) DM card to the creator (so they can track their own request's status)
+        # 2) DM card to the creator (skipped for bulk to avoid flooding their DM)
         creator = req.get("created_by")
-        if creator and creator != TX_BOT_ID:
+        if dm and creator and creator != TX_BOT_ID:
             await _ensure_tx_bot()
             dm_doc = {
                 "message_id": f"msg_{uuid.uuid4().hex[:12]}",
@@ -1431,7 +1435,7 @@ async def tx_complete(data: dict = Body(...), user: dict = Depends(get_current_u
     })
     # 3) flag the underlying transaction (Transactions Summary "Completed" column)
     await db.transactions.update_one(
-        {"request_id": request_id},
+        {"$or": [{"request_id": request_id}, {"transaction_id": request_id}]},
         {"$set": {"completed": True, "completed_by": user["user_id"],
                   "completed_by_name": user["name"], "completed_at": now}})
     # 4) broadcast the thread reply

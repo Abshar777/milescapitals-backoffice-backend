@@ -11119,6 +11119,14 @@ async def bulk_create_transactions(
             "processed_at": None,
         }
         await db.transactions.insert_one(tx_doc)
+        # Channel card for each imported deposit/withdrawal (no creator DM — avoids flooding).
+        if tx_type in ("deposit", "withdrawal"):
+            try:
+                from chat import post_tx_request_notification
+                _cl = await db.clients.find_one({"client_id": data.get("client_id")}, {"_id": 0, "email": 1})
+                await post_tx_request_notification(tx_doc, _cl, None, dm=False)
+            except Exception as _e:
+                logger.error(f"tx-card (bulk) failed: {_e}")
         created.append(
             {
                 "transaction_id": tx_id,
@@ -11706,6 +11714,15 @@ async def _create_transaction_impl(
     result = await db.transactions.find_one({"transaction_id": tx_id}, {"_id": 0})
     await log_activity(request, user, "create", "transactions", "Created transaction")
 
+    # Post the same #deposite_only/#withdraw_only card that requests get, for this direct transaction.
+    if transaction_type in ("deposit", "withdrawal"):
+        try:
+            from chat import post_tx_request_notification
+            _proof = proof_image_urls[0] if proof_image_urls else None
+            await post_tx_request_notification(result, client, _proof)
+        except Exception as _e:
+            logger.error(f"tx-card (direct create) failed: {_e}")
+
     # Send notifications (fire and forget)
     import asyncio
 
@@ -11896,7 +11913,7 @@ async def update_transaction(
 
     # Reflect the edit on the #deposite_only / #withdraw_only + creator-DM cards
     try:
-        rid = tx.get("request_id")
+        rid = tx.get("request_id") or tx.get("transaction_id")
         if rid:
             from chat import update_tx_message_content
             await update_tx_message_content(
@@ -12553,7 +12570,7 @@ async def approve_transaction(
     try:
         from chat import set_tx_message_status
         if tx.get("request_id"):
-            await set_tx_message_status(tx.get("request_id"), "approved", transaction_id)
+            await set_tx_message_status(tx.get("request_id") or tx.get("transaction_id"), "approved", transaction_id)
     except Exception as _e:
         logger.error(f"tx-channel status failed: {_e}")
 
@@ -12659,7 +12676,7 @@ async def reject_transaction(
     try:
         from chat import set_tx_message_status
         if tx.get("request_id"):
-            await set_tx_message_status(tx.get("request_id"), "rejected")
+            await set_tx_message_status(tx.get("request_id") or tx.get("transaction_id"), "rejected")
     except Exception as _e:
         logger.error(f"tx-channel status failed: {_e}")
 
