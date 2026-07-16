@@ -1124,6 +1124,53 @@ async def react_user_message(
     return {"success": True, "reactions": reactions, "last_activity_at": now}
 
 
+# ── Status tags (workflow labels, e.g. #scalping-check) ───────────────────────
+TAG_OPTIONS = ["Approved", "Processed", "Hold", "Rejected", "Pending", "Query"]
+
+
+def _toggle_tag(tags: dict, tag: str, user: dict) -> dict:
+    """Toggle a status tag on a message. Shared (not per-user): present → removed,
+    absent → added with who set it. Returns the {tag: {by_id, by, at}} map."""
+    tags = dict(tags or {})
+    if tag in tags:
+        tags.pop(tag, None)
+    else:
+        tags[tag] = {
+            "by_id": user["user_id"], "by": user.get("name") or "",
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+    return tags
+
+
+@chat_router.post("/channels/{channel_id}/messages/{msg_id}/tag")
+async def tag_channel_message(
+    channel_id: str, msg_id: str, request: Request, user: dict = Depends(get_current_user)
+):
+    """Toggle a status tag on a channel message (any member). Powers the
+    #scalping-check workflow; multiple tags can be active at once. Broadcasts a
+    live 'tag' update with no chime — tags are quiet status labels, not reactions."""
+    data = await request.json()
+    tag = (data.get("tag") or "").strip()
+    if tag not in TAG_OPTIONS:
+        raise HTTPException(status_code=400, detail="Invalid tag")
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+    msg = await db.channel_messages.find_one({"msg_id": msg_id, "channel_id": channel_id}, {"_id": 0})
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    tags = _toggle_tag(msg.get("tags") or {}, tag, user)
+    await db.channel_messages.update_one({"msg_id": msg_id}, {"$set": {"tags": tags}})
+    payload = {
+        "type": "tag", "scope": "channel", "channel_id": channel_id,
+        "channel_name": channel.get("name", ""), "msg_id": msg_id, "tags": tags,
+    }
+    asyncio.create_task(manager.broadcast(list(channel.get("members", [])), payload))
+    return {"success": True, "tags": tags}
+
+
 # ── Transaction-request auto-notifications (#deposite_only / #withdraw_only) ──
 TX_CHANNELS = {"deposit": "deposite_only", "withdrawal": "withdraw_only"}
 TX_BOT_ID = "user_txbot"
