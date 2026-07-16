@@ -5180,6 +5180,7 @@ async def get_psp_all_transactions(
     amount_min: Optional[float] = None,
     amount_max: Optional[float] = None,
     tags: Optional[str] = None,
+    exclude_rejected: bool = False,
     user: dict = Depends(require_permission(Modules.PSP, Actions.VIEW)),
 ):
     """Unified PSP transactions endpoint with full server-side filtering and pagination"""
@@ -5195,6 +5196,9 @@ async def get_psp_all_transactions(
             query["settled"] = {"$ne": True}
         else:
             query["status"] = status
+    elif exclude_rejected:
+        # Reconciliation view: drop rejected/cancelled (they never moved money)
+        query["status"] = {"$nin": ["rejected", "cancelled"]}
 
     date_field = "transaction_date"
     if date_from:
