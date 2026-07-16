@@ -160,18 +160,18 @@ async def get_conversation_messages(
 ):
     """Get messages between current user and recipient"""
     user_id = user["user_id"]
-    # Newest window first, ordered by activity (a reaction bumps via last_activity_at);
-    # reverse to ascending for display.
-    messages = await db.user_messages.aggregate([
-        {"$match": {"$or": [
-            {"sender_id": user_id, "recipient_id": recipient_id},
-            {"sender_id": recipient_id, "recipient_id": user_id},
-        ]}},
-        {"$addFields": {"_activity": {"$ifNull": ["$last_activity_at", "$created_at"]}}},
-        {"$sort": {"_activity": -1}},
-        {"$limit": limit},
-        {"$project": {"_id": 0, "_activity": 0}},
-    ]).to_list(limit)
+    # Newest window first (reactions do NOT reorder messages); reverse to ascending for display.
+    messages = (
+        await db.user_messages.find(
+            {"$or": [
+                {"sender_id": user_id, "recipient_id": recipient_id},
+                {"sender_id": recipient_id, "recipient_id": user_id},
+            ]},
+            {"_id": 0},
+        )
+        .sort("created_at", -1)
+        .to_list(limit)
+    )
     messages.reverse()
     return messages
 
@@ -587,16 +587,16 @@ async def get_channel_messages(
         raise HTTPException(status_code=403, detail="Not a member of this channel")
 
     skip = (page - 1) * page_size
-    # Newest window first, ordered by activity so a reaction bumps a message
-    # (last_activity_at, falling back to created_at); reverse to ascending for display.
-    messages = await db.channel_messages.aggregate([
-        {"$match": {"channel_id": channel_id, "thread_root_id": None}},
-        {"$addFields": {"_activity": {"$ifNull": ["$last_activity_at", "$created_at"]}}},
-        {"$sort": {"_activity": -1}},
-        {"$skip": skip},
-        {"$limit": page_size},
-        {"$project": {"_id": 0, "_activity": 0}},
-    ]).to_list(page_size)
+    # Newest window first (reactions do NOT reorder messages); reverse to ascending for display.
+    messages = (
+        await db.channel_messages.find(
+            {"channel_id": channel_id, "thread_root_id": None},
+            {"_id": 0},
+        )
+        .sort("created_at", -1)
+        .skip(skip)
+        .to_list(page_size)
+    )
     messages.reverse()
     return messages
 
@@ -1078,7 +1078,7 @@ async def react_channel_message(
     reactions = _toggle_reaction(old, emoji, user)
     now = datetime.now(timezone.utc).isoformat()
     await db.channel_messages.update_one(
-        {"msg_id": msg_id}, {"$set": {"reactions": reactions, "last_activity_at": now}}
+        {"msg_id": msg_id}, {"$set": {"reactions": reactions}}
     )
     notify = _reaction_notify(emoji, was, user, msg)
     payload = {
@@ -1113,7 +1113,7 @@ async def react_user_message(
     reactions = _toggle_reaction(old, emoji, user)
     now = datetime.now(timezone.utc).isoformat()
     await db.user_messages.update_one(
-        {"message_id": message_id}, {"$set": {"reactions": reactions, "last_activity_at": now}}
+        {"message_id": message_id}, {"$set": {"reactions": reactions}}
     )
     notify = _reaction_notify(emoji, was, user, msg)
     payload = {
