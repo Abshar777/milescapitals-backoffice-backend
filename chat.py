@@ -1043,11 +1043,12 @@ STATUS_EMOJI = {"✅": "completed", "⏳": "pending", "❌": "rejected"}
 
 
 def _reaction_notify(emoji: str, was_present: bool, user: dict, msg: dict):
-    """Build a notification payload for a just-ADDED status reaction (✅/⏳/❌), else None."""
-    if was_present or emoji not in STATUS_EMOJI:
+    """Build a notification payload for a just-ADDED reaction (any emoji), else None.
+    `state` is set for the status emojis (✅/⏳/❌) and None otherwise."""
+    if was_present:
         return None
     return {
-        "emoji": emoji, "state": STATUS_EMOJI[emoji],
+        "emoji": emoji, "state": STATUS_EMOJI.get(emoji),
         "by_id": user["user_id"], "by": user.get("name") or "",
         "ref": msg.get("tx_reference") or "",
         "owner_id": msg.get("tx_owner_id"),
