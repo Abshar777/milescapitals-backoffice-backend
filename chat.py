@@ -1038,6 +1038,22 @@ def _toggle_reaction(reactions: dict, emoji: str, user: dict) -> dict:
     return reactions
 
 
+# Status reactions that raise a notification for the owner + channel.
+STATUS_EMOJI = {"✅": "completed", "⏳": "pending", "❌": "rejected"}
+
+
+def _reaction_notify(emoji: str, was_present: bool, user: dict, msg: dict):
+    """Build a notification payload for a just-ADDED status reaction (✅/⏳/❌), else None."""
+    if was_present or emoji not in STATUS_EMOJI:
+        return None
+    return {
+        "emoji": emoji, "state": STATUS_EMOJI[emoji],
+        "by_id": user["user_id"], "by": user.get("name") or "",
+        "ref": msg.get("tx_reference") or "",
+        "owner_id": msg.get("tx_owner_id"),
+    }
+
+
 @chat_router.post("/channels/{channel_id}/messages/{msg_id}/react")
 async def react_channel_message(
     channel_id: str, msg_id: str, request: Request, user: dict = Depends(get_current_user)
@@ -1056,16 +1072,24 @@ async def react_channel_message(
     msg = await db.channel_messages.find_one({"msg_id": msg_id, "channel_id": channel_id}, {"_id": 0})
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
-    reactions = _toggle_reaction(msg.get("reactions") or {}, emoji, user)
+    old = msg.get("reactions") or {}
+    was = any(r.get("user_id") == user["user_id"] for r in (old.get(emoji) or []))
+    reactions = _toggle_reaction(old, emoji, user)
     now = datetime.now(timezone.utc).isoformat()
     await db.channel_messages.update_one(
         {"msg_id": msg_id}, {"$set": {"reactions": reactions, "last_activity_at": now}}
     )
+    notify = _reaction_notify(emoji, was, user, msg)
     payload = {
         "type": "reaction", "scope": "channel", "channel_id": channel_id,
-        "msg_id": msg_id, "reactions": reactions, "last_activity_at": now,
+        "channel_name": channel.get("name", ""), "msg_id": msg_id,
+        "reactions": reactions, "last_activity_at": now, "notify": notify,
     }
-    asyncio.create_task(manager.broadcast(channel.get("members", []), payload))
+    # Notify channel members, plus the request owner (in case they aren't a member).
+    recipients = list(channel.get("members", []))
+    if notify and notify.get("owner_id") and notify["owner_id"] not in recipients:
+        recipients.append(notify["owner_id"])
+    asyncio.create_task(manager.broadcast(recipients, payload))
     return {"success": True, "reactions": reactions, "last_activity_at": now}
 
 
@@ -1083,14 +1107,17 @@ async def react_user_message(
         raise HTTPException(status_code=404, detail="Message not found")
     if user["user_id"] not in (msg.get("sender_id"), msg.get("recipient_id")):
         raise HTTPException(status_code=403, detail="Not part of this conversation")
-    reactions = _toggle_reaction(msg.get("reactions") or {}, emoji, user)
+    old = msg.get("reactions") or {}
+    was = any(r.get("user_id") == user["user_id"] for r in (old.get(emoji) or []))
+    reactions = _toggle_reaction(old, emoji, user)
     now = datetime.now(timezone.utc).isoformat()
     await db.user_messages.update_one(
         {"message_id": message_id}, {"$set": {"reactions": reactions, "last_activity_at": now}}
     )
+    notify = _reaction_notify(emoji, was, user, msg)
     payload = {
         "type": "reaction", "scope": "dm", "message_id": message_id,
-        "reactions": reactions, "last_activity_at": now,
+        "reactions": reactions, "last_activity_at": now, "notify": notify,
     }
     asyncio.create_task(manager.broadcast([msg["sender_id"], msg["recipient_id"]], payload))
     return {"success": True, "reactions": reactions, "last_activity_at": now}
