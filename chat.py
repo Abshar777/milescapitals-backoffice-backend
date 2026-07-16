@@ -1243,7 +1243,7 @@ async def _resolve_tx_dest(req: dict) -> str:
     return dest
 
 
-async def post_tx_request_notification(req: dict, client: dict, proof_url: str = None, dm: bool = True):
+async def post_tx_request_notification(req: dict, client: dict, proof_url: str = None, dm: bool = True, created_at: str = None):
     """Post a transaction card to #deposite_only / #withdraw_only AND (unless dm=False) DM the
     creator. Works for a request (keyed by request_id) or a direct transaction (keyed by
     transaction_id). Never raises — notification failures must not break creation."""
@@ -1271,7 +1271,7 @@ async def post_tx_request_notification(req: dict, client: dict, proof_url: str =
         attachments = []
         if proof_url:
             attachments.append({"filename": "proof.png", "content_type": "image/png", "url": proof_url})
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = created_at or datetime.now(timezone.utc).isoformat()
         common = {
             "content": _render_tx_card(comp), "attachments": attachments,
             "is_tx_bot": True,
