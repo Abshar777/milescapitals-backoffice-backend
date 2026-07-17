@@ -11970,6 +11970,67 @@ async def update_transaction_own_tags(
     return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
 
 
+@api_router.patch("/transactions/{transaction_id}/completed")
+async def update_transaction_completed(
+    request: Request,
+    transaction_id: str,
+    data: dict = Body(...),
+    user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.EDIT)),
+):
+    """Toggle the Completed flag on a deposit/withdrawal from the Transactions table.
+    Mirrors the flag onto the tx-card badge so chat agrees with the table; unlike
+    /chat/tx-complete this posts no thread reply and can also un-complete."""
+    completed = bool(data.get("completed"))
+    tx = await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if tx.get("transaction_type") not in ("deposit", "withdrawal"):
+        raise HTTPException(
+            status_code=400, detail="Only deposits and withdrawals can be completed"
+        )
+    now = datetime.now(timezone.utc).isoformat()
+    updates = (
+        {
+            "completed": True,
+            "completed_by": user["user_id"],
+            "completed_by_name": user.get("name") or "",
+            "completed_at": now,
+        }
+        if completed
+        else {
+            "completed": False,
+            "completed_by": None,
+            "completed_by_name": None,
+            "completed_at": None,
+        }
+    )
+    await db.transactions.update_one(
+        {"transaction_id": transaction_id}, {"$set": {**updates, "updated_at": now}}
+    )
+    # Keep the #deposite_only / #withdraw_only + creator-DM card badges in sync.
+    try:
+        from chat import _update_tx_cards
+
+        await _update_tx_cards(
+            tx.get("request_id") or transaction_id,
+            {
+                "tx_completed_by": updates["completed_by"],
+                "tx_completed_by_name": updates["completed_by_name"],
+                "tx_completed_at": updates["completed_at"],
+            },
+        )
+    except Exception as e:
+        print(f"tx card completion sync failed: {e}")
+    await log_activity(
+        request,
+        user,
+        "edit",
+        "transactions",
+        f"Marked transaction {'completed' if completed else 'not completed'}",
+    )
+    return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
+
+
 @api_router.put("/transactions/{transaction_id}/assign")
 async def assign_transaction_destination(
     request: Request,
