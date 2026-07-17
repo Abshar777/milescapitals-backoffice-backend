@@ -9430,6 +9430,7 @@ async def get_transactions(
     client_email: Optional[str] = None,
     transaction_type: Optional[str] = None,
     status: Optional[str] = None,
+    base_currency: Optional[str] = None,
     destination_type: Optional[str] = None,
     vendor_id: Optional[str] = None,
     psp_id: Optional[str] = None,
@@ -9477,6 +9478,8 @@ async def get_transactions(
         query["transaction_type"] = transaction_type
     if status:
         query["status"] = status
+    if base_currency and base_currency != "all":
+        query["base_currency"] = base_currency
     if destination_type:
         query["destination_type"] = destination_type
     if vendor_id:
@@ -9685,6 +9688,7 @@ async def get_pending_transactions(
     search: Optional[str] = None,
     client_email: Optional[str] = None,
     transaction_type: Optional[str] = None,
+    base_currency: Optional[str] = None,
     status: Optional[str] = "pending",
     destination_type: Optional[str] = None,
     destination_account_ids: Optional[str] = None,
@@ -9724,6 +9728,8 @@ async def get_pending_transactions(
         query["status"] = status
     if transaction_type:
         query["transaction_type"] = transaction_type
+    if base_currency and base_currency != "all":
+        query["base_currency"] = base_currency
     if destination_type:
         query["destination_type"] = destination_type
     # Multi-select specific destinations (AND-ed with role scoping above)
@@ -10379,6 +10385,7 @@ async def export_transactions(
     client_email: Optional[str] = None,
     transaction_type: Optional[str] = None,
     status: Optional[str] = None,
+    base_currency: Optional[str] = None,
     destination_type: Optional[str] = None,
     vendor_id: Optional[str] = None,
     psp_id: Optional[str] = None,
@@ -10411,6 +10418,8 @@ async def export_transactions(
         query["transaction_type"] = transaction_type
     if status:
         query["status"] = status
+    if base_currency and base_currency != "all":
+        query["base_currency"] = base_currency
     if destination_type:
         query["destination_type"] = destination_type
     if vendor_id:
@@ -12766,6 +12775,7 @@ async def reject_transaction(
 async def get_transaction_requests(
     status: Optional[str] = None,
     transaction_type: Optional[str] = None,
+    base_currency: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -12788,6 +12798,8 @@ async def get_transaction_requests(
             query["status"] = status
     if transaction_type and transaction_type != "all":
         query["transaction_type"] = transaction_type
+    if base_currency and base_currency != "all":
+        query["base_currency"] = base_currency
     if search:
         # Resolve email search → client_id(s)
         email_clients = await db.clients.find(
