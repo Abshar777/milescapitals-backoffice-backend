@@ -3399,7 +3399,14 @@ async def get_treasury_history(
         if allowed_ids and account_id not in allowed_ids:
             raise HTTPException(status_code=403, detail="Access to this treasury account is not permitted")
 
-    # Build query for treasury transactions
+    # Build query for treasury transactions.
+    #
+    # The date window is deliberately NOT applied at the DB level. running_balance
+    # is anchored to the account's CURRENT balance and walked backwards, so it can
+    # only be correct if the walk sees the account's full history. Filtering here
+    # made every date-filtered view stamp its newest row with today's balance —
+    # i.e. the modal reported today's balance as the window's closing balance.
+    # The window is applied after the walk instead (see below).
     query = {"account_id": account_id}
 
     # created_at holds full ISO timestamps; a bare YYYY-MM-DD end_date would
@@ -3409,13 +3416,6 @@ async def get_treasury_history(
     if end_date:
         end_ts = end_date if "T" in end_date else f"{end_date}T23:59:59.999999"
 
-    if start_date:
-        query["created_at"] = {"$gte": start_date}
-    if end_ts:
-        if "created_at" in query:
-            query["created_at"]["$lte"] = end_ts
-        else:
-            query["created_at"] = {"$lte": end_ts}
     if transaction_type:
         query["transaction_type"] = transaction_type
 
@@ -3440,17 +3440,11 @@ async def get_treasury_history(
 
     # Only get regular transactions that DON'T have treasury transaction records yet
     # (for backwards compatibility with old data that might not have treasury_transactions)
+    # Date window intentionally omitted here too — same reason as above.
     tx_query = {
         "destination_account_id": account_id,
         "status": {"$in": ["approved", "completed"]},
     }
-    if start_date:
-        tx_query["created_at"] = {"$gte": start_date}
-    if end_ts:
-        if "created_at" in tx_query:
-            tx_query["created_at"]["$lte"] = end_ts
-        else:
-            tx_query["created_at"] = {"$lte": end_ts}
 
     regular_txs = (
         await db.transactions.find(tx_query, {"_id": 0})
@@ -3496,6 +3490,40 @@ async def get_treasury_history(
     # Sort combined list by date (newest first)
     treasury_txs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
 
+    # Running balance FIRST, over the account's full history: anchor to the current
+    # balance and walk backwards. Doing this before any filtering is what makes each
+    # row's balance the true balance-at-the-time — filtering first (date OR search)
+    # would re-anchor whatever row happened to survive to today's balance.
+    current_balance = account.get("balance", 0)
+    running = current_balance
+    for tx in treasury_txs:
+        tx["running_balance"] = round(running, 2)
+        running -= tx.get("amount", 0)
+
+    # Balance as of the end of the window — used when the window has no rows of its
+    # own, so opening/closing still report the real balance rather than 0.
+    balance_at_end = current_balance
+    if end_ts:
+        balance_at_end = round(
+            current_balance
+            - sum(
+                tx.get("amount", 0)
+                for tx in treasury_txs
+                if (tx.get("created_at") or "") > end_ts
+            ),
+            2,
+        )
+
+    # Now apply the date window (post-walk, so balances stay truthful)
+    if start_date:
+        treasury_txs = [
+            tx for tx in treasury_txs if (tx.get("created_at") or "") >= start_date
+        ]
+    if end_ts:
+        treasury_txs = [
+            tx for tx in treasury_txs if (tx.get("created_at") or "") <= end_ts
+        ]
+
     # Apply search and amount filters in Python (multi-collection merge prevents DB-level filtering)
     if search:
         sl = search.lower()
@@ -3517,12 +3545,12 @@ async def get_treasury_history(
                 if any(t in (tx.get("client_tags") or []) for t in tag_list)
             ]
 
-    # Calculate running balance (start from current balance, work backwards)
-    current_balance = account.get("balance", 0)
-    running = current_balance
-    for tx in treasury_txs:
-        tx["running_balance"] = round(running, 2)
-        running -= tx.get("amount", 0)
+    # Statement summary for the WHOLE filtered window. Returned by the API because
+    # the client can only see one page and must not total from that.
+    credits = sum(tx.get("amount", 0) for tx in treasury_txs if tx.get("amount", 0) > 0)
+    debits = sum(-tx.get("amount", 0) for tx in treasury_txs if tx.get("amount", 0) < 0)
+    closing = treasury_txs[0]["running_balance"] if treasury_txs else balance_at_end
+    opening = round(closing - credits + debits, 2)
 
     # Paginate the combined result
     total = len(treasury_txs)
@@ -3536,6 +3564,13 @@ async def get_treasury_history(
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+        "summary": {
+            "opening_balance": opening,
+            "closing_balance": round(closing, 2),
+            "total_credits": round(credits, 2),
+            "total_debits": round(debits, 2),
+            "count": total,
+        },
     }
 
 
