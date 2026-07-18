@@ -882,6 +882,43 @@ async def send_thread_reply(
     asyncio.create_task(manager.broadcast(channel.get("members", []), {
         "type": "thread_reply", "message": reply_doc, "parent_sender_id": parent["sender_id"],
     }))
+
+    # DM the thread's author on every reply, sent FROM the replier so it reads as a
+    # normal DM. Other participants get the thread_reply browser notification only.
+    # Carries link_* so clicking the notification opens the thread, not just the DM.
+    author_id = parent.get("tx_owner_id") or parent.get("sender_id")
+    if author_id and author_id != user["user_id"] and author_id != TX_BOT_ID:
+        try:
+            preview = (content or "").strip()
+            if not preview:
+                preview = "📎 Attachment"
+            elif len(preview) > 160:
+                preview = preview[:157] + "…"
+            dm_doc = {
+                "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+                "sender_id": user["user_id"],
+                "sender_name": user["name"],
+                "recipient_id": author_id,
+                "content": f"↩ Replied to your message in #{channel.get('name', '')}: {preview}",
+                "attachments": [],
+                "read": False,
+                "created_at": now,
+                # deep-link target: the thread this reply belongs to
+                "link_channel_id": channel_id,
+                "link_msg_id": msg_id,
+                "link_thread": True,
+                # shared dedupe key: the author also receives the thread_reply event,
+                # and must not be notified twice for the same reply
+                "link_reply_id": reply_id,
+            }
+            await db.user_messages.insert_one(dm_doc)
+            dm_doc.pop("_id", None)
+            asyncio.create_task(manager.broadcast(
+                [author_id, user["user_id"]], {"type": "dm_message", "message": dm_doc}
+            ))
+        except Exception as e:
+            print(f"thread reply DM failed: {e}")
+
     return reply_doc
 
 
@@ -1163,9 +1200,21 @@ async def tag_channel_message(
         raise HTTPException(status_code=404, detail="Message not found")
     tags = _toggle_tag(msg.get("tags") or {}, tag, user)
     await db.channel_messages.update_one({"msg_id": msg_id}, {"$set": {"tags": tags}})
+    # Broadcast to every member so the chips stay in sync live, but only the message
+    # AUTHOR is notified (owner_id) — tagging is high-frequency, so the client fires a
+    # silent OS notification with no chime.
+    notify = {
+        "tag": tag,
+        "added": tag in tags,
+        "by_id": user["user_id"],
+        "by": user.get("name") or "",
+        "owner_id": msg.get("tx_owner_id") or msg.get("sender_id"),
+        "ref": msg.get("tx_reference") or "",
+    }
     payload = {
         "type": "tag", "scope": "channel", "channel_id": channel_id,
         "channel_name": channel.get("name", ""), "msg_id": msg_id, "tags": tags,
+        "notify": notify,
     }
     asyncio.create_task(manager.broadcast(list(channel.get("members", [])), payload))
     return {"success": True, "tags": tags}
@@ -1365,9 +1414,11 @@ async def post_tx_request_notification(req: dict, client: dict, proof_url: str =
         print(f"post_tx_request_notification failed: {e}")
 
 
-async def _update_tx_cards(request_id: str, set_fields: dict):
+async def _update_tx_cards(request_id: str, set_fields: dict, notify: dict = None):
     """Apply set_fields to EVERY channel + creator-DM card for a request_id (unique,
-    N/A-safe) and broadcast the edits so all clients update live."""
+    N/A-safe) and broadcast the edits so all clients update live. `notify`, when given,
+    rides along so the client can raise a browser notification (e.g. status changes) —
+    it reaches the DM card too, which is how the creator hears about it in their DM."""
     if not request_id:
         return
     for cmsg in await db.channel_messages.find({"is_tx_bot": True, "tx_request_id": request_id}, {"_id": 0}).to_list(20):
@@ -1376,13 +1427,22 @@ async def _update_tx_cards(request_id: str, set_fields: dict):
         channel = await db.channels.find_one({"channel_id": cmsg["channel_id"]})
         asyncio.create_task(manager.broadcast((channel or {}).get("members", []), {
             "type": "channel_edit", "message": updated,
+            "notify": ({**notify, "owner_id": updated.get("tx_owner_id"),
+                        "ref": updated.get("tx_reference") or "",
+                        "channel_id": cmsg["channel_id"], "msg_id": cmsg["msg_id"]}
+                       if notify else None),
         }))
     for dmsg in await db.user_messages.find({"is_tx_bot": True, "tx_request_id": request_id}, {"_id": 0}).to_list(20):
         await db.user_messages.update_one({"message_id": dmsg["message_id"]}, {"$set": set_fields})
         updated = await db.user_messages.find_one({"message_id": dmsg["message_id"]}, {"_id": 0})
         asyncio.create_task(manager.broadcast(
             [dmsg.get("recipient_id"), dmsg.get("sender_id")],
-            {"type": "dm_edit", "message": updated}))
+            {"type": "dm_edit", "message": updated,
+             "notify": ({**notify, "owner_id": updated.get("tx_owner_id") or dmsg.get("recipient_id"),
+                         "ref": updated.get("tx_reference") or "",
+                         "dm_user_id": dmsg.get("recipient_id"),
+                         "message_id": dmsg["message_id"]}
+                        if notify else None)}))
 
 
 async def post_tx_processed_notification(req: dict, processor_id: str, processor_name: str):
@@ -1422,7 +1482,10 @@ async def set_tx_message_status(request_id: str, status: str, transaction_id: st
         upd = {"tx_status": status}
         if transaction_id:
             upd["tx_transaction_id"] = transaction_id
-        await _update_tx_cards(request_id, upd)
+        await _update_tx_cards(
+            request_id, upd,
+            notify={"kind": "status", "status": status, "request_id": request_id},
+        )
     except Exception as e:
         print(f"set_tx_message_status failed: {e}")
 
