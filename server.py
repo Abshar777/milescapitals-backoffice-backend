@@ -71,7 +71,9 @@ db = client[os.environ["DB_NAME"]]
 # JWT Configuration
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRATION_HOURS = 2
+# Absolute session lifetime, not idle-based: the user is logged out this long after
+# signing in even while actively working (there is no refresh-token flow).
+JWT_EXPIRATION_HOURS = 24
 
 # Cloudflare R2 Configuration
 R2_ACCOUNT_ID = os.environ.get("R2_ACCOUNT_ID")
