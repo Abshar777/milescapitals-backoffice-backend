@@ -20563,6 +20563,128 @@ async def get_reconciliation_history_endpoint(
     return {"rows": rows, "summary": summary}
 
 
+@api_router.get("/vendors/{vendor_id}/reconciliation-summary")
+async def get_vendor_reconciliation_summary(
+    vendor_id: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    user: dict = Depends(require_permission(Modules.RECONCILIATION, Actions.VIEW)),
+):
+    """Opening / Credits / Debits / Closing balance for ONE exchanger over a date
+    window, per currency. Reuses the EXACT settlement math from
+    /reconciliation/history (deposits + income + loan-in − withdrawals − expenses −
+    loan-out − commission − custom-settled, base-currency, unsettled-approved), scoped
+    to this vendor, so the numbers agree with the reconciliation history and the
+    vendor's settlement balance. Opening = cumulative before date_from; closing =
+    cumulative through date_to; credits/debits = gross money-in/out within the window.
+    """
+    import asyncio
+    from collections import defaultdict
+
+    df = date_from[:10] if date_from else None
+    dt = date_to[:10] if date_to else None
+
+    # The five pipelines mirror get_reconciliation_history_endpoint section 3, but
+    # matched to this vendor. Dates are NOT filtered in the DB — the cumulative must
+    # see all history so the opening (cumulative before the window) is correct.
+    vtx_pipeline = [
+        {"$match": {"vendor_id": vendor_id, "status": {"$in": ["approved", "completed"]}, "settled": {"$ne": True}}},
+        {"$group": {
+            "_id": {"date": {"$substr": [{"$ifNull": ["$transaction_date", "$created_at"]}, 0, 10]},
+                    "currency": {"$ifNull": ["$base_currency", "$currency"]}},
+            "dep_base":  {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]}, {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "wth_base":  {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]}, {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+        }},
+    ]
+    ie_pipeline = [
+        {"$match": {"vendor_id": vendor_id, "status": {"$in": ["approved", "completed"]}, "converted_to_loan": {"$ne": True}, "settled": {"$ne": True}}},
+        {"$group": {
+            "_id": {"date": {"$substr": [{"$ifNull": ["$created_at", ""]}, 0, 10]},
+                    "currency": {"$ifNull": ["$base_currency", "$currency"]}},
+            "ie_in_base":   {"$sum": {"$cond": [{"$eq": ["$entry_type", "income"]}, {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "ie_out_base":  {"$sum": {"$cond": [{"$eq": ["$entry_type", "expense"]}, {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "ie_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+        }},
+    ]
+    loan_in_pipeline = [
+        {"$match": {"credit_to_vendor_id": vendor_id, "status": "completed", "settled": {"$ne": True}}},
+        {"$group": {
+            "_id": {"date": {"$substr": ["$created_at", 0, 10]}, "currency": {"$ifNull": ["$currency", "USD"]}},
+            "loan_in":        {"$sum": "$amount"},
+            "loan_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+        }},
+    ]
+    loan_out_pipeline = [
+        {"$match": {"source_vendor_id": vendor_id, "status": "completed", "settled": {"$ne": True}}},
+        {"$group": {
+            "_id": {"date": {"$substr": ["$created_at", 0, 10]}, "currency": {"$ifNull": ["$currency", "USD"]}},
+            "loan_out":       {"$sum": "$amount"},
+            "loan_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+        }},
+    ]
+    sett_pipeline = [
+        {"$match": {"vendor_id": vendor_id, "settlement_mode": "custom", "status": VendorSettlementStatus.APPROVED}},
+        {"$group": {
+            "_id": {"date": {"$substr": [{"$ifNull": ["$approval_date", "$created_at"]}, 0, 10]}, "currency": "$source_currency"},
+            "settled": {"$sum": "$gross_amount"},
+        }},
+    ]
+
+    vtx_res, ie_res, loan_in_res, loan_out_res, sett_res = await asyncio.gather(
+        db.transactions.aggregate(vtx_pipeline).to_list(10000),
+        db.income_expenses.aggregate(ie_pipeline).to_list(5000),
+        db.loan_transactions.aggregate(loan_in_pipeline).to_list(5000),
+        db.loan_transactions.aggregate(loan_out_pipeline).to_list(5000),
+        db.vendor_settlements.aggregate(sett_pipeline).to_list(5000),
+    )
+
+    # Per (date, currency): gross credits / debits. net = credits − debits.
+    buckets: dict = defaultdict(lambda: {"cred": 0.0, "deb": 0.0})
+
+    def _add(date, currency, cred, deb):
+        b = buckets[(date, currency or "USD")]
+        b["cred"] += cred
+        b["deb"] += deb
+
+    for r in vtx_res:
+        _add(r["_id"]["date"], r["_id"].get("currency"), r["dep_base"], r["wth_base"] + r["comm_base"])
+    for r in ie_res:
+        _add(r["_id"]["date"], r["_id"].get("currency"), r["ie_in_base"], r["ie_out_base"] + r["ie_comm_base"])
+    for r in loan_in_res:
+        _add(r["_id"]["date"], r["_id"].get("currency"), r["loan_in"], r["loan_comm_base"])
+    for r in loan_out_res:
+        _add(r["_id"]["date"], r["_id"].get("currency"), 0.0, r["loan_out"] + r.get("loan_comm_base", 0))
+    for r in sett_res:
+        _add(r["_id"]["date"], r["_id"].get("currency"), 0.0, r["settled"])
+
+    per_cur: dict = defaultdict(lambda: {"opening": 0.0, "credits": 0.0, "debits": 0.0, "closing": 0.0})
+    for (date, currency), b in buckets.items():
+        net = b["cred"] - b["deb"]
+        pc = per_cur[currency]
+        if df and date < df:              # cumulative strictly before the window
+            pc["opening"] += net
+        if (df is None or date >= df) and (dt is None or date <= dt):  # gross in-window
+            pc["credits"] += b["cred"]
+            pc["debits"] += b["deb"]
+        if dt is None or date <= dt:      # cumulative through the window end
+            pc["closing"] += net
+
+    summary = [
+        {
+            "currency": currency,
+            "opening_balance": round(pc["opening"], 2),
+            "total_credits": round(pc["credits"], 2),
+            "total_debits": round(pc["debits"], 2),
+            "closing_balance": round(pc["closing"], 2),
+        }
+        for currency, pc in per_cur.items()
+    ]
+    summary.sort(key=lambda s: (-abs(s["closing_balance"]), s["currency"]))
+
+    return {"vendor_id": vendor_id, "date_from": df, "date_to": dt, "summary": summary}
+
+
 @api_router.post("/reconciliation/upload-statement")
 async def upload_statement_for_reconciliation(
     request: Request,
