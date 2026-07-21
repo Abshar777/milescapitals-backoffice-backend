@@ -1,0 +1,38 @@
+[
+  {
+    "_id": "69b14e45166787bf47b0fd6b",
+    "user_id": "user_9f475ca0f7f3",
+    "email": "aleena@milescap.com",
+    "code": "235526",
+    "attempts": 0,
+    "created_at": "2026-03-11T11:13:09.153098+00:00",
+    "expires_at": "2026-03-11T11:18:09.153098+00:00"
+  },
+  {
+    "_id": "69b14ecfa600f429f72c463f",
+    "user_id": "user_a849de012ffe",
+    "email": "Meharajudheen@milescapitals.com",
+    "code": "961874",
+    "attempts": 0,
+    "created_at": "2026-03-11T11:15:27.864668+00:00",
+    "expires_at": "2026-03-11T11:20:27.864668+00:00"
+  },
+  {
+    "_id": "69b157517236c4be2650c465",
+    "user_id": "user_7ad91a7b7be7",
+    "email": "Anakha@milescapitals.com",
+    "code": "469437",
+    "attempts": 0,
+    "created_at": "2026-03-11T11:51:45.639790+00:00",
+    "expires_at": "2026-03-11T11:56:45.639790+00:00"
+  },
+  {
+    "_id": "6a54a5f61c09f6d7cb3526f0",
+    "user_id": "user_1023ed66a89c",
+    "email": "accounts@carltonedu.com",
+    "code": "437449",
+    "attempts": 0,
+    "created_at": "2026-07-13T08:46:46.574439+00:00",
+    "expires_at": "2026-07-13T08:51:46.574439+00:00"
+  }
+]

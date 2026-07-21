@@ -1,0 +1,108 @@
+[
+  {
+    "_id": "6a456785cd7c2be12fb835dc",
+    "channel_id": "ch_1f8ca2e5b136",
+    "name": "testing",
+    "description": "",
+    "members": [
+      "user_a0849c0dc4d3",
+      "user_3c7cd23844d1",
+      "user_89fcab85bad4",
+      "user_6eb3cedabb4e",
+      "user_185a3c142eb5",
+      "user_d21824b8a25f",
+      "user_f08dde8de7c5",
+      "user_4e5ad6264a1e"
+    ],
+    "created_by": "user_6eb3cedabb4e",
+    "created_by_name": "Midhlaj",
+    "created_at": "2026-07-01T19:16:21.074480+00:00",
+    "last_read": {
+      "user_6eb3cedabb4e": "2026-07-06T14:42:16.615783+00:00",
+      "user_4e5ad6264a1e": "2026-07-02T03:51:53.244443+00:00",
+      "user_89fcab85bad4": "2026-07-02T03:52:41.281872+00:00",
+      "user_185a3c142eb5": "2026-07-02T08:59:53.031082+00:00"
+    }
+  },
+  {
+    "_id": "6a462947a513cdc41f5c650a",
+    "channel_id": "ch_3b13db4afee6",
+    "name": "testing",
+    "description": "",
+    "members": [
+      "user_6b7819363cac",
+      "user_1af5a81bdab4",
+      "user_b6f8825c4e3f",
+      "user_1b7c1b6a46dd"
+    ],
+    "created_by": "user_b6f8825c4e3f",
+    "created_by_name": "thasleem",
+    "created_at": "2026-07-02T09:03:03.084029+00:00",
+    "last_read": {
+      "user_b6f8825c4e3f": "2026-07-13T05:12:36.599105+00:00",
+      "user_1af5a81bdab4": "2026-07-02T09:03:20.862920+00:00",
+      "user_1b7c1b6a46dd": "2026-07-13T07:32:52.050982+00:00",
+      "user_6b7819363cac": "2026-07-13T10:28:41.700483+00:00"
+    }
+  },
+  {
+    "_id": "6a54b61df138b9f4031455f1",
+    "channel_id": "chan_e341bc24831f",
+    "name": "deposite_only",
+    "description": "Auto-posted deposite transaction requests",
+    "members": [
+      "user_72045e5ef5b4",
+      "user_914f9544c8fc",
+      "user_b3a431e6ed2c",
+      "user_b6f8825c4e3f",
+      "user_be4cf855382c",
+      "user_6eb3cedabb4e",
+      "user_b8b3eb73153a",
+      "user_b8d30fce891f",
+      "user_fb22cebae063",
+      "user_b685285a1dd2",
+      "user_38da717ad79a",
+      "user_7fd587d75d9d",
+      "user_d08b0917e947",
+      "user_b4dcae07f9cb"
+    ],
+    "created_by": "system",
+    "created_by_name": "System",
+    "created_at": "2026-07-13T09:55:41.550702+00:00",
+    "last_read": {
+      "user_b4dcae07f9cb": "2026-07-13T13:07:03.401277+00:00",
+      "user_6eb3cedabb4e": "2026-07-13T10:11:22.076617+00:00",
+      "user_b6f8825c4e3f": "2026-07-13T10:21:41.513971+00:00"
+    },
+    "system_channel": true
+  },
+  {
+    "_id": "6a54b61df138b9f4031455f2",
+    "channel_id": "chan_630a555f57b1",
+    "name": "withdraw_only",
+    "description": "Auto-posted withdraw transaction requests",
+    "members": [
+      "user_72045e5ef5b4",
+      "user_914f9544c8fc",
+      "user_b3a431e6ed2c",
+      "user_b6f8825c4e3f",
+      "user_be4cf855382c",
+      "user_6eb3cedabb4e",
+      "user_b8b3eb73153a",
+      "user_b8d30fce891f",
+      "user_fb22cebae063",
+      "user_b685285a1dd2",
+      "user_38da717ad79a",
+      "user_7fd587d75d9d",
+      "user_d08b0917e947",
+      "user_b4dcae07f9cb"
+    ],
+    "created_by": "system",
+    "created_by_name": "System",
+    "created_at": "2026-07-13T09:55:41.550702+00:00",
+    "last_read": {
+      "user_b4dcae07f9cb": "2026-07-13T13:06:52.536909+00:00"
+    },
+    "system_channel": true
+  }
+]

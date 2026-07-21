@@ -1,0 +1,2364 @@
+[
+  {
+    "_id": "69bb206406ef4acf011a750b",
+    "log_id": "email_81811196ac16",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-18T22:00:04.424140+00:00"
+  },
+  {
+    "_id": "69bb2064e74aefcb12a1bab0",
+    "log_id": "email_f7139ac8c945",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-18T22:00:04.636845+00:00"
+  },
+  {
+    "_id": "69bb2064c05e0b7047372acc",
+    "log_id": "email_e3c2a079c5b9",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-18T22:00:04.868246+00:00"
+  },
+  {
+    "_id": "69bb2065d3b8626bebf65ee5",
+    "log_id": "email_f51da2920965",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-18T22:00:05.728318+00:00"
+  },
+  {
+    "_id": "69bc71e487ff9b1a6bbb2df6",
+    "log_id": "email_c9c0f3e6aaee",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-19T22:00:04.969037+00:00"
+  },
+  {
+    "_id": "69bc71e52d4718f20b8980b0",
+    "log_id": "email_907b7b6c350c",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-19T22:00:05.168057+00:00"
+  },
+  {
+    "_id": "69bc71e5705f01f1aa3e06d8",
+    "log_id": "email_95db2ada3a77",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-19T22:00:05.643351+00:00"
+  },
+  {
+    "_id": "69bc71e62e766709f657e302",
+    "log_id": "email_1d5c94fa6cd3",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-19T22:00:06.206687+00:00"
+  },
+  {
+    "_id": "69bdc3662e766709f657e303",
+    "log_id": "email_5f2719424c1e",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-20T22:00:06.291559+00:00"
+  },
+  {
+    "_id": "69bdc36687ff9b1a6bbb2df7",
+    "log_id": "email_99b260a028d7",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-20T22:00:06.740335+00:00"
+  },
+  {
+    "_id": "69bdc367705f01f1aa3e06d9",
+    "log_id": "email_baa520e446b6",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-20T22:00:07.224366+00:00"
+  },
+  {
+    "_id": "69bdc3672d4718f20b8980b1",
+    "log_id": "email_bc72a0abef86",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-20T22:00:07.681088+00:00"
+  },
+  {
+    "_id": "69bf14e587ff9b1a6bbb2df8",
+    "log_id": "email_f1031bef81f3",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-21T22:00:05.483426+00:00"
+  },
+  {
+    "_id": "69bf14e52e766709f657e304",
+    "log_id": "email_4c8b446c8c27",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-21T22:00:05.787386+00:00"
+  },
+  {
+    "_id": "69bf14e72d4718f20b8980b4",
+    "log_id": "email_9be8580115ae",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-21T22:00:07.095366+00:00"
+  },
+  {
+    "_id": "69bf14e8705f01f1aa3e06dc",
+    "log_id": "email_1e515d562d3d",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-21T22:00:08.191850+00:00"
+  },
+  {
+    "_id": "69c06665817b30730b267c89",
+    "log_id": "email_d08402af0241",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-22T22:00:05.051005+00:00"
+  },
+  {
+    "_id": "69c06665c90b84c5913b8571",
+    "log_id": "email_55faec4b9d4d",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-22T22:00:05.260182+00:00"
+  },
+  {
+    "_id": "69c066657d1e6f1e65e3cfaa",
+    "log_id": "email_13d5ab815510",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-22T22:00:05.555988+00:00"
+  },
+  {
+    "_id": "69c06666995eade8ad2482e2",
+    "log_id": "email_2565adcbe7e9",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-22T22:00:06.333119+00:00"
+  },
+  {
+    "_id": "69c1b7e5817b30730b267cb1",
+    "log_id": "email_02f84d64f876",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-23T22:00:05.077941+00:00"
+  },
+  {
+    "_id": "69c1b7e5c90b84c5913b85ff",
+    "log_id": "email_18728d4fd785",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-23T22:00:05.587046+00:00"
+  },
+  {
+    "_id": "69c1b7e57d1e6f1e65e3d00e",
+    "log_id": "email_34e3a217ef65",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-23T22:00:05.722395+00:00"
+  },
+  {
+    "_id": "69c1b7e6995eade8ad24830d",
+    "log_id": "email_aa34786e26ba",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-23T22:00:06.187561+00:00"
+  },
+  {
+    "_id": "69c30965a5d033c3d4805015",
+    "log_id": "email_27cae07acb91",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-24T22:00:05.529112+00:00"
+  },
+  {
+    "_id": "69c309656013a9258b37e1eb",
+    "log_id": "email_c8482c5bf532",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-24T22:00:05.815661+00:00"
+  },
+  {
+    "_id": "69c309669ed55a371c46524a",
+    "log_id": "email_cf60770baf9b",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-24T22:00:06.111493+00:00"
+  },
+  {
+    "_id": "69c30967eb16e7b0fa8837fb",
+    "log_id": "email_a266337d83e7",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-24T22:00:07.524898+00:00"
+  },
+  {
+    "_id": "69c45ae56b628c6520f978e3",
+    "log_id": "email_9114bdb859af",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-25T22:00:05.496751+00:00"
+  },
+  {
+    "_id": "69c45ae5bb08a12ed8b818e2",
+    "log_id": "email_5f758db02ede",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-25T22:00:05.815498+00:00"
+  },
+  {
+    "_id": "69c45ae60d666389ff10f795",
+    "log_id": "email_61c8a46674a2",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-25T22:00:06.010122+00:00"
+  },
+  {
+    "_id": "69c45ae6f01885a9a8fd0bed",
+    "log_id": "email_b8414d3b246b",
+    "type": "daily_report",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "status": "sent",
+    "sent_at": "2026-03-25T22:00:06.225391+00:00"
+  },
+  {
+    "_id": "69c5ac60e25a37ddba99ba98",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-26",
+    "claimed_at": "2026-03-26T22:00:00.098998+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-03-26T22:00:05.260100+00:00"
+  },
+  {
+    "_id": "69c5ac60e25a37ddba99ba99",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-26",
+    "claimed_at": "2026-03-26T22:00:00.101427+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69c6fde0e25a37ddba99ba9d",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-27",
+    "claimed_at": "2026-03-27T22:00:00.014464+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-03-27T22:00:04.414062+00:00"
+  },
+  {
+    "_id": "69c84f60e25a37ddba99baa2",
+    "log_id": "daily_report_2026-03-28",
+    "type": "daily_report",
+    "claimed_at": "2026-03-28T22:00:00.067704+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-03-28T22:00:05.695014+00:00"
+  },
+  {
+    "_id": "69c84f60e25a37ddba99baa3",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-28",
+    "claimed_at": "2026-03-28T22:00:00.064190+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69c9a0e0e25a37ddba99baa7",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-29",
+    "claimed_at": "2026-03-29T22:00:00.050580+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-03-29T22:00:06.366527+00:00"
+  },
+  {
+    "_id": "69c9a0e0e25a37ddba99baa6",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-29",
+    "claimed_at": "2026-03-29T22:00:00.048865+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69c9a0e0e25a37ddba99baa8",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-29",
+    "claimed_at": "2026-03-29T22:00:00.047180+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69c9a0e0e25a37ddba99baa9",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-29",
+    "claimed_at": "2026-03-29T22:00:00.051732+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69caf260e25a37ddba99bab0",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-30",
+    "claimed_at": "2026-03-30T22:00:00.045948+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-03-30T22:00:04.776726+00:00"
+  },
+  {
+    "_id": "69caf260e25a37ddba99baaf",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-30",
+    "claimed_at": "2026-03-30T22:00:00.037654+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69cc43e0e25a37ddba99bab4",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-31",
+    "claimed_at": "2026-03-31T22:00:00.035241+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-03-31T22:00:04.760272+00:00"
+  },
+  {
+    "_id": "69cc43e0e25a37ddba99bab3",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-03-31",
+    "claimed_at": "2026-03-31T22:00:00.028499+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69cd9560e25a37ddba99bab9",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-01",
+    "claimed_at": "2026-04-01T22:00:00.014689+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-01T22:00:05.077384+00:00"
+  },
+  {
+    "_id": "69cd9560e25a37ddba99baba",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-01",
+    "claimed_at": "2026-04-01T22:00:00.017318+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69cee6e0e25a37ddba99babc",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-02",
+    "claimed_at": "2026-04-02T22:00:00.032889+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-02T22:00:04.823879+00:00"
+  },
+  {
+    "_id": "69d03860e25a37ddba99babf",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-03",
+    "claimed_at": "2026-04-03T22:00:00.043971+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-03T22:00:05.445691+00:00"
+  },
+  {
+    "_id": "69d189e0e25a37ddba99bac1",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-04",
+    "claimed_at": "2026-04-04T22:00:00.068682+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-04T22:00:07.086126+00:00"
+  },
+  {
+    "_id": "69d189e0e25a37ddba99bac2",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-04",
+    "claimed_at": "2026-04-04T22:00:00.071044+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d189e0e25a37ddba99bac4",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-04",
+    "claimed_at": "2026-04-04T22:00:00.068483+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d189e0e25a37ddba99bac3",
+    "log_id": "daily_report_2026-04-04",
+    "type": "daily_report",
+    "claimed_at": "2026-04-04T22:00:00.068557+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d2db60e25a37ddba99baca",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-05",
+    "claimed_at": "2026-04-05T22:00:00.068379+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-05T22:00:06.458104+00:00"
+  },
+  {
+    "_id": "69d2db60e25a37ddba99bacb",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-05",
+    "claimed_at": "2026-04-05T22:00:00.068166+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d2db60e25a37ddba99bacc",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-05",
+    "claimed_at": "2026-04-05T22:00:00.068285+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d2db60e25a37ddba99bac9",
+    "log_id": "daily_report_2026-04-05",
+    "type": "daily_report",
+    "claimed_at": "2026-04-05T22:00:00.067368+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d42ce0e25a37ddba99bace",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-06",
+    "claimed_at": "2026-04-06T22:00:00.078588+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-06T22:00:05.820354+00:00"
+  },
+  {
+    "_id": "69d42ce0e25a37ddba99bad0",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-06",
+    "claimed_at": "2026-04-06T22:00:00.075187+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d42ce0e25a37ddba99bacf",
+    "log_id": "daily_report_2026-04-06",
+    "type": "daily_report",
+    "claimed_at": "2026-04-06T22:00:00.076084+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d57e60e25a37ddba99bad3",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-07",
+    "claimed_at": "2026-04-07T22:00:00.058835+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-07T22:00:05.565079+00:00"
+  },
+  {
+    "_id": "69d57e60e25a37ddba99bad2",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-07",
+    "claimed_at": "2026-04-07T22:00:00.054247+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d6cfe0e25a37ddba99bad7",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-08",
+    "claimed_at": "2026-04-08T22:00:00.027117+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-08T22:00:05.091483+00:00"
+  },
+  {
+    "_id": "69d6cfe0e25a37ddba99bad8",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-08",
+    "claimed_at": "2026-04-08T22:00:00.030054+00:00",
+    "status": "in_progress"
+  },
+  {
+    "_id": "69d82160e25a37ddba99badb",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-09",
+    "claimed_at": "2026-04-09T22:00:00.029415+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-09T22:00:04.700431+00:00"
+  },
+  {
+    "_id": "69d972e0e25a37ddba99bade",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-10",
+    "claimed_at": "2026-04-10T22:00:00.037114+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-10T22:00:05.414493+00:00"
+  },
+  {
+    "_id": "69dac460e25a37ddba99bae0",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-11",
+    "claimed_at": "2026-04-11T22:00:00.064050+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-11T22:00:05.246499+00:00"
+  },
+  {
+    "_id": "69dc15e0e25a37ddba99bae2",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-12",
+    "claimed_at": "2026-04-12T22:00:00.053033+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-12T22:00:06.147656+00:00"
+  },
+  {
+    "_id": "69dd6760e25a37ddba99bae4",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-13",
+    "claimed_at": "2026-04-13T22:00:00.023954+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-13T22:00:04.608891+00:00"
+  },
+  {
+    "_id": "69deb8e0e25a37ddba99bae6",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-14",
+    "claimed_at": "2026-04-14T22:00:00.075767+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-14T22:00:05.197952+00:00"
+  },
+  {
+    "_id": "69e00a60e25a37ddba99bae8",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-15",
+    "claimed_at": "2026-04-15T22:00:00.031882+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-15T22:00:04.985636+00:00"
+  },
+  {
+    "_id": "69e15be0e25a37ddba99baea",
+    "log_id": "daily_report_2026-04-16",
+    "type": "daily_report",
+    "claimed_at": "2026-04-16T22:00:00.030277+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-16T22:00:05.555668+00:00"
+  },
+  {
+    "_id": "69e2ad60e25a37ddba99baec",
+    "log_id": "daily_report_2026-04-17",
+    "type": "daily_report",
+    "claimed_at": "2026-04-17T22:00:00.034666+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-17T22:00:04.796764+00:00"
+  },
+  {
+    "_id": "69e3fee0e25a37ddba99baee",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-18",
+    "claimed_at": "2026-04-18T22:00:00.071359+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-18T22:00:06.585949+00:00"
+  },
+  {
+    "_id": "69e55060e25a37ddba99baf0",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-19",
+    "claimed_at": "2026-04-19T22:00:00.072082+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-19T22:00:06.017987+00:00"
+  },
+  {
+    "_id": "69e6a1e0e25a37ddba99baf2",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-20",
+    "claimed_at": "2026-04-20T22:00:00.043089+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-20T22:00:04.847527+00:00"
+  },
+  {
+    "_id": "69e7f360e25a37ddba99baf4",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-21",
+    "claimed_at": "2026-04-21T22:00:00.011102+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-21T22:00:04.769888+00:00"
+  },
+  {
+    "_id": "69e944e0e25a37ddba99baf6",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-22",
+    "claimed_at": "2026-04-22T22:00:00.043354+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-22T22:00:04.722560+00:00"
+  },
+  {
+    "_id": "69ea9660e25a37ddba99baf8",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-23",
+    "claimed_at": "2026-04-23T22:00:00.006059+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com"
+    ],
+    "sent_at": "2026-04-23T22:00:04.623114+00:00"
+  },
+  {
+    "_id": "69ebe7e0e25a37ddba99bafa",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-24",
+    "claimed_at": "2026-04-24T22:00:00.016447+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-04-24T22:00:05.090552+00:00"
+  },
+  {
+    "_id": "69ed3960e25a37ddba99bafc",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-25",
+    "claimed_at": "2026-04-25T22:00:00.035432+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-04-25T22:00:06.176561+00:00"
+  },
+  {
+    "_id": "69ee8ae0e25a37ddba99bafe",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-26",
+    "claimed_at": "2026-04-26T22:00:00.030855+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-04-26T22:00:05.809714+00:00"
+  },
+  {
+    "_id": "69efdc60e25a37ddba99bb00",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-27",
+    "claimed_at": "2026-04-27T22:00:00.014259+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-04-27T22:00:04.775052+00:00"
+  },
+  {
+    "_id": "69f12de0e25a37ddba99bb02",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-28",
+    "claimed_at": "2026-04-28T22:00:00.028132+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-04-28T22:00:05.095634+00:00"
+  },
+  {
+    "_id": "69f27f60e25a37ddba99bb04",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-29",
+    "claimed_at": "2026-04-29T22:00:00.014378+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-04-29T22:00:05.549252+00:00"
+  },
+  {
+    "_id": "69f3d0e01bede1189833a26e",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-04-30",
+    "claimed_at": "2026-04-30T22:00:00.006825+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-04-30T22:00:04.900376+00:00"
+  },
+  {
+    "_id": "69f522601bede1189833a271",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-01",
+    "claimed_at": "2026-05-01T22:00:00.006631+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-01T22:00:05.473528+00:00"
+  },
+  {
+    "_id": "69f673e01bede1189833a274",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-02",
+    "claimed_at": "2026-05-02T22:00:00.056392+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-02T22:00:05.601850+00:00"
+  },
+  {
+    "_id": "69f7c5601bede1189833a276",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-03",
+    "claimed_at": "2026-05-03T22:00:00.028794+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-03T22:00:04.805315+00:00"
+  },
+  {
+    "_id": "69f916e01bede1189833a279",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-04",
+    "claimed_at": "2026-05-04T22:00:00.016749+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-04T22:00:05.167564+00:00"
+  },
+  {
+    "_id": "69fa68601bede1189833a27b",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-05",
+    "claimed_at": "2026-05-05T22:00:00.026273+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-05T22:00:04.940291+00:00"
+  },
+  {
+    "_id": "69fbb9e01bede1189833a27d",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-06",
+    "claimed_at": "2026-05-06T22:00:00.023900+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-06T22:00:05.188496+00:00"
+  },
+  {
+    "_id": "69fd0b601bede1189833a27f",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-07",
+    "claimed_at": "2026-05-07T22:00:00.033234+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-07T22:00:04.975248+00:00"
+  },
+  {
+    "_id": "69fe5ce01bede1189833a281",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-08",
+    "claimed_at": "2026-05-08T22:00:00.038927+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-08T22:00:05.523861+00:00"
+  },
+  {
+    "_id": "69ffae601bede1189833a283",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-09",
+    "claimed_at": "2026-05-09T22:00:00.096012+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-09T22:00:06.145049+00:00"
+  },
+  {
+    "_id": "6a00ffe01bede1189833a285",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-10",
+    "claimed_at": "2026-05-10T22:00:00.020920+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-10T22:00:04.974423+00:00"
+  },
+  {
+    "_id": "6a0251601bede1189833a287",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-11",
+    "claimed_at": "2026-05-11T22:00:00.015637+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-11T22:00:06.386208+00:00"
+  },
+  {
+    "_id": "6a03a2e01bede1189833a289",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-12",
+    "claimed_at": "2026-05-12T22:00:00.033692+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-12T22:00:05.290208+00:00"
+  },
+  {
+    "_id": "6a04f4601bede1189833a28b",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-13",
+    "claimed_at": "2026-05-13T22:00:00.030884+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-13T22:00:06.039161+00:00"
+  },
+  {
+    "_id": "6a0645e01bede1189833a28d",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-14",
+    "claimed_at": "2026-05-14T22:00:00.013057+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-14T22:00:05.142579+00:00"
+  },
+  {
+    "_id": "6a0797601bede1189833a28f",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-15",
+    "claimed_at": "2026-05-15T22:00:00.030451+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-15T22:00:05.011326+00:00"
+  },
+  {
+    "_id": "6a08e8e01bede1189833a291",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-16",
+    "claimed_at": "2026-05-16T22:00:00.074516+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-16T22:00:06.404738+00:00"
+  },
+  {
+    "_id": "6a0a3a601bede1189833a293",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-17",
+    "claimed_at": "2026-05-17T22:00:00.024836+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-17T22:00:05.204014+00:00"
+  },
+  {
+    "_id": "6a0b8be01bede1189833a295",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-18",
+    "claimed_at": "2026-05-18T22:00:00.038552+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-18T22:00:05.694624+00:00"
+  },
+  {
+    "_id": "6a0cdd601bede1189833a297",
+    "log_id": "daily_report_2026-05-19",
+    "type": "daily_report",
+    "claimed_at": "2026-05-19T22:00:00.003616+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-19T22:00:05.612050+00:00"
+  },
+  {
+    "_id": "6a0e2ee01bede1189833a299",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-20",
+    "claimed_at": "2026-05-20T22:00:00.007149+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-20T22:00:05.818787+00:00"
+  },
+  {
+    "_id": "6a0f8060faa22b8350dbc29f",
+    "log_id": "daily_report_2026-05-21",
+    "type": "daily_report",
+    "claimed_at": "2026-05-21T22:00:00.009295+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-21T22:00:04.748090+00:00"
+  },
+  {
+    "_id": "6a10d1e0faa22b8350dbc2a1",
+    "log_id": "daily_report_2026-05-22",
+    "type": "daily_report",
+    "claimed_at": "2026-05-22T22:00:00.021423+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-22T22:00:05.009672+00:00"
+  },
+  {
+    "_id": "6a122360faa22b8350dbc2a3",
+    "log_id": "daily_report_2026-05-23",
+    "type": "daily_report",
+    "claimed_at": "2026-05-23T22:00:00.002829+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-23T22:00:04.864863+00:00"
+  },
+  {
+    "_id": "6a1374e0faa22b8350dbc2a5",
+    "log_id": "daily_report_2026-05-24",
+    "type": "daily_report",
+    "claimed_at": "2026-05-24T22:00:00.043475+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-24T22:00:05.797618+00:00"
+  },
+  {
+    "_id": "6a14c660faa22b8350dbc2a7",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-25",
+    "claimed_at": "2026-05-25T22:00:00.022200+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-25T22:00:04.687423+00:00"
+  },
+  {
+    "_id": "6a1617e0faa22b8350dbc2a9",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-05-26",
+    "claimed_at": "2026-05-26T22:00:00.025106+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-26T22:00:05.230405+00:00"
+  },
+  {
+    "_id": "6a176960faa22b8350dbc2ab",
+    "log_id": "daily_report_2026-05-27",
+    "type": "daily_report",
+    "claimed_at": "2026-05-27T22:00:00.039930+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-27T22:00:05.873833+00:00"
+  },
+  {
+    "_id": "6a18bae0faa22b8350dbc2ad",
+    "log_id": "daily_report_2026-05-28",
+    "type": "daily_report",
+    "claimed_at": "2026-05-28T22:00:00.026037+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-28T22:00:04.941914+00:00"
+  },
+  {
+    "_id": "6a1a0c60faa22b8350dbc2af",
+    "log_id": "daily_report_2026-05-29",
+    "type": "daily_report",
+    "claimed_at": "2026-05-29T22:00:00.010420+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-29T22:00:05.710235+00:00"
+  },
+  {
+    "_id": "6a1b5de0faa22b8350dbc2b1",
+    "log_id": "daily_report_2026-05-30",
+    "type": "daily_report",
+    "claimed_at": "2026-05-30T22:00:00.104981+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-30T22:00:07.472731+00:00"
+  },
+  {
+    "_id": "6a1caf60faa22b8350dbc2b3",
+    "log_id": "daily_report_2026-05-31",
+    "type": "daily_report",
+    "claimed_at": "2026-05-31T22:00:00.043750+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-05-31T22:00:05.401898+00:00"
+  },
+  {
+    "_id": "6a1e00e0faa22b8350dbc2b5",
+    "log_id": "daily_report_2026-06-01",
+    "type": "daily_report",
+    "claimed_at": "2026-06-01T22:00:00.029787+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-01T22:00:06.499868+00:00"
+  },
+  {
+    "_id": "6a1f5260faa22b8350dbc2b7",
+    "log_id": "daily_report_2026-06-02",
+    "type": "daily_report",
+    "claimed_at": "2026-06-02T22:00:00.025353+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-02T22:00:06.997904+00:00"
+  },
+  {
+    "_id": "6a20a3e0faa22b8350dbc2b9",
+    "log_id": "daily_report_2026-06-03",
+    "type": "daily_report",
+    "claimed_at": "2026-06-03T22:00:00.028663+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-03T22:00:05.025690+00:00"
+  },
+  {
+    "_id": "6a21f560faa22b8350dbc2bb",
+    "log_id": "daily_report_2026-06-04",
+    "type": "daily_report",
+    "claimed_at": "2026-06-04T22:00:00.037974+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-04T22:00:06.085559+00:00"
+  },
+  {
+    "_id": "6a2346e0faa22b8350dbc2bd",
+    "log_id": "daily_report_2026-06-05",
+    "type": "daily_report",
+    "claimed_at": "2026-06-05T22:00:00.031909+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-05T22:00:05.142531+00:00"
+  },
+  {
+    "_id": "6a249860faa22b8350dbc2bf",
+    "log_id": "daily_report_2026-06-06",
+    "type": "daily_report",
+    "claimed_at": "2026-06-06T22:00:00.107537+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-06T22:00:07.249869+00:00"
+  },
+  {
+    "_id": "6a25e9e0faa22b8350dbc2c1",
+    "log_id": "daily_report_2026-06-07",
+    "type": "daily_report",
+    "claimed_at": "2026-06-07T22:00:00.009903+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-07T22:00:04.872998+00:00"
+  },
+  {
+    "_id": "6a273b60faa22b8350dbc2c4",
+    "log_id": "daily_report_2026-06-08",
+    "type": "daily_report",
+    "claimed_at": "2026-06-08T22:00:00.026034+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-08T22:00:06.029056+00:00"
+  },
+  {
+    "_id": "6a288ce0faa22b8350dbc2c6",
+    "log_id": "daily_report_2026-06-09",
+    "type": "daily_report",
+    "claimed_at": "2026-06-09T22:00:00.020810+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-09T22:00:06.372656+00:00"
+  },
+  {
+    "_id": "6a29de60faa22b8350dbc2c8",
+    "log_id": "daily_report_2026-06-10",
+    "type": "daily_report",
+    "claimed_at": "2026-06-10T22:00:00.010374+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-10T22:00:04.874711+00:00"
+  },
+  {
+    "_id": "6a2b2fe0faa22b8350dbc2ca",
+    "log_id": "daily_report_2026-06-11",
+    "type": "daily_report",
+    "claimed_at": "2026-06-11T22:00:00.014821+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-11T22:00:05.345179+00:00"
+  },
+  {
+    "_id": "6a2c8160faa22b8350dbc2cc",
+    "type": "daily_report",
+    "log_id": "daily_report_2026-06-12",
+    "claimed_at": "2026-06-12T22:00:00.021765+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-12T22:00:04.975440+00:00"
+  },
+  {
+    "_id": "6a2dd2e0faa22b8350dbc2ce",
+    "log_id": "daily_report_2026-06-13",
+    "type": "daily_report",
+    "claimed_at": "2026-06-13T22:00:00.123132+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-13T22:00:08.448704+00:00"
+  },
+  {
+    "_id": "6a2f2460faa22b8350dbc2d0",
+    "log_id": "daily_report_2026-06-14",
+    "type": "daily_report",
+    "claimed_at": "2026-06-14T22:00:00.033101+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-14T22:00:05.339422+00:00"
+  },
+  {
+    "_id": "6a3075e0faa22b8350dbc2d2",
+    "log_id": "daily_report_2026-06-15",
+    "type": "daily_report",
+    "claimed_at": "2026-06-15T22:00:00.027332+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-15T22:00:06.227248+00:00"
+  },
+  {
+    "_id": "6a31c760faa22b8350dbc2d4",
+    "log_id": "daily_report_2026-06-16",
+    "type": "daily_report",
+    "claimed_at": "2026-06-16T22:00:00.031892+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-16T22:00:05.406560+00:00"
+  },
+  {
+    "_id": "6a3318e0faa22b8350dbc2d6",
+    "log_id": "daily_report_2026-06-17",
+    "type": "daily_report",
+    "claimed_at": "2026-06-17T22:00:00.035111+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-17T22:00:05.270484+00:00"
+  },
+  {
+    "_id": "6a346a60faa22b8350dbc2d8",
+    "log_id": "daily_report_2026-06-18",
+    "type": "daily_report",
+    "claimed_at": "2026-06-18T22:00:00.041393+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-18T22:00:05.397804+00:00"
+  },
+  {
+    "_id": "6a35bbe0faa22b8350dbc2da",
+    "log_id": "daily_report_2026-06-19",
+    "type": "daily_report",
+    "claimed_at": "2026-06-19T22:00:00.036403+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-19T22:00:05.635947+00:00"
+  },
+  {
+    "_id": "6a370d60faa22b8350dbc2dc",
+    "log_id": "daily_report_2026-06-20",
+    "type": "daily_report",
+    "claimed_at": "2026-06-20T22:00:00.141932+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-20T22:00:06.932757+00:00"
+  },
+  {
+    "_id": "6a385ee0faa22b8350dbc2de",
+    "log_id": "daily_report_2026-06-21",
+    "type": "daily_report",
+    "claimed_at": "2026-06-21T22:00:00.008401+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-21T22:00:05.909492+00:00"
+  },
+  {
+    "_id": "6a39b060faa22b8350dbc2e0",
+    "log_id": "daily_report_2026-06-22",
+    "type": "daily_report",
+    "claimed_at": "2026-06-22T22:00:00.031990+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-22T22:00:05.331216+00:00"
+  },
+  {
+    "_id": "6a3b01e0faa22b8350dbc2e2",
+    "log_id": "daily_report_2026-06-23",
+    "type": "daily_report",
+    "claimed_at": "2026-06-23T22:00:00.039059+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-23T22:00:05.912994+00:00"
+  },
+  {
+    "_id": "6a3c5360faa22b8350dbc2e4",
+    "log_id": "daily_report_2026-06-24",
+    "type": "daily_report",
+    "claimed_at": "2026-06-24T22:00:00.024593+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-24T22:00:05.619562+00:00"
+  },
+  {
+    "_id": "6a3da4e0faa22b8350dbc2e6",
+    "log_id": "daily_report_2026-06-25",
+    "type": "daily_report",
+    "claimed_at": "2026-06-25T22:00:00.013650+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-25T22:00:05.640116+00:00"
+  },
+  {
+    "_id": "6a3ef660faa22b8350dbc2e8",
+    "log_id": "daily_report_2026-06-26",
+    "type": "daily_report",
+    "claimed_at": "2026-06-26T22:00:00.034533+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-26T22:00:06.314869+00:00"
+  },
+  {
+    "_id": "6a4047e0faa22b8350dbc2ea",
+    "log_id": "daily_report_2026-06-27",
+    "type": "daily_report",
+    "claimed_at": "2026-06-27T22:00:00.109510+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-27T22:00:07.382821+00:00"
+  },
+  {
+    "_id": "6a419960faa22b8350dbc2ec",
+    "log_id": "daily_report_2026-06-28",
+    "type": "daily_report",
+    "claimed_at": "2026-06-28T22:00:00.035137+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-28T22:00:05.475625+00:00"
+  },
+  {
+    "_id": "6a42eae0faa22b8350dbc2ee",
+    "log_id": "daily_report_2026-06-29",
+    "type": "daily_report",
+    "claimed_at": "2026-06-29T22:00:00.007651+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-29T22:00:05.193894+00:00"
+  },
+  {
+    "_id": "6a443c60faa22b8350dbc2f0",
+    "log_id": "daily_report_2026-06-30",
+    "type": "daily_report",
+    "claimed_at": "2026-06-30T22:00:00.023498+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-06-30T22:00:06.163134+00:00"
+  },
+  {
+    "_id": "6a458de0faa22b8350dbc2f2",
+    "log_id": "daily_report_2026-07-01",
+    "type": "daily_report",
+    "claimed_at": "2026-07-01T22:00:00.032128+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-07-01T22:00:06.860586+00:00"
+  },
+  {
+    "_id": "6a46df60faa22b8350dbc2f4",
+    "log_id": "daily_report_2026-07-02",
+    "type": "daily_report",
+    "claimed_at": "2026-07-02T22:00:00.072995+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-07-02T22:00:06.717474+00:00"
+  },
+  {
+    "_id": "6a4830e0faa22b8350dbc2f6",
+    "log_id": "daily_report_2026-07-03",
+    "type": "daily_report",
+    "claimed_at": "2026-07-03T22:00:00.030242+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-07-03T22:00:05.713872+00:00"
+  },
+  {
+    "_id": "6a498260faa22b8350dbc2f8",
+    "log_id": "daily_report_2026-07-04",
+    "type": "daily_report",
+    "claimed_at": "2026-07-04T22:00:00.026981+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-07-04T22:00:08.041777+00:00"
+  },
+  {
+    "_id": "6a4ad3e0faa22b8350dbc2fa",
+    "log_id": "daily_report_2026-07-05",
+    "type": "daily_report",
+    "claimed_at": "2026-07-05T22:00:00.029672+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-07-05T22:00:06.526955+00:00"
+  },
+  {
+    "_id": "6a4c2560faa22b8350dbc2fc",
+    "log_id": "daily_report_2026-07-06",
+    "type": "daily_report",
+    "claimed_at": "2026-07-06T22:00:00.029852+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-07-06T22:00:05.425234+00:00"
+  },
+  {
+    "_id": "6a4d76e0faa22b8350dbc2fe",
+    "log_id": "daily_report_2026-07-07",
+    "type": "daily_report",
+    "claimed_at": "2026-07-07T22:00:00.020038+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-07-07T22:00:05.723615+00:00"
+  },
+  {
+    "_id": "6a4ec860faa22b8350dbc300",
+    "log_id": "daily_report_2026-07-08",
+    "type": "daily_report",
+    "claimed_at": "2026-07-08T22:00:00.022715+00:00",
+    "status": "sent",
+    "recipients": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "sent_at": "2026-07-08T22:00:06.063867+00:00"
+  }
+]

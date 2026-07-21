@@ -1,0 +1,46 @@
+[
+  {
+    "_id": "69afddb60b70233651c9dbbf",
+    "updated_at": "2026-07-09T13:54:06.946020+00:00",
+    "updated_by": "user_b4dcae07f9cb",
+    "monthly_report_enabled": false,
+    "setting_type": "email",
+    "created_at": "2026-03-10T09:00:38.940109+00:00",
+    "director_emails": [
+      "7209safvan@gmail.com",
+      "nasrudheennasru15@gmail.com",
+      "Safeer@deltainstitutions.com",
+      "muhassinmhkt@gmail.com",
+      "aqiblapia13@gmail.com",
+      "mohdfaizeen12@gmail.com",
+      "absharameen625@gmail.com"
+    ],
+    "report_enabled": false,
+    "report_time": "22:00",
+    "smtp_email": "no-replyac@milescapitals.com",
+    "smtp_from_email": "no-replyac@milescapitals.com",
+    "smtp_host": "smtp.gmail.com",
+    "smtp_password": "geok sfeo uoso dovt",
+    "smtp_port": 587
+  },
+  {
+    "_id": "69afddbce25a37ddba99ba94",
+    "setting_type": "security",
+    "twofa_enabled": false,
+    "updated_at": "2026-03-28T09:52:49.107563+00:00",
+    "updated_by": "user_72045e5ef5b4"
+  },
+  {
+    "_id": "69b03bf3e25a37ddba99ba95",
+    "setting_type": "manual_fx_rates",
+    "rates": {
+      "AED": 0.2722,
+      "INR": 0.0108,
+      "EUR": 1.15,
+      "USDT": 1
+    },
+    "updated_at": "2026-04-24T13:01:17.797551+00:00",
+    "updated_by": "user_6eb3cedabb4e",
+    "updated_by_name": "Midhlaj"
+  }
+]

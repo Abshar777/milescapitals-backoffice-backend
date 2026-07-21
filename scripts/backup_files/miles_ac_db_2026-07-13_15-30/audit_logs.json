@@ -1,0 +1,2936 @@
+[
+  {
+    "_id": "69b03c42110b031ae758062f",
+    "log_id": "log_07605b7384ee",
+    "action": "role_created",
+    "module": "roles",
+    "details": "Created role: Reconciliation",
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-10T15:44:02.821827+00:00"
+  },
+  {
+    "_id": "69b03c8274139567d4141b73",
+    "log_id": "log_399096140cf3",
+    "action": "role_created",
+    "module": "roles",
+    "details": "Created role: Crm admin",
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-10T15:45:06.921134+00:00"
+  },
+  {
+    "_id": "69b03ca2fb48e875ff152a98",
+    "log_id": "log_4638c729ca42",
+    "action": "role_created",
+    "module": "roles",
+    "details": "Created role: CRM SUB ADMIN",
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-10T15:45:38.192210+00:00"
+  },
+  {
+    "_id": "69b03dcc0b70233651c9dbc1",
+    "log_id": "log_cdb010338742",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Sub Admin",
+    "changes": {
+      "display_name": "Sub AC",
+      "description": "Limited administrative access",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "treasury": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "income_expenses": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "loans": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "debts": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "exchangers": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-10T15:50:36.659274+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-10T15:50:36.659274+00:00"
+  },
+  {
+    "_id": "69b0506d74139567d4141b85",
+    "log_id": "log_2bbdda863616",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Accountant",
+    "changes": {
+      "display_name": "Accountant",
+      "description": "Financial operations and approvals",
+      "permissions": {
+        "dashboard": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "treasury": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "lp_management": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "income_expenses": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "loans": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "debts": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "exchangers": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reconciliation": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "settings": [
+          "view"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 70,
+      "updated_at": "2026-03-10T17:10:05.993232+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-10T17:10:05.993232+00:00"
+  },
+  {
+    "_id": "69b152cea600f429f72c4641",
+    "log_id": "log_01fbbbcd8c67",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Admin",
+    "changes": {
+      "display_name": "Admin",
+      "description": "Full system access with all permissions",
+      "permissions": {
+        "dashboard": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "treasury": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "lp_management": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "income_expenses": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "loans": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "debts": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "exchangers": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reconciliation": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "audit": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "logs": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "settings": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "users": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "roles": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 100,
+      "updated_at": "2026-03-11T11:32:30.908489+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-11T11:32:30.908489+00:00"
+  },
+  {
+    "_id": "69b152d5166787bf47b0fd6d",
+    "log_id": "log_580028b3d604",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Accountant",
+    "changes": {
+      "display_name": "Accountant",
+      "description": "Financial operations and approvals",
+      "permissions": {
+        "dashboard": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "treasury": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "lp_management": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "income_expenses": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "loans": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "debts": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "exchangers": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reconciliation": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "settings": [
+          "view"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 70,
+      "updated_at": "2026-03-11T11:32:37.939847+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-11T11:32:37.939847+00:00"
+  },
+  {
+    "_id": "69b152e97236c4be2650c461",
+    "log_id": "log_7acebf8178f4",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Crm admin",
+    "changes": {
+      "display_name": "Crm admin",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "lp_management": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-11T11:32:57.156902+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-11T11:32:57.156902+00:00"
+  },
+  {
+    "_id": "69b152f37236c4be2650c463",
+    "log_id": "log_e98a967ec865",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-11T11:33:07.543938+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-11T11:33:07.543938+00:00"
+  },
+  {
+    "_id": "69b2be1e37bb1fe89f340829",
+    "log_id": "log_f49521f866d7",
+    "action": "role_created",
+    "module": "roles",
+    "details": "Created role: Senior CRM ADMIN",
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-12T13:22:38.099899+00:00"
+  },
+  {
+    "_id": "69b2be6c588230df399cd18b",
+    "log_id": "log_caaee8f0c953",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Senior CRM ADMIN",
+    "changes": {
+      "display_name": "Senior CRM ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-12T13:23:56.608537+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-12T13:23:56.608537+00:00"
+  },
+  {
+    "_id": "69b4c4d5283dcc7581037196",
+    "log_id": "log_43c7775e4121",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Crm admin",
+    "changes": {
+      "display_name": "Crm admin",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "lp_management": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-14T02:15:48.987369+00:00"
+    },
+    "user_id": "user_be4cf855382c",
+    "user_name": "Shafeel",
+    "created_at": "2026-03-14T02:15:48.987369+00:00"
+  },
+  {
+    "_id": "69b81f42b1cad7641f58369c",
+    "log_id": "log_bd981ddc9bbb",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "approve",
+          "delete",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-16T15:18:26.133521+00:00"
+    },
+    "user_id": "user_be4cf855382c",
+    "user_name": "Shafeel",
+    "created_at": "2026-03-16T15:18:26.133521+00:00"
+  },
+  {
+    "_id": "69b8eac6c7ca7827bb9635fc",
+    "log_id": "log_9a3fd3a8f13e",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-17T05:46:46.417264+00:00"
+    },
+    "user_id": "user_b6f8825c4e3f",
+    "user_name": "thasleem",
+    "created_at": "2026-03-17T05:46:46.417264+00:00"
+  },
+  {
+    "_id": "69b8fbbfbbaf672d8d3e692c",
+    "log_id": "log_f72bafe95e43",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export",
+          "create"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-17T06:59:11.817859+00:00"
+    },
+    "user_id": "user_b6f8825c4e3f",
+    "user_name": "thasleem",
+    "created_at": "2026-03-17T06:59:11.817859+00:00"
+  },
+  {
+    "_id": "69b8fbd58f9a1fc0cf4e050d",
+    "log_id": "log_d77428ce1c85",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export",
+          "create"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-17T06:59:33.023943+00:00"
+    },
+    "user_id": "user_b6f8825c4e3f",
+    "user_name": "thasleem",
+    "created_at": "2026-03-17T06:59:33.023943+00:00"
+  },
+  {
+    "_id": "69c62fb0940a0c9660e96a35",
+    "log_id": "log_31ee1aded664",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Senior CRM ADMIN",
+    "changes": {
+      "display_name": "Senior CRM ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "export"
+        ],
+        "treasury": [
+          "view",
+          "create"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-03-27T07:20:16.422009+00:00"
+    },
+    "user_id": "user_b6f8825c4e3f",
+    "user_name": "thasleem",
+    "created_at": "2026-03-27T07:20:16.422009+00:00"
+  },
+  {
+    "_id": "69ca7be190d549b3c73f28ec",
+    "log_id": "log_bd0732d7b0d0",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Viewer",
+    "changes": {
+      "display_name": "Viewer",
+      "description": "Read-only access to selected modules",
+      "permissions": {
+        "dashboard": [
+          "view"
+        ],
+        "clients": [
+          "view"
+        ],
+        "transactions": [
+          "view"
+        ],
+        "transaction_requests": [
+          "view"
+        ],
+        "approvals": [
+          "view"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "exchangers": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 10,
+      "updated_at": "2026-03-30T13:34:25.776471+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-03-30T13:34:25.776471+00:00"
+  },
+  {
+    "_id": "69d5437ccc8018017c6d9eb2",
+    "log_id": "log_1c5095368aef",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export",
+          "create"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ],
+        "psp": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-04-07T17:48:44.873280+00:00"
+    },
+    "user_id": "user_be4cf855382c",
+    "user_name": "Shafeel",
+    "created_at": "2026-04-07T17:48:44.873280+00:00"
+  },
+  {
+    "_id": "69da3ed816569936bc2fb76a",
+    "log_id": "log_d84b938f6685",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Exchanger",
+    "changes": {
+      "display_name": "Exchanger",
+      "description": "Exchanger/Vendor portal access",
+      "permissions": {
+        "dashboard": [
+          "view"
+        ],
+        "transactions": [
+          "view",
+          "approve"
+        ],
+        "income_expenses": [
+          "view",
+          "approve"
+        ],
+        "loans": [
+          "view",
+          "approve"
+        ]
+      },
+      "hierarchy_level": 20,
+      "updated_at": "2026-04-11T12:30:16.734660+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-04-11T12:30:16.734660+00:00"
+  },
+  {
+    "_id": "69dcd85365c37b05cf02ab91",
+    "log_id": "log_a9e7ee8b3bee",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Admin",
+    "changes": {
+      "display_name": "Admin",
+      "description": "Full system access with all permissions",
+      "permissions": {
+        "dashboard": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "treasury": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "lp_management": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "income_expenses": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "loans": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "debts": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "exchangers": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reconciliation": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "audit": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "logs": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "settings": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "users": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "roles": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "reinstate": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 100,
+      "updated_at": "2026-04-13T11:49:39.528014+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-04-13T11:49:39.528014+00:00"
+  },
+  {
+    "_id": "69e9e66abd3164ae2f1ae766",
+    "log_id": "log_917d79102508",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export",
+          "create"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ],
+        "psp": [
+          "view"
+        ],
+        "treasury": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-04-23T09:29:14.610926+00:00"
+    },
+    "user_id": "user_b6f8825c4e3f",
+    "user_name": "thasleem",
+    "created_at": "2026-04-23T09:29:14.610926+00:00"
+  },
+  {
+    "_id": "69ea72e7c9be49094796ba6c",
+    "log_id": "log_48f1b19ba28c",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: Crm admin",
+    "changes": {
+      "display_name": "Crm admin",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export",
+          "listing"
+        ],
+        "transactions": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export",
+          "listing"
+        ],
+        "lp_management": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export",
+          "listing"
+        ],
+        "reports": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "psp": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export",
+          "listing"
+        ],
+        "treasury": [
+          "listing"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-04-23T19:28:39.490963+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-04-23T19:28:39.490963+00:00"
+  },
+  {
+    "_id": "69ea72f5c9be49094796ba6e",
+    "log_id": "log_c80877ed7caa",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export",
+          "create"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ],
+        "psp": [
+          "view"
+        ],
+        "treasury": [
+          "listing"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-04-23T19:28:53.759991+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-04-23T19:28:53.759991+00:00"
+  },
+  {
+    "_id": "69ea7342c9be49094796ba72",
+    "log_id": "log_2461dd6b13fa",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export",
+          "create"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ],
+        "psp": [
+          "view"
+        ],
+        "treasury": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-04-23T19:30:10.357569+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-04-23T19:30:10.357569+00:00"
+  },
+  {
+    "_id": "69ea7364c9be49094796ba76",
+    "log_id": "log_c8ce86f51faa",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export",
+          "create"
+        ],
+        "exchangers": [
+          "view",
+          "create"
+        ],
+        "psp": [
+          "view"
+        ],
+        "treasury": [
+          "listing"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-04-23T19:30:44.114008+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-04-23T19:30:44.114008+00:00"
+  },
+  {
+    "_id": "69eb2d96dcd8e386a540aa49",
+    "log_id": "log_8a7e827930fa",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: CRM SUB ADMIN",
+    "changes": {
+      "display_name": "CRM SUB ADMIN",
+      "description": "",
+      "permissions": {
+        "clients": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "messages": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transaction_requests": [
+          "view",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view",
+          "edit",
+          "approve",
+          "delete",
+          "export",
+          "create"
+        ],
+        "exchangers": [
+          "create",
+          "listing"
+        ],
+        "treasury": [
+          "listing"
+        ],
+        "psp": [
+          "listing"
+        ]
+      },
+      "hierarchy_level": 50,
+      "updated_at": "2026-04-24T08:45:10.950683+00:00"
+    },
+    "user_id": "user_b6f8825c4e3f",
+    "user_name": "thasleem",
+    "created_at": "2026-04-24T08:45:10.950683+00:00"
+  },
+  {
+    "_id": "69f86e7301776c2026978043",
+    "log_id": "log_76d454db6a6f",
+    "action": "role_created",
+    "module": "roles",
+    "details": "Created role: carlton_edu",
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-04T10:01:23.594121+00:00"
+  },
+  {
+    "_id": "69f87a589398baa81966f1e3",
+    "log_id": "log_004e7a1bac5c",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e"
+      ],
+      "updated_at": "2026-05-04T10:52:08.186286+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-05-04T10:52:08.186286+00:00"
+  },
+  {
+    "_id": "69f87ad09398baa81966f1e9",
+    "log_id": "log_a33ce72dca85",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-04T10:54:08.229066+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-05-04T10:54:08.229066+00:00"
+  },
+  {
+    "_id": "69f882d69398baa81966f20b",
+    "log_id": "log_65f79cfe7795",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-04T11:28:22.334824+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-04T11:28:22.334824+00:00"
+  },
+  {
+    "_id": "69f883b99398baa81966f210",
+    "log_id": "log_accd300e4c2e",
+    "action": "role_created",
+    "module": "roles",
+    "details": "Created role: clt_academy",
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-04T11:32:09.530569+00:00"
+  },
+  {
+    "_id": "69f885ac9398baa81966f21a",
+    "log_id": "log_a64677bd7204",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "approve",
+          "edit",
+          "delete",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_57baf353afc1"
+      ],
+      "updated_at": "2026-05-04T11:40:28.149396+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-04T11:40:28.149396+00:00"
+  },
+  {
+    "_id": "6a04b2d5f8534c6bf0c3c399",
+    "log_id": "log_69091101b81d",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_57baf353afc1"
+      ],
+      "updated_at": "2026-05-13T17:20:21.269612+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-13T17:20:21.269612+00:00"
+  },
+  {
+    "_id": "6a04b2e4f8534c6bf0c3c39b",
+    "log_id": "log_b476dfe9179b",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-13T17:20:36.956679+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-13T17:20:36.956679+00:00"
+  },
+  {
+    "_id": "6a04b388f8534c6bf0c3c39f",
+    "log_id": "log_98e88bd55986",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "delete",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-13T17:23:20.848918+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-13T17:23:20.848918+00:00"
+  },
+  {
+    "_id": "6a05bd6cf8534c6bf0c3c529",
+    "log_id": "log_eea868eb3d53",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_57baf353afc1"
+      ],
+      "updated_at": "2026-05-14T12:17:48.914931+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:17:48.914931+00:00"
+  },
+  {
+    "_id": "6a05bd7cf8534c6bf0c3c52b",
+    "log_id": "log_4361b414097a",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-14T12:18:04.477209+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:18:04.477209+00:00"
+  },
+  {
+    "_id": "6a05bdbaf8534c6bf0c3c532",
+    "log_id": "log_652d1150de2d",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-14T12:19:06.507184+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:19:06.507184+00:00"
+  },
+  {
+    "_id": "6a05bdc4f8534c6bf0c3c534",
+    "log_id": "log_711399c23d7a",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-14T12:19:16.996204+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:19:16.996204+00:00"
+  },
+  {
+    "_id": "6a05bdcdf8534c6bf0c3c536",
+    "log_id": "log_234ba79bf90f",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-14T12:19:25.873998+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:19:25.873998+00:00"
+  },
+  {
+    "_id": "6a05bddbf8534c6bf0c3c538",
+    "log_id": "log_6fa878b121e7",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_57baf353afc1"
+      ],
+      "updated_at": "2026-05-14T12:19:39.329347+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:19:39.329347+00:00"
+  },
+  {
+    "_id": "6a05be1711e31c8d6cb2c9d1",
+    "log_id": "log_4b68a09fb896",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-14T12:20:39.546062+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:20:39.546062+00:00"
+  },
+  {
+    "_id": "6a05c13c60b3df81f0e7a2ba",
+    "log_id": "log_7dfb0c105109",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-14T12:34:04.836448+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:34:04.836448+00:00"
+  },
+  {
+    "_id": "6a05c3425c399e0b3379765a",
+    "log_id": "log_f2a43f4254e5",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "updated_at": "2026-05-14T12:42:42.567661+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T12:42:42.567661+00:00"
+  },
+  {
+    "_id": "6a05cb3c0c7ce500f10759e1",
+    "log_id": "log_ffdff7c94df1",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "ie_own_entries_only": true,
+      "updated_at": "2026-05-14T13:16:44.718717+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T13:16:44.718717+00:00"
+  },
+  {
+    "_id": "6a05cb670c7ce500f10759e9",
+    "log_id": "log_a18f9cf27575",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_57baf353afc1"
+      ],
+      "ie_own_entries_only": true,
+      "updated_at": "2026-05-14T13:17:27.552385+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-14T13:17:27.552385+00:00"
+  },
+  {
+    "_id": "6a06fb0f7215cfb1150a69e7",
+    "log_id": "log_1789ef197091",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "ie_own_entries_only": true,
+      "allowed_transaction_tags": [
+        "txntag_c2f1eb38",
+        "txntag_46a90d0c",
+        "txntag_0781c5f4"
+      ],
+      "updated_at": "2026-05-15T10:53:03.230759+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-15T10:53:03.230759+00:00"
+  },
+  {
+    "_id": "6a072e988063788b5ef1918b",
+    "log_id": "log_9331b3a8c75c",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "loans": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "ie_own_entries_only": true,
+      "allowed_client_tags": [
+        "tag_452c3692"
+      ],
+      "updated_at": "2026-05-15T14:32:56.425599+00:00"
+    },
+    "user_id": "user_72045e5ef5b4",
+    "user_name": "SAFVAN",
+    "created_at": "2026-05-15T14:32:56.425599+00:00"
+  },
+  {
+    "_id": "6a15969a52cf184fdefba920",
+    "log_id": "log_e57e73506098",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view"
+        ],
+        "loans": [
+          "view",
+          "create",
+          "approve"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "ie_own_entries_only": true,
+      "allowed_client_tags": [
+        "tag_452c3692"
+      ],
+      "updated_at": "2026-05-26T12:48:26.452696+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-05-26T12:48:26.452696+00:00"
+  },
+  {
+    "_id": "6a4bc7dc1b1b46b1926ec3a0",
+    "log_id": "log_6f2217544d57",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: carlton_edu",
+    "changes": {
+      "display_name": "carlton_edu",
+      "description": "carlton_edu",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "transactions": [
+          "view"
+        ],
+        "loans": [
+          "view",
+          "create",
+          "approve"
+        ],
+        "approvals": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_9873e0eb9d4e",
+        "treasury_01a60b564f7a",
+        "treasury_9ba7887ae7a0",
+        "treasury_63a0deea30b5",
+        "treasury_54706367819a",
+        "treasury_50188c04f11c"
+      ],
+      "borrower_ids": [
+        "vendor_8de4c067e587"
+      ],
+      "ie_own_entries_only": true,
+      "allowed_client_tags": [
+        "tag_452c3692"
+      ],
+      "updated_at": "2026-07-06T15:21:00.679817+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-07-06T15:21:00.679817+00:00"
+  },
+  {
+    "_id": "6a4cc4338fd55178a23cbabc",
+    "log_id": "log_565d2cc2e516",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_57baf353afc1"
+      ],
+      "ie_own_entries_only": true,
+      "updated_at": "2026-07-07T09:17:39.505417+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-07-07T09:17:39.505417+00:00"
+  },
+  {
+    "_id": "6a4ccd2e8fd55178a23cbad7",
+    "log_id": "log_ff705356bba6",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "treasury": [
+          "view"
+        ],
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_57baf353afc1"
+      ],
+      "ie_own_entries_only": true,
+      "updated_at": "2026-07-07T09:55:58.643693+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-07-07T09:55:58.643693+00:00"
+  },
+  {
+    "_id": "6a4ccd848fd55178a23cbadb",
+    "log_id": "log_f2b4e478d5ae",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "treasury": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "ie_own_entries_only": true,
+      "updated_at": "2026-07-07T09:57:24.131068+00:00"
+    },
+    "user_id": "user_6eb3cedabb4e",
+    "user_name": "Midhlaj",
+    "created_at": "2026-07-07T09:57:24.131068+00:00"
+  },
+  {
+    "_id": "6a5501ab210d1bf7b35ab17b",
+    "log_id": "log_8ceba4f4fbb8",
+    "action": "role_updated",
+    "module": "roles",
+    "details": "Updated role: clt_academy",
+    "changes": {
+      "display_name": "clt_academy",
+      "description": "clt_academy",
+      "permissions": {
+        "income_expenses": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "approvals": [
+          "view",
+          "listing",
+          "create",
+          "edit",
+          "delete",
+          "approve",
+          "export"
+        ],
+        "treasury": [
+          "view"
+        ],
+        "transactions": [
+          "view"
+        ]
+      },
+      "hierarchy_level": 50,
+      "treasury_account_ids": [
+        "treasury_57baf353afc1"
+      ],
+      "ie_own_entries_only": true,
+      "allowed_client_tags": [
+        "tag_3726dd73"
+      ],
+      "updated_at": "2026-07-13T15:18:03.113011+00:00"
+    },
+    "user_id": "user_b4dcae07f9cb",
+    "user_name": "abshar",
+    "created_at": "2026-07-13T15:18:03.113011+00:00"
+  }
+]

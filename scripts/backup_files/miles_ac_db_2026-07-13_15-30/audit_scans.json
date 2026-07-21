@@ -1,0 +1,155 @@
+[
+  {
+    "_id": "69b996fa93424e14845d9c1d",
+    "scan_id": "audit_ebeb33fb6155",
+    "scanned_at": "2026-03-17T18:01:30.603116+00:00",
+    "health_score": 0,
+    "stats": {
+      "total_checks": 6,
+      "critical": 14,
+      "warning": 2,
+      "info": 0,
+      "passed": 0
+    },
+    "findings": [
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: d91a291b-cb61-4a31-ab54-a4ac21bb40d9",
+        "description": "Expected net 240.00 (amount 240.00 - commission 0.00), actual net 234.04",
+        "transaction_id": "tx_eb70fab85198",
+        "reference": "d91a291b-cb61-4a31-ab54-a4ac21bb40d9"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 9fedb936-1719_4dd6-8604-8918cef37880",
+        "description": "Expected net 1,007.48 (amount 1,007.48 - commission 0.00), actual net 983.39",
+        "transaction_id": "tx_1a6884445642",
+        "reference": "9fedb936-1719_4dd6-8604-8918cef37880"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 1c764dbe-016a-4d1d-99c7-3f1cd41b0e80",
+        "description": "Expected net 50.00 (amount 50.00 - commission 0.00), actual net 48.53",
+        "transaction_id": "tx_1fb98de8d478",
+        "reference": "1c764dbe-016a-4d1d-99c7-3f1cd41b0e80"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: b0b949ae-8e15-4306-91d9-caf776df39bb",
+        "description": "Expected net 2,500.00 (amount 2,500.00 - commission 0.00), actual net 2,440.65",
+        "transaction_id": "tx_26e4cdb0ba57",
+        "reference": "b0b949ae-8e15-4306-91d9-caf776df39bb"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 335c00f2-1923-42e7-bc4b-b1fa559654ac",
+        "description": "Expected net 2,450.00 (amount 2,450.00 - commission 0.00), actual net 2,391.83",
+        "transaction_id": "tx_4fdd5758c77f",
+        "reference": "335c00f2-1923-42e7-bc4b-b1fa559654ac"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 6b95ecd7-d6da-4faf-a797-a1e3135e44e0..",
+        "description": "Expected net 1,633.76 (amount 1,633.76 - commission 0.00), actual net 1,594.88",
+        "transaction_id": "tx_6028ce78a4e6",
+        "reference": "6b95ecd7-d6da-4faf-a797-a1e3135e44e0.."
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 6342ffe8-a5ba-4176-bc83-f871bd26f421",
+        "description": "Expected net 25.00 (amount 25.00 - commission 0.00), actual net 24.12",
+        "transaction_id": "tx_a93b5080786c",
+        "reference": "6342ffe8-a5ba-4176-bc83-f871bd26f421"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 20717bb9-7fc5-468b-ba46-7e6e612034d0",
+        "description": "Expected net 2,000.00 (amount 2,000.00 - commission 0.00), actual net 1,952.47",
+        "transaction_id": "tx_042a3b11ad96",
+        "reference": "20717bb9-7fc5-468b-ba46-7e6e612034d0"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 60ba03c6-02b7-48da-8b0c-579addcadc33",
+        "description": "Expected net 1,089.17 (amount 1,089.17 - commission 0.00), actual net 1,063.15",
+        "transaction_id": "tx_dffa37004706",
+        "reference": "60ba03c6-02b7-48da-8b0c-579addcadc33"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 5781689f-771d-4a75-9e4a-f53c27a10e7f",
+        "description": "Expected net 13.61 (amount 13.61 - commission 0.00), actual net 13.00",
+        "transaction_id": "tx_ba858638afc5",
+        "reference": "5781689f-771d-4a75-9e4a-f53c27a10e7f"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: 909b4317-0dd1-492b-a883-ef81433b5e2e",
+        "description": "Expected net 25.00 (amount 25.00 - commission 0.00), actual net 24.12",
+        "transaction_id": "tx_7ea9eae7c019",
+        "reference": "909b4317-0dd1-492b-a883-ef81433b5e2e"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: d8b53967-4065-499a-a182-3a904212dcc4",
+        "description": "Expected net 18.00 (amount 18.00 - commission 0.00), actual net 17.29",
+        "transaction_id": "tx_fc44e2023356",
+        "reference": "d8b53967-4065-499a-a182-3a904212dcc4"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: celee735-6f00-4613-aaa6-4a2d9e6c970b",
+        "description": "Expected net 500.00 (amount 500.00 - commission 0.00), actual net 487.90",
+        "transaction_id": "tx_424bdf535135",
+        "reference": "celee735-6f00-4613-aaa6-4a2d9e6c970b"
+      },
+      {
+        "category": "psp_settlement",
+        "severity": "critical",
+        "title": "Net amount mismatch: be5d5a39-9c7e-4b51-b723-5fc65770d823",
+        "description": "Expected net 2,720.00 (amount 2,720.00 - commission 0.00), actual net 9,989.20",
+        "transaction_id": "tx_4a9c35d7bdc9",
+        "reference": "be5d5a39-9c7e-4b51-b723-5fc65770d823"
+      },
+      {
+        "category": "treasury_balance",
+        "severity": "warning",
+        "title": "Balance discrepancy: MILES CAPITAL LLC ",
+        "description": "Stored balance: 404,109.69 AED, Sum of transactions: 59,442.37 AED. Difference may include initial balance or manual adjustments.",
+        "account_id": "treasury_dff9b532e16e",
+        "stored_balance": 404109.69,
+        "calculated_balance": 59442.37,
+        "difference": 344667.32
+      },
+      {
+        "category": "treasury_balance",
+        "severity": "warning",
+        "title": "Balance discrepancy: EDU CASH ",
+        "description": "Stored balance: 56,500.00 INR, Sum of transactions: 28,800.00 INR. Difference may include initial balance or manual adjustments.",
+        "account_id": "treasury_54706367819a",
+        "stored_balance": 56500.0,
+        "calculated_balance": 28800.0,
+        "difference": 27700.0
+      }
+    ],
+    "summary": {
+      "total_transactions": 129,
+      "psp_transactions": 67,
+      "treasury_accounts": 5,
+      "categories_checked": 5
+    }
+  }
+]
