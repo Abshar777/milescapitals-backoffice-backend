@@ -20145,8 +20145,15 @@ async def get_reconciliation_history_endpoint(
         key = (s.get("account_id"), (s.get("statement_date") or "")[:10])
         stmt_lookup[key] = s
 
-    def _stmt_status(stmt):
-        return "done" if stmt and stmt.get("status") == "completed" else "pending"
+    def _row_status(stmt, last_activity=None):
+        # A reconciled (completed) date re-opens as "re_reconcile" when a transaction in
+        # that bucket was created or edited AFTER it was reconciled (activity > done_at).
+        if not (stmt and stmt.get("status") == "completed"):
+            return "pending"
+        done_at = stmt.get("done_at")
+        if done_at and last_activity and str(last_activity) > str(done_at):
+            return "re_reconcile"
+        return "done"
 
     # ════════════════════════════════════════════════════════════════
     # 1. TREASURY
@@ -20210,8 +20217,9 @@ async def get_reconciliation_history_endpoint(
                 "account_id": "$account_id",
                 "currency":   {"$ifNull": ["$currency", "USD"]},
             },
-            "net_amount": {"$sum": _trs_signed_amt},
-            "tx_count":   {"$sum": 1},
+            "net_amount":    {"$sum": _trs_signed_amt},
+            "tx_count":      {"$sum": 1},
+            "last_activity": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
         }},
     ]
     for r in await db.treasury_transactions.aggregate(trs_pipeline).to_list(10000):
@@ -20229,7 +20237,7 @@ async def get_reconciliation_history_endpoint(
             "net_amount":       round(r["net_amount"], 2),
             "tx_count":         r["tx_count"],
             "statement":        stmt,
-            "status":           _stmt_status(stmt),
+            "status":           _row_status(stmt, r.get("last_activity")),
             "closing_balance":  0,
             "_opening_balance": implied_start.get(aid, 0.0),
         })
@@ -20294,6 +20302,7 @@ async def get_reconciliation_history_endpoint(
                 0,
             ]}},
             "tx_count": {"$sum": 1},
+            "last_activity": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
         }},
     ]
     for r in await db.transactions.aggregate(psp_pipeline).to_list(5000):
@@ -20332,7 +20341,7 @@ async def get_reconciliation_history_endpoint(
             "net_amount":       net,
             "tx_count":         r["tx_count"],
             "statement":        stmt,
-            "status":           _stmt_status(stmt),
+            "status":           _row_status(stmt, r.get("last_activity")),
             "closing_balance":  0,
             "_opening_balance": 0.0,
         })
@@ -20373,6 +20382,7 @@ async def get_reconciliation_history_endpoint(
                                               {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
             "comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
             "tx_count":  {"$sum": 1},
+            "last_activity": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
         }},
     ]
 
@@ -20396,6 +20406,7 @@ async def get_reconciliation_history_endpoint(
                                                  {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
             "ie_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
             "ie_count":     {"$sum": 1},
+            "last_activity": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
         }},
     ]
 
@@ -20414,6 +20425,7 @@ async def get_reconciliation_history_endpoint(
             },
             "loan_in":        {"$sum": "$amount"},
             "loan_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+            "last_activity":  {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
         }},
     ]
 
@@ -20433,6 +20445,7 @@ async def get_reconciliation_history_endpoint(
             },
             "loan_out":       {"$sum": "$amount"},
             "loan_comm_base": {"$sum": {"$ifNull": ["$vendor_commission_base_amount", 0]}},
+            "last_activity":  {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
         }},
     ]
 
@@ -20449,6 +20462,7 @@ async def get_reconciliation_history_endpoint(
                 "currency":  "$source_currency",
             },
             "settled": {"$sum": "$gross_amount"},
+            "last_activity": {"$max": {"$ifNull": ["$updated_at", "$created_at"]}},
         }},
     ]
 
@@ -20465,7 +20479,7 @@ async def get_reconciliation_history_endpoint(
         "dep_base": 0.0, "wth_base": 0.0, "comm_base": 0.0,
         "ie_in_base": 0.0, "ie_out_base": 0.0, "ie_comm_base": 0.0,
         "loan_in": 0.0, "loan_out": 0.0, "loan_comm_base": 0.0,
-        "settled": 0.0, "tx_count": 0,
+        "settled": 0.0, "tx_count": 0, "last_activity": "",
     })
 
     for r in vtx_res:
@@ -20475,6 +20489,7 @@ async def get_reconciliation_history_endpoint(
         d["wth_base"]  += r["wth_base"]
         d["comm_base"] += r["comm_base"]
         d["tx_count"]  += r["tx_count"]
+        d["last_activity"] = max(d["last_activity"], r.get("last_activity") or "")
 
     for r in ie_res:
         k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
@@ -20483,22 +20498,26 @@ async def get_reconciliation_history_endpoint(
         d["ie_out_base"]  += r["ie_out_base"]
         d["ie_comm_base"] += r["ie_comm_base"]
         d["tx_count"]     += r["ie_count"]
+        d["last_activity"] = max(d["last_activity"], r.get("last_activity") or "")
 
     for r in loan_in_res:
         k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
         d = vdata[k]
         d["loan_in"]        += r["loan_in"]
         d["loan_comm_base"] += r["loan_comm_base"]
+        d["last_activity"] = max(d["last_activity"], r.get("last_activity") or "")
 
     for r in loan_out_res:
         k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
         d = vdata[k]
         d["loan_out"]       += r["loan_out"]
         d["loan_comm_base"] += r.get("loan_comm_base", 0)
+        d["last_activity"] = max(d["last_activity"], r.get("last_activity") or "")
 
     for r in sett_res:
         k = (r["_id"]["vendor_id"], r["_id"]["date"], r["_id"].get("currency") or "USD")
         vdata[k]["settled"] += r["settled"]
+        vdata[k]["last_activity"] = max(vdata[k]["last_activity"], r.get("last_activity") or "")
 
     for (vid, date, currency), d in vdata.items():
         v    = vendor_map.get(vid, {})
@@ -20520,7 +20539,7 @@ async def get_reconciliation_history_endpoint(
             "net_amount":       net,
             "tx_count":         d["tx_count"],
             "statement":        stmt,
-            "status":           _stmt_status(stmt),
+            "status":           _row_status(stmt, d.get("last_activity")),
             "closing_balance":  0,
             "_opening_balance": 0.0,
         })
@@ -20548,9 +20567,9 @@ async def get_reconciliation_history_endpoint(
     rows.sort(key=lambda r: r["date"], reverse=True)
 
     summary = {
-        "treasury": {"done": 0, "pending": 0},
-        "psp":      {"done": 0, "pending": 0},
-        "exchanger":{"done": 0, "pending": 0},
+        "treasury": {"done": 0, "pending": 0, "re_reconcile": 0},
+        "psp":      {"done": 0, "pending": 0, "re_reconcile": 0},
+        "exchanger":{"done": 0, "pending": 0, "re_reconcile": 0},
     }
     for r in rows:
         t = r["account_type"]
