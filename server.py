@@ -4748,7 +4748,18 @@ async def get_psps(user: dict = Depends(require_listing_or_view(Modules.PSP))):
             balance_map[pid] -= (r["total_amount"] + r["total_wdr_extra"])
 
     for psp in psps:
-        psp["available_balance"] = round(balance_map.get(psp["psp_id"], 0.0), 2)
+        avail = round(balance_map.get(psp["psp_id"], 0.0), 2)
+        psp["available_balance"] = avail
+        # Provider balance: an anchored running account balance. When an opening_balance
+        # baseline is set, balance = opening + (movement since the baseline was captured).
+        # This "sums deposits / deducts withdrawals" from the baseline without re-counting
+        # history. Unanchored PSPs fall back to available_balance.
+        if psp.get("opening_balance") is not None:
+            psp["provider_balance"] = round(
+                psp.get("opening_balance", 0.0) + (avail - psp.get("opening_balance_ref", 0.0)), 2
+            )
+        else:
+            psp["provider_balance"] = avail
 
     # Strip sensitive fields for listing-only users
     if user.get("_listing_only"):
