@@ -5461,6 +5461,25 @@ async def get_psp_summary(
         withdrawal_extra_comm = sum(tx.get("psp_withdrawal_extra_commission", 0) or 0 for tx in withdrawal_txs)
         pending_amount = max(round(pending_amount_gross - reserve_from_pending - withdrawal_total - withdrawal_extra_comm, 2), 0)
 
+        # Anchored provider balance — uses the same available_balance definition as
+        # GET /psp (deposit net − withdrawal) so it matches the stored opening_balance_ref.
+        avail_balance = round(
+            sum(
+                (tx.get("amount", 0)
+                 - (tx.get("psp_commission_amount") or 0)
+                 - (tx.get("psp_extra_charges") or 0)
+                 - (tx.get("psp_extra_commission") or 0)
+                 - (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0))
+                for tx in pending_txs
+            )
+            - sum((tx.get("amount", 0) + (tx.get("psp_withdrawal_extra_commission") or 0)) for tx in withdrawal_txs),
+            2,
+        )
+        if psp.get("opening_balance") is not None:
+            provider_balance = round(psp.get("opening_balance", 0.0) + (avail_balance - psp.get("opening_balance_ref", 0.0)), 2)
+        else:
+            provider_balance = avail_balance
+
         # Total reserve held includes pending + settled unreleased
         total_reserve_held = reserve_from_pending
 
@@ -5488,6 +5507,8 @@ async def get_psp_summary(
             **psp,
             "pending_transactions_count": pending_count,
             "pending_amount": pending_amount,
+            "available_balance": avail_balance,
+            "provider_balance": provider_balance,
             "overdue_count": overdue_count,
             "total_reserve_fund_held": round(total_reserve_held, 2),
             "settlement_destination_name": dest["account_name"] if dest else "Unknown",
