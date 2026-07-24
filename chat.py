@@ -601,6 +601,58 @@ async def get_channel_messages(
     return messages
 
 
+@chat_router.get("/channels/activity")
+async def get_channel_activity(
+    page: int = 1,
+    page_size: int = 40,
+    channel_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    """Unified 'Activity' feed — top-level messages across every channel the user can
+    see (admins see all channels, everyone else sees channels they belong to), newest
+    first. Powers the Slack-style Activity tab. Optional channel_id narrows to one channel."""
+    if user.get("role") == "admin":
+        chan_filter: dict = {}
+    else:
+        chan_filter = {"members": user["user_id"]}
+    channels = await db.channels.find(
+        chan_filter, {"_id": 0, "channel_id": 1, "name": 1}
+    ).to_list(500)
+    name_by_id = {c["channel_id"]: c.get("name", "") for c in channels}
+
+    visible_ids = list(name_by_id.keys())
+    if channel_id:
+        visible_ids = [cid for cid in visible_ids if cid == channel_id]
+    if not visible_ids:
+        return {"items": [], "page": page, "page_size": page_size, "total": 0,
+                "total_pages": 1, "channels": []}
+
+    q = {"channel_id": {"$in": visible_ids}, "thread_root_id": None}
+    total = await db.channel_messages.count_documents(q)
+    skip = (page - 1) * page_size
+    msgs = (
+        await db.channel_messages.find(q, {"_id": 0})
+        .sort("created_at", -1)
+        .skip(skip)
+        .limit(page_size)
+        .to_list(page_size)
+    )
+    for m in msgs:
+        m["channel_name"] = name_by_id.get(m.get("channel_id"), "")
+
+    return {
+        "items": msgs,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": max(1, -(-total // page_size)),
+        "channels": [
+            {"channel_id": c["channel_id"], "name": c.get("name", "")}
+            for c in channels
+        ],
+    }
+
+
 @chat_router.post("/channels/{channel_id}/messages")
 async def send_channel_message(
     request: Request,
