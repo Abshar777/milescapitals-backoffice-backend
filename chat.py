@@ -1198,7 +1198,13 @@ async def tag_channel_message(
     msg = await db.channel_messages.find_one({"msg_id": msg_id, "channel_id": channel_id}, {"_id": 0})
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
-    tags = _toggle_tag(msg.get("tags") or {}, tag, user)
+    existing = msg.get("tags") or {}
+    # Only the person who ADDED a tag may remove/change it. Adding a brand-new tag stays
+    # open to any channel member. Legacy tags without a stored by_id remain editable.
+    cur = existing.get(tag)
+    if isinstance(cur, dict) and cur.get("by_id") and cur.get("by_id") != user["user_id"]:
+        raise HTTPException(status_code=403, detail=f"Only {cur.get('by') or 'the person who added it'} can change this tag")
+    tags = _toggle_tag(existing, tag, user)
     await db.channel_messages.update_one({"msg_id": msg_id}, {"$set": {"tags": tags}})
     # Broadcast to every member so the chips stay in sync live, but only the message
     # AUTHOR is notified (owner_id) — tagging is high-frequency, so the client fires a
