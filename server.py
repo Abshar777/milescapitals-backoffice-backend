@@ -11766,7 +11766,9 @@ async def _create_transaction_impl(
         "description": description,
         "reference": reference or f"REF{uuid.uuid4().hex[:8].upper()}",
         "crm_reference": crm_reference.strip() if crm_reference else None,
-        "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
+        # Withdrawals always use the creation date as their value-date (no back-dating);
+        # deposits keep their operator-supplied transaction_date.
+        "transaction_date": (now.strftime("%Y-%m-%d") if transaction_type == "withdrawal" else (transaction_date or now.strftime("%Y-%m-%d"))),
         "proof_image": proof_image_url,
         "proof_images": proof_image_urls,
         "created_by": user["user_id"],
@@ -13072,7 +13074,9 @@ async def create_transaction_request(
         "vendor_id": vendor_id,
         "reference": reference,
         "crm_reference": crm_reference.strip() if crm_reference else None,
-        "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
+        # Withdrawals always use the creation date as their value-date (no back-dating);
+        # deposits keep their operator-supplied transaction_date.
+        "transaction_date": (now.strftime("%Y-%m-%d") if transaction_type == "withdrawal" else (transaction_date or now.strftime("%Y-%m-%d"))),
         "description": description,
         "client_bank_name": client_bank_name,
         "client_bank_account_name": client_bank_account_name,
@@ -13227,7 +13231,9 @@ async def create_transaction_request(
             "description": description,
             "reference": reference or f"REF{uuid.uuid4().hex[:8].upper()}",
             "crm_reference": crm_reference.strip() if crm_reference else None,
-            "transaction_date": transaction_date or now.strftime("%Y-%m-%d"),
+            # Withdrawals always use the creation date as their value-date (no back-dating);
+        # deposits keep their operator-supplied transaction_date.
+        "transaction_date": (now.strftime("%Y-%m-%d") if transaction_type == "withdrawal" else (transaction_date or now.strftime("%Y-%m-%d"))),
             "client_tags": tx_client_tags,
             "transaction_tags": tx_transaction_tags,
             "proof_image": proof_url,
@@ -13598,7 +13604,8 @@ async def process_transaction_request(
         "description": req.get("description"),
         "reference": req.get("reference") or f"REF{uuid.uuid4().hex[:8].upper()}",
         "crm_reference": req.get("crm_reference"),
-        "transaction_date": req.get("transaction_date") or now.strftime("%Y-%m-%d"),
+        # Withdrawals always use the creation date as their value-date (no back-dating).
+        "transaction_date": (now.strftime("%Y-%m-%d") if req.get("transaction_type") == "withdrawal" else (req.get("transaction_date") or now.strftime("%Y-%m-%d"))),
         "client_tags": req.get("client_tags", []),
         "transaction_tags": req.get("transaction_tags", []),
         "proof_image": req.get("proof_image"),
