@@ -997,17 +997,17 @@ async def get_fx_rates() -> dict:
 def convert_to_usd(amount: float, currency: str) -> float:
     """Sync wrapper – uses whatever is in cache (or fallback)."""
     rates = _fx_cache.get("rates") or FALLBACK_RATES_TO_USD
-    rate = rates.get(currency.upper(), 1.0)
-    return round(amount * rate, 2)
+    rate = rates.get((currency or "USD").upper(), 1.0)
+    return round((amount or 0) * rate, 2)
 
 
 def convert_from_usd(amount: float, target_currency: str) -> float:
     """Convert USD amount to target currency."""
     rates = _fx_cache.get("rates") or FALLBACK_RATES_TO_USD
-    rate = rates.get(target_currency.upper(), 1.0)
+    rate = rates.get((target_currency or "USD").upper(), 1.0)
     if rate == 0:
         return amount
-    return round(amount / rate, 2)
+    return round((amount or 0) / rate, 2)
 
 
 def convert_currency(amount: float, from_currency: str, to_currency: str) -> float:
@@ -22496,6 +22496,30 @@ async def send_exchanger_notification(
 # ============== EMAIL SETTINGS & DAILY REPORTS ==============
 
 
+# India Standard Time is a fixed +05:30 offset (India observes no DST), so a plain
+# fixed-offset tzinfo is exact and dependency-free for report date-window math.
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+SCHEDULE_TZ = "Asia/Kolkata"  # string form accepted by APScheduler CronTrigger
+
+
+def _parse_report_time(value, default=(3, 0)):
+    """Parse a "HH:MM" report time into an (hour, minute) tuple.
+
+    Returns ``default`` when ``value`` is empty. Raises ``ValueError`` on any
+    malformed value so callers can reject/ignore it instead of letting it crash
+    the scheduler at startup.
+    """
+    if not value:
+        return default
+    parts = str(value).strip().split(":")
+    if len(parts) != 2:
+        raise ValueError(f"report_time must be 'HH:MM', got {value!r}")
+    hour, minute = int(parts[0]), int(parts[1])
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"report_time out of range: {value!r}")
+    return hour, minute
+
+
 class EmailSettingsUpdate(BaseModel):
     smtp_host: Optional[str] = None
     smtp_port: Optional[int] = None
@@ -22554,6 +22578,17 @@ async def update_email_settings(
 
     updates = {"updated_at": now.isoformat(), "updated_by": user["user_id"]}
 
+    # Validate report_time up-front so a malformed value can never be persisted
+    # (a bad value would otherwise poison the scheduler on the next restart).
+    if settings.report_time:
+        try:
+            _parse_report_time(settings.report_time)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="report_time must be in 'HH:MM' 24-hour format (00:00-23:59)",
+            )
+
     if settings.smtp_host is not None:
         updates["smtp_host"] = settings.smtp_host
     if settings.smtp_port is not None:
@@ -22580,9 +22615,15 @@ async def update_email_settings(
         updates["created_at"] = now.isoformat()
         await db.app_settings.insert_one(updates)
 
-    # Reschedule the daily report if time changed
+    # Reschedule the daily report if time changed. Never let a scheduling error
+    # bubble up and 500 the settings save (the settings are already persisted).
     if settings.report_time or settings.report_enabled is not None:
-        await reschedule_daily_report()
+        try:
+            await reschedule_daily_report()
+        except Exception as e:
+            logger.error(
+                f"Failed to reschedule daily report after settings update: {e}"
+            )
 
     await log_activity(request, user, "edit", "settings", "Updated email settings")
 
@@ -22726,8 +22767,12 @@ async def send_email(
     message.attach(html_part)
 
     # Determine TLS settings based on port
-    use_tls = smtp_port in [587, 25]  # STARTTLS ports
     use_ssl = smtp_port == 465  # Direct SSL port
+    # 587/25 are the standard STARTTLS submission ports -> require STARTTLS.
+    # Any other port -> opportunistic (None): use STARTTLS if the server offers
+    # it, rather than forcing a plaintext session (which leaks credentials and
+    # is rejected by providers that mandate STARTTLS on custom ports like 2525).
+    start_tls = True if smtp_port in (587, 25) else None
 
     if use_ssl:
         await aiosmtplib.send(
@@ -22743,7 +22788,7 @@ async def send_email(
             message,
             hostname=smtp_host,
             port=smtp_port,
-            start_tls=use_tls,
+            start_tls=start_tls,
             username=smtp_email,
             password=smtp_password,
         )
@@ -22751,9 +22796,13 @@ async def send_email(
 
 async def generate_reconciliation_section_html():
     """Generate reconciliation section for daily report"""
-    now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    tomorrow = today_start + timedelta(days=1)
+    # Window on the IST business day. created_at/date fields are stored as UTC ISO
+    # strings, so convert the IST midnight boundaries to UTC for the queries.
+    now_ist = datetime.now(IST_TZ)
+    today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    now = now_ist.astimezone(timezone.utc)
+    today_start = today_start_ist.astimezone(timezone.utc)
+    tomorrow = (today_start_ist + timedelta(days=1)).astimezone(timezone.utc)
 
     # Get today's reconciliation stats
     today_items = await db.reconciliation_items.find(
@@ -22884,11 +22933,17 @@ async def generate_reconciliation_section_html():
 
 async def generate_daily_report_html():
     """Generate comprehensive daily report HTML"""
-    now = datetime.now(timezone.utc)
+    # Window on the IST business day, not UTC midnight. created_at values are
+    # stored as UTC ISO strings, so convert the IST day boundaries to UTC for the
+    # queries; the human-facing date label uses the IST calendar date.
+    now_ist = datetime.now(IST_TZ)
+    today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start_ist = today_start_ist - timedelta(days=1)
+    now = now_ist.astimezone(timezone.utc)
     yesterday = now - timedelta(days=1)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_date = now.strftime("%Y-%m-%d")
+    today_start = today_start_ist.astimezone(timezone.utc)
+    yesterday_start = yesterday_start_ist.astimezone(timezone.utc)
+    today_date = now_ist.strftime("%Y-%m-%d")
 
     # Fetch data for report
     # Today's transactions
@@ -23341,7 +23396,7 @@ async def generate_daily_report_html():
                     <h1>Miles Capitals</h1>
                     <span class="header-badge">DAILY REPORT</span>
                 </div>
-                <p>Daily Business Report &mdash; {now.strftime('%B %d, %Y')}</p>
+                <p>Daily Business Report &mdash; {now_ist.strftime('%B %d, %Y')}</p>
             </div>
             <div class="accent-bar"></div>
             
@@ -23516,7 +23571,7 @@ async def generate_daily_report_html():
             
             <div class="footer">
                 <p>Miles Capitals &mdash; Daily Business Report</p>
-                <p>Generated at {now.strftime('%B %d, %Y at %H:%M UTC')} &bull; This is an automated message.</p>
+                <p>Generated at {now_ist.strftime('%B %d, %Y at %H:%M IST')} &bull; This is an automated message.</p>
             </div>
         </div>
     </body>
@@ -23537,7 +23592,13 @@ async def send_daily_report():
         )
         return
 
+    # Compute the dedup key up-front so the except handler can always reference it
+    # (it used to be assigned inside the try, so an early failure raised an
+    # UnboundLocalError that masked the real error). Keyed on the IST business day.
+    today_key = f"daily_report_{datetime.now(IST_TZ).strftime('%Y-%m-%d')}"
+
     async with _daily_report_lock:
+        claimed = False
         try:
             settings = await db.app_settings.find_one(
                 {"setting_type": "email"}, {"_id": 0}
@@ -23556,7 +23617,6 @@ async def send_daily_report():
                 return
 
             # Atomic dedup: claim the send slot for today - only one worker wins
-            today_key = f"daily_report_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
             existing = await db.email_logs.find_one_and_update(
                 {"log_id": today_key, "type": "daily_report"},
                 {
@@ -23575,23 +23635,48 @@ async def send_daily_report():
                     "Daily report already sent/claimed today - skipping duplicate"
                 )
                 return
+            claimed = True
+
+            filtered_directors = await _filter_emails_by_preference(settings["director_emails"])
+            if not filtered_directors:
+                # Nobody opted in -> nothing was sent. Release the slot so a later
+                # preference fix + retrigger can still deliver today's report, and
+                # never record this as a successful "sent".
+                logger.warning(
+                    "Daily report: no recipients with email notifications enabled - not sent"
+                )
+                await db.email_logs.delete_one({"log_id": today_key})
+                return
 
             html_content = await generate_daily_report_html()
 
-            filtered_directors = await _filter_emails_by_preference(settings["director_emails"])
-            if filtered_directors:
-                await send_email(
-                    to_emails=filtered_directors,
-                    subject=f"Miles Capitals - Daily Report ({datetime.now(timezone.utc).strftime('%Y-%m-%d')})",
-                    html_content=html_content,
-                    smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
-                    smtp_port=settings.get("smtp_port", 587),
-                    smtp_email=settings["smtp_email"],
-                    smtp_password=settings["smtp_password"],
-                    smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"]),
-                )
+            # Bounded retry so a transient SMTP blip doesn't silently drop the day.
+            last_err = None
+            for attempt in range(1, 4):
+                try:
+                    await send_email(
+                        to_emails=filtered_directors,
+                        subject=f"Miles Capitals - Daily Report ({datetime.now(IST_TZ).strftime('%Y-%m-%d')})",
+                        html_content=html_content,
+                        smtp_host=settings.get("smtp_host", "smtp.gmail.com"),
+                        smtp_port=settings.get("smtp_port", 587),
+                        smtp_email=settings["smtp_email"],
+                        smtp_password=settings["smtp_password"],
+                        smtp_from_email=settings.get("smtp_from_email", settings["smtp_email"]),
+                    )
+                    last_err = None
+                    break
+                except Exception as se:
+                    last_err = se
+                    logger.warning(
+                        f"Daily report send attempt {attempt}/3 failed: {se}"
+                    )
+                    if attempt < 3:
+                        await asyncio.sleep(5 * attempt)
+            if last_err is not None:
+                raise last_err
 
-            # Mark claimed slot as sent
+            # Mark the slot sent only after an email actually went out.
             await db.email_logs.update_one(
                 {"log_id": today_key},
                 {
@@ -23604,21 +23689,15 @@ async def send_daily_report():
             )
 
             logger.info(
-                f"Daily report sent to {len(settings['director_emails'])} directors"
+                f"Daily report sent to {len(filtered_directors)} recipients"
             )
 
         except Exception as e:
             logger.error(f"Failed to send daily report: {e}")
-            await db.email_logs.update_one(
-                {"log_id": today_key},
-                {
-                    "$set": {
-                        "status": "failed",
-                        "error": str(e),
-                        "attempted_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                },
-            )
+            if claimed:
+                # Release today's slot so a transient failure doesn't permanently
+                # block delivery - a later retrigger/restart can re-attempt.
+                await db.email_logs.delete_one({"log_id": today_key})
 
 
 @api_router.post("/reports/send-now")
@@ -23695,24 +23774,32 @@ async def reschedule_daily_report():
         return
 
     report_time = settings.get("report_time", "03:00")
-    hour, minute = map(int, report_time.split(":"))
+    try:
+        hour, minute = _parse_report_time(report_time, default=(3, 0))
+    except ValueError as e:
+        logger.error(
+            f"Invalid report_time {report_time!r} - falling back to 03:00 IST: {e}"
+        )
+        hour, minute = 3, 0
 
     scheduler.add_job(
         send_daily_report,
-        CronTrigger(hour=hour, minute=minute),
+        CronTrigger(hour=hour, minute=minute, timezone=SCHEDULE_TZ),
         id="daily_report",
         replace_existing=True,
+        misfire_grace_time=3600,
     )
 
-    logger.info(f"Daily report scheduled for {report_time}")
+    logger.info(f"Daily report scheduled for {hour:02d}:{minute:02d} {SCHEDULE_TZ}")
 
     # Schedule monthly report (last day of month at same time)
     if settings.get("monthly_report_enabled"):
         scheduler.add_job(
             send_monthly_report,
-            CronTrigger(day="last", hour=hour, minute=minute),
+            CronTrigger(day="last", hour=hour, minute=minute, timezone=SCHEDULE_TZ),
             id="monthly_report",
             replace_existing=True,
+            misfire_grace_time=3600,
         )
         logger.info("Monthly report scheduled for last day of each month")
     else:
@@ -26542,7 +26629,9 @@ async def startup_db_indexes():
     except Exception as e:
         logger.error(f"Failed to initialize default roles: {e}")
 
-    # Start scheduler and schedule daily report
+    # Start the scheduler. Each job below is registered in its OWN try/except so a
+    # single failing registration (e.g. a bad report_time) can no longer cascade
+    # and silently take down the backups / audit scan / channel setup.
     try:
         global _scheduler_started
         # Prevent duplicate scheduler starts during hot-reload
@@ -26550,33 +26639,49 @@ async def startup_db_indexes():
             scheduler.shutdown(wait=False)
         scheduler.start()
         _scheduler_started = True
-        await reschedule_daily_report()
-        await reschedule_audit_scan()
-        # Telegram backup — hourly (top of every hour)
-        scheduler.add_job(
-            _run_backup_job,
-            CronTrigger(minute=0),
-            id="db_backup_telegram",
-            kwargs={"to_r2": False, "to_telegram": True},
-            replace_existing=True,
-        )
-        # R2 backup — 3×/day at 06:00 / 14:00 / 22:00 IST
-        scheduler.add_job(
-            _run_backup_job,
-            CronTrigger(hour="6,14,22", minute=0, timezone="Asia/Kolkata"),
-            id="db_backup_r2",
-            kwargs={"to_r2": True, "to_telegram": False},
-            replace_existing=True,
-        )
         logger.info("Scheduler started successfully")
-        # Ensure the #deposite_only / #withdraw_only channels exist (super-admins as members)
-        try:
-            from chat import ensure_tx_channels
-            await ensure_tx_channels()
-        except Exception as _e:
-            logger.error(f"ensure_tx_channels failed: {_e}")
     except Exception as e:
         logger.error(f"Failed to start scheduler: {e}")
+
+    if _scheduler_started:
+        for _label, _fn in (
+            ("daily/monthly report", reschedule_daily_report),
+            ("audit scan", reschedule_audit_scan),
+        ):
+            try:
+                await _fn()
+            except Exception as e:
+                logger.error(f"Failed to schedule {_label}: {e}")
+        # Telegram backup — hourly (top of every hour)
+        try:
+            scheduler.add_job(
+                _run_backup_job,
+                CronTrigger(minute=0),
+                id="db_backup_telegram",
+                kwargs={"to_r2": False, "to_telegram": True},
+                replace_existing=True,
+            )
+        except Exception as e:
+            logger.error(f"Failed to schedule Telegram backup: {e}")
+        # R2 backup — 3×/day at 06:00 / 14:00 / 22:00 IST
+        try:
+            scheduler.add_job(
+                _run_backup_job,
+                CronTrigger(hour="6,14,22", minute=0, timezone="Asia/Kolkata"),
+                id="db_backup_r2",
+                kwargs={"to_r2": True, "to_telegram": False},
+                replace_existing=True,
+            )
+        except Exception as e:
+            logger.error(f"Failed to schedule R2 backup: {e}")
+
+    # Ensure the #deposite_only / #withdraw_only channels exist — independent of
+    # the scheduler, so run it regardless of the scheduler's outcome.
+    try:
+        from chat import ensure_tx_channels
+        await ensure_tx_channels()
+    except Exception as _e:
+        logger.error(f"ensure_tx_channels failed: {_e}")
 
     # Warm FX rate cache
     try:
