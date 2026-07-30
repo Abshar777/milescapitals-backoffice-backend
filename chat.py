@@ -12,7 +12,7 @@ import asyncio
 import jwt as _jwt
 import uuid
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -21,6 +21,11 @@ from fastapi.responses import RedirectResponse, Response
 from server import db, get_current_user, upload_to_r2, JWT_SECRET, JWT_ALGORITHM
 
 chat_router = APIRouter()
+
+# Defined locally rather than imported from server — server.py imports this module
+# (`from chat import chat_router`) long before it defines its own IST_TZ constant, so
+# importing it here would be a circular-import failure at server startup.
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -577,28 +582,57 @@ async def get_channel_messages(
     channel_id: str,
     page: int = 1,
     page_size: int = 200,
+    date_from: Optional[str] = None,  # YYYY-MM-DD, IST calendar day (inclusive)
+    date_to: Optional[str] = None,    # YYYY-MM-DD, IST calendar day (inclusive)
     user: dict = Depends(get_current_user),
 ):
-    """Get messages for a channel (top-level only) — newest window first."""
+    """Get messages for a channel (top-level only) — newest window first, paginated.
+
+    Without date_from/date_to, page/page_size page back through the full history.
+    With date_from/date_to, the same pagination applies WITHIN that date range (the
+    range is not silently capped at one page), since created_at is stored as UTC but
+    the range is expressed in IST calendar days (matching what's shown in the UI).
+    """
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
     if user["user_id"] not in channel.get("members", []):
         raise HTTPException(status_code=403, detail="Not a member of this channel")
 
+    query = {"channel_id": channel_id, "thread_root_id": None}
+    if date_from or date_to:
+        created_range = {}
+        if date_from:
+            try:
+                start_ist = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=IST_TZ)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="date_from must be YYYY-MM-DD")
+            created_range["$gte"] = start_ist.astimezone(timezone.utc).isoformat()
+        if date_to:
+            try:
+                end_ist = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=IST_TZ) + timedelta(days=1)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="date_to must be YYYY-MM-DD")
+            created_range["$lt"] = end_ist.astimezone(timezone.utc).isoformat()
+        query["created_at"] = created_range
+
+    total = await db.channel_messages.count_documents(query)
     skip = (page - 1) * page_size
     # Newest window first (reactions do NOT reorder messages); reverse to ascending for display.
     messages = (
-        await db.channel_messages.find(
-            {"channel_id": channel_id, "thread_root_id": None},
-            {"_id": 0},
-        )
+        await db.channel_messages.find(query, {"_id": 0})
         .sort("created_at", -1)
         .skip(skip)
         .to_list(page_size)
     )
     messages.reverse()
-    return messages
+    return {
+        "items": messages,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "has_more": skip + len(messages) < total,
+    }
 
 
 @chat_router.get("/channels/activity")
