@@ -9,6 +9,7 @@ reference is safe.
 """
 
 import asyncio
+import json
 import jwt as _jwt
 import uuid
 import base64
@@ -26,6 +27,25 @@ chat_router = APIRouter()
 # (`from chat import chat_router`) long before it defines its own IST_TZ constant, so
 # importing it here would be a circular-import failure at server startup.
 IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def _parse_mentions(mentions_json):
+    """Parses the client-sent mentions payload (a JSON array of {user_id, name})
+    into a clean list, dropping anything malformed rather than failing the send —
+    a mention is metadata on the message, not something that should ever block it."""
+    if not mentions_json:
+        return []
+    try:
+        raw = json.loads(mentions_json)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    cleaned = []
+    for m in raw:
+        if isinstance(m, dict) and m.get("user_id") and m.get("name"):
+            cleaned.append({"user_id": str(m["user_id"]), "name": str(m["name"])})
+    return cleaned
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -187,6 +207,7 @@ async def send_user_message(
     recipient_id: str = Form(...),
     content: str = Form(""),
     attachment: Optional[UploadFile] = File(None),
+    mentions: str = Form(""),
     user: dict = Depends(get_current_user),
 ):
     """Send a message to another user, optionally with a file attachment"""
@@ -201,6 +222,10 @@ async def send_user_message(
 
     if not content.strip() and not attachment:
         raise HTTPException(status_code=400, detail="Message content or attachment is required")
+
+    # DMs can mention anyone (e.g. "ask @manager about this"), not just the other
+    # party in the conversation - no membership scope to validate against here.
+    mentioned = _parse_mentions(mentions)
 
     message_id = f"msg_{uuid.uuid4().hex[:12]}"
 
@@ -229,6 +254,7 @@ async def send_user_message(
         "recipient_id": recipient_id,
         "recipient_name": recipient.get("name", "Unknown"),
         "content": content,
+        "mentions": mentioned,
         "attachment": (
             {
                 "filename": attachment_data["filename"],
@@ -693,6 +719,7 @@ async def send_channel_message(
     channel_id: str,
     content: str = Form(""),
     files: List[UploadFile] = File(default=[]),
+    mentions: str = Form(""),
     user: dict = Depends(get_current_user),
 ):
     """Send a message with optional multiple file attachments to a channel"""
@@ -704,6 +731,10 @@ async def send_channel_message(
 
     if not content.strip() and not files:
         raise HTTPException(status_code=400, detail="Message or attachment required")
+
+    # Only trust mentions of people who are actually in this channel.
+    member_ids = set(channel.get("members", []))
+    mentioned = [m for m in _parse_mentions(mentions) if m["user_id"] in member_ids]
 
     now = datetime.now(timezone.utc).isoformat()
     msg_id = f"cmsg_{uuid.uuid4().hex[:12]}"
@@ -732,6 +763,7 @@ async def send_channel_message(
         "sender_name": user["name"],
         "content": content,
         "attachments": attachments,
+        "mentions": mentioned,
         "thread_root_id": None,
         "reply_count": 0,
         "created_at": now,
@@ -914,6 +946,7 @@ async def send_thread_reply(
     msg_id: str,
     content: str = Form(""),
     files: List[UploadFile] = File(default=[]),
+    mentions: str = Form(""),
     user: dict = Depends(get_current_user),
 ):
     """Send a reply in a message thread"""
@@ -929,6 +962,10 @@ async def send_thread_reply(
 
     if not content.strip() and not files:
         raise HTTPException(status_code=400, detail="Reply content or attachment required")
+
+    # Only trust mentions of people who are actually in this channel.
+    member_ids = set(channel.get("members", []))
+    mentioned = [m for m in _parse_mentions(mentions) if m["user_id"] in member_ids]
 
     now = datetime.now(timezone.utc).isoformat()
     reply_id = f"cmsg_{uuid.uuid4().hex[:12]}"
@@ -957,6 +994,7 @@ async def send_thread_reply(
         "sender_name": user["name"],
         "content": content,
         "attachments": attachments,
+        "mentions": mentioned,
         "thread_root_id": msg_id,
         "created_at": now,
     }
