@@ -1049,6 +1049,9 @@ class TreasuryAccountUpdate(BaseModel):
     usdt_address: Optional[str] = None
     usdt_network: Optional[str] = None
     usdt_notes: Optional[str] = None
+    # Blurred-by-default on the Treasury page and excluded from totals/reconciliation
+    # until clicked to reveal - not a real access restriction, just a display default.
+    is_hidden: Optional[bool] = None
 
 
 class TransactionType:
@@ -3332,6 +3335,7 @@ async def create_treasury_account(
         "balance": account_data.opening_balance,
         "opening_balance": account_data.opening_balance,
         "status": TreasuryAccountStatus.ACTIVE,
+        "is_hidden": False,
         "created_at": now.isoformat(),
         "updated_at": now.isoformat(),
     }
