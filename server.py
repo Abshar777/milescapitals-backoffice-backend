@@ -206,6 +206,7 @@ class Modules:
     APPROVALS = "approvals"
     TRANSACTION_REQUESTS = "transaction_requests"
     REINSTATE = "reinstate"
+    PARTNERS = "partners"
 
 
 # Standard actions
@@ -242,6 +243,7 @@ ALL_MODULES = [
     Modules.APPROVALS,
     Modules.TRANSACTION_REQUESTS,
     Modules.REINSTATE,
+    Modules.PARTNERS,
 ]
 
 # All actions list
@@ -1371,6 +1373,7 @@ DEFAULT_ROLES = [
             Modules.EXCHANGERS: ALL_ACTIONS.copy(),
             Modules.RECONCILIATION: [Actions.VIEW, Actions.CREATE],
             Modules.REPORTS: [Actions.VIEW, Actions.EXPORT],
+            Modules.PARTNERS: [Actions.VIEW, Actions.EXPORT],
             Modules.SETTINGS: [Actions.VIEW],
         },
     },
@@ -1387,6 +1390,7 @@ DEFAULT_ROLES = [
             Modules.TREASURY: [Actions.VIEW],
             Modules.INCOME_EXPENSES: [Actions.VIEW],
             Modules.REPORTS: [Actions.VIEW, Actions.EXPORT],
+            Modules.PARTNERS: [Actions.VIEW],
         },
     },
     {
@@ -1414,6 +1418,7 @@ DEFAULT_ROLES = [
             Modules.CLIENTS: [Actions.VIEW],
             Modules.TRANSACTIONS: [Actions.VIEW],
             Modules.REPORTS: [Actions.VIEW],
+            Modules.PARTNERS: [Actions.VIEW],
         },
     },
 ]
@@ -18620,6 +18625,128 @@ async def get_client_balances_report(
             "total_withdrawals_usd": total_withdrawals,
             "total_net_balance": total_deposits - total_withdrawals,
             "active_clients": len([r for r in results if r["transaction_count"] > 0]),
+        },
+    }
+
+
+@api_router.get("/reports/partner-summary")
+async def get_partner_summary_report(
+    user: dict = Depends(require_permission(Modules.PARTNERS, Actions.VIEW)),
+):
+    """Per-partner (client tag) deposit/withdrawal summary.
+
+    A "partner" is a client tag (e.g. CLT, Delta Dxb) — transactions carry a
+    denormalized client_tags array, kept in sync whenever a client's tags
+    change, so this aggregates directly off transactions rather than joining
+    against clients. Scoped to whatever client tags the requesting user's
+    role is allowed to see — same allowed_client_tags restriction the
+    transactions list endpoint already applies, so a user restricted to one
+    partner never sees another partner's totals or even its existence here.
+    """
+    all_tags = await db.client_tags.find({}, {"_id": 0}).to_list(None)
+
+    if user.get("role") != "admin":
+        user_role = await get_role_for_user(user)
+        allowed_client_tag_ids = user_role.get("allowed_client_tags") if user_role else None
+        if allowed_client_tag_ids:
+            real_tag_ids = [t for t in allowed_client_tag_ids if t != "__untagged__"]
+            all_tags = [t for t in all_tags if t["tag_id"] in real_tag_ids]
+
+    tag_names = [t["name"] for t in all_tags]
+
+    results = []
+    total_deposits = 0.0
+    total_withdrawals = 0.0
+    if tag_names:
+        pipeline = [
+            {
+                "$match": {
+                    "status": {"$in": ["approved", "completed"]},
+                    "client_tags": {"$in": tag_names},
+                }
+            },
+            {"$unwind": "$client_tags"},
+            {"$match": {"client_tags": {"$in": tag_names}}},
+            {
+                "$group": {
+                    "_id": {
+                        "tag": "$client_tags",
+                        "type": "$transaction_type",
+                        "currency": {"$ifNull": ["$base_currency", "$currency"]},
+                    },
+                    "total_base": {"$sum": {"$ifNull": ["$base_amount", "$amount"]}},
+                    "total_usd": {"$sum": "$amount"},
+                    "count": {"$sum": 1},
+                }
+            },
+        ]
+        tx_data = await db.transactions.aggregate(pipeline).to_list(100000)
+
+        tag_tx_map = {}
+        for item in tx_data:
+            bucket = tag_tx_map.setdefault(
+                item["_id"]["tag"],
+                {
+                    "deposits_usd": 0,
+                    "withdrawals_usd": 0,
+                    "deposit_count": 0,
+                    "withdrawal_count": 0,
+                    "by_currency": {},
+                },
+            )
+            tx_type = item["_id"]["type"]
+            currency = item["_id"]["currency"] or "USD"
+            cur_bucket = bucket["by_currency"].setdefault(
+                currency, {"deposits": 0, "withdrawals": 0}
+            )
+            if tx_type == "deposit":
+                bucket["deposits_usd"] += item["total_usd"]
+                bucket["deposit_count"] += item["count"]
+                cur_bucket["deposits"] += item["total_base"]
+            elif tx_type == "withdrawal":
+                bucket["withdrawals_usd"] += item["total_usd"]
+                bucket["withdrawal_count"] += item["count"]
+                cur_bucket["withdrawals"] += item["total_base"]
+
+        for tag in all_tags:
+            info = tag_tx_map.get(
+                tag["name"],
+                {
+                    "deposits_usd": 0,
+                    "withdrawals_usd": 0,
+                    "deposit_count": 0,
+                    "withdrawal_count": 0,
+                    "by_currency": {},
+                },
+            )
+            net = info["deposits_usd"] - info["withdrawals_usd"]
+            results.append(
+                {
+                    "tag_id": tag["tag_id"],
+                    "name": tag["name"],
+                    "color": tag.get("color"),
+                    "total_deposits_usd": info["deposits_usd"],
+                    "total_withdrawals_usd": info["withdrawals_usd"],
+                    "net": net,
+                    "deposit_count": info["deposit_count"],
+                    "withdrawal_count": info["withdrawal_count"],
+                    "transaction_count": info["deposit_count"] + info["withdrawal_count"],
+                    "by_currency": info["by_currency"],
+                }
+            )
+
+        results.sort(key=lambda r: r["transaction_count"], reverse=True)
+        total_deposits = sum(r["total_deposits_usd"] for r in results)
+        total_withdrawals = sum(r["total_withdrawals_usd"] for r in results)
+
+    return {
+        "partners": results,
+        "summary": {
+            "total_partners": len(results),
+            "total_deposits_usd": total_deposits,
+            "total_withdrawals_usd": total_withdrawals,
+            "total_net": total_deposits - total_withdrawals,
+            "active_partners": len([r for r in results if r["transaction_count"] > 0]),
         },
     }
 
