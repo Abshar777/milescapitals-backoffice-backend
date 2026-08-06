@@ -1056,30 +1056,6 @@ class TreasuryAccountUpdate(BaseModel):
     is_hidden: Optional[bool] = None
 
 
-# A partner treasury account is a simple, manually-tracked account scoped to one
-# client tag ("partner") - a completely separate ledger from db.treasury_accounts,
-# with no shared balance, no transfer machinery, and no effect on real deposits/
-# withdrawals. It exists purely as money-tracking that belongs to the partner.
-class PartnerTreasuryAccountCreate(BaseModel):
-    tag_id: str
-    account_name: str
-    bank_name: Optional[str] = None
-    account_number: Optional[str] = None
-    currency: str = "USD"
-    balance: float = 0.0
-    description: Optional[str] = None
-
-
-class PartnerTreasuryAccountUpdate(BaseModel):
-    account_name: Optional[str] = None
-    bank_name: Optional[str] = None
-    account_number: Optional[str] = None
-    currency: Optional[str] = None
-    balance: Optional[float] = None
-    description: Optional[str] = None
-    status: Optional[str] = None
-
-
 class TransactionType:
     DEPOSIT = "deposit"
     WITHDRAWAL = "withdrawal"
@@ -18799,100 +18775,137 @@ async def _partner_treasury_check_tag_access(user: dict, tag_id: str):
             raise HTTPException(status_code=403, detail="Not permitted for this partner")
 
 
+_PARTNER_TREASURY_DEST_LABELS = [
+    ("treasury", "Treasury"),
+    ("vendor", "Exchanger"),
+    ("psp", "PSP"),
+    ("bank", "Bank"),
+    ("usdt", "USDT"),
+]
+
+
 @api_router.get("/partner-treasury")
-async def get_partner_treasury_accounts(
+async def get_partner_treasury_summary(
     tag_id: str,
     user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.VIEW)),
 ):
-    """List a single partner's own treasury accounts - a ledger scoped to one
-    client tag, entirely separate from db.treasury_accounts (the real company
-    treasury). No shared balance, no transfers - just manually-tracked accounts
-    that belong to the partner."""
+    """Read-only, computed breakdown of one partner's (client tag's) transactions
+    by destination - real Treasury accounts, Exchangers, PSPs, Bank transfers, and
+    USDT accounts - each showing the net amount (deposits - withdrawals) actually
+    moved there. This has no relation to db.treasury_accounts' real balances and no
+    effect on them - purely a live aggregation over db.transactions, scoped the same
+    way the transactions list and partner-summary report already are."""
     await _partner_treasury_check_tag_access(user, tag_id)
-    accounts = (
-        await db.partner_treasury_accounts.find({"tag_id": tag_id}, {"_id": 0})
-        .sort("created_at", -1)
-        .to_list(500)
-    )
-    return {
-        "items": accounts,
-        "total_balance": sum(a.get("balance", 0) for a in accounts),
-    }
-
-
-@api_router.post("/partner-treasury")
-async def create_partner_treasury_account(
-    account_data: PartnerTreasuryAccountCreate,
-    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.CREATE)),
-):
-    await _partner_treasury_check_tag_access(user, account_data.tag_id)
-    tag = await db.client_tags.find_one({"tag_id": account_data.tag_id}, {"_id": 0})
+    tag = await db.client_tags.find_one({"tag_id": tag_id}, {"_id": 0})
     if not tag:
         raise HTTPException(status_code=404, detail="Partner tag not found")
+    tag_name = tag["name"]
 
-    account_id = f"ptreasury_{uuid.uuid4().hex[:12]}"
-    now = datetime.now(timezone.utc).isoformat()
-    account_doc = {
-        "account_id": account_id,
-        "tag_id": account_data.tag_id,
-        "tag_name": tag["name"],
-        "account_name": account_data.account_name,
-        "bank_name": account_data.bank_name,
-        "account_number": account_data.account_number,
-        "currency": account_data.currency,
-        "balance": account_data.balance,
-        "opening_balance": account_data.balance,
-        "description": account_data.description,
-        "status": "active",
-        "created_at": now,
-        "updated_at": now,
+    known_types = [dt for dt, _ in _PARTNER_TREASURY_DEST_LABELS]
+    pipeline = [
+        {"$match": {"status": {"$in": ["approved", "completed"]}, "client_tags": tag_name}},
+        {
+            "$group": {
+                "_id": {
+                    "destination_type": {
+                        "$cond": [
+                            {"$in": ["$destination_type", known_types]},
+                            "$destination_type",
+                            "bank",
+                        ]
+                    },
+                    "entity_id": {
+                        "$switch": {
+                            "branches": [
+                                {
+                                    "case": {"$in": ["$destination_type", ["treasury", "usdt"]]},
+                                    "then": "$destination_account_id",
+                                },
+                                {"case": {"$eq": ["$destination_type", "psp"]}, "then": "$psp_id"},
+                                {"case": {"$eq": ["$destination_type", "vendor"]}, "then": "$vendor_id"},
+                            ],
+                            "default": "bank",
+                        }
+                    },
+                },
+                "deposits_usd": {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]}, "$amount", 0]}},
+                "withdrawals_usd": {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]}, "$amount", 0]}},
+                "deposit_count": {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]}, 1, 0]}},
+                "withdrawal_count": {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]}, 1, 0]}},
+            }
+        },
+    ]
+    rows = await db.transactions.aggregate(pipeline).to_list(10000)
+
+    treasury_ids, psp_ids, vendor_ids = set(), set(), set()
+    for r in rows:
+        dt, eid = r["_id"]["destination_type"], r["_id"]["entity_id"]
+        if not eid:
+            continue
+        if dt in ("treasury", "usdt"):
+            treasury_ids.add(eid)
+        elif dt == "psp":
+            psp_ids.add(eid)
+        elif dt == "vendor":
+            vendor_ids.add(eid)
+
+    treasury_map, psps_map, vendors_map = {}, {}, {}
+    if treasury_ids:
+        docs = await db.treasury_accounts.find(
+            {"account_id": {"$in": list(treasury_ids)}}, {"_id": 0, "account_id": 1, "account_name": 1}
+        ).to_list(len(treasury_ids))
+        treasury_map = {d["account_id"]: d["account_name"] for d in docs}
+    if psp_ids:
+        docs = await db.psps.find(
+            {"psp_id": {"$in": list(psp_ids)}}, {"_id": 0, "psp_id": 1, "psp_name": 1}
+        ).to_list(len(psp_ids))
+        psps_map = {d["psp_id"]: d["psp_name"] for d in docs}
+    if vendor_ids:
+        docs = await db.vendors.find(
+            {"vendor_id": {"$in": list(vendor_ids)}}, {"_id": 0, "vendor_id": 1, "vendor_name": 1}
+        ).to_list(len(vendor_ids))
+        vendors_map = {d["vendor_id"]: d["vendor_name"] for d in docs}
+
+    grouped = {dt: [] for dt, _ in _PARTNER_TREASURY_DEST_LABELS}
+    for r in rows:
+        dt, eid = r["_id"]["destination_type"], r["_id"]["entity_id"]
+        if dt in ("treasury", "usdt"):
+            name = treasury_map.get(eid) or "Unknown Account"
+        elif dt == "psp":
+            name = psps_map.get(eid) or "Unknown PSP"
+        elif dt == "vendor":
+            name = vendors_map.get(eid) or "Unknown Exchanger"
+        else:
+            name = "Client Bank Transfers"
+        deposits = r["deposits_usd"]
+        withdrawals = r["withdrawals_usd"]
+        grouped[dt].append(
+            {
+                "key": eid or "bank",
+                "name": name,
+                "deposits_usd": deposits,
+                "withdrawals_usd": withdrawals,
+                "net_usd": deposits - withdrawals,
+                "deposit_count": r["deposit_count"],
+                "withdrawal_count": r["withdrawal_count"],
+                "count": r["deposit_count"] + r["withdrawal_count"],
+            }
+        )
+
+    groups = []
+    grand_total = 0.0
+    for dt, label in _PARTNER_TREASURY_DEST_LABELS:
+        entries = sorted(grouped[dt], key=lambda e: e["count"], reverse=True)
+        subtotal = sum(e["net_usd"] for e in entries)
+        grand_total += subtotal
+        groups.append({"destination_type": dt, "label": label, "entries": entries, "net_usd": subtotal})
+
+    return {
+        "tag_id": tag_id,
+        "tag_name": tag_name,
+        "groups": groups,
+        "grand_total_net_usd": grand_total,
     }
-    await db.partner_treasury_accounts.insert_one(account_doc)
-    return await db.partner_treasury_accounts.find_one(
-        {"account_id": account_id}, {"_id": 0}
-    )
-
-
-@api_router.put("/partner-treasury/{account_id}")
-async def update_partner_treasury_account(
-    account_id: str,
-    update_data: PartnerTreasuryAccountUpdate,
-    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.EDIT)),
-):
-    existing = await db.partner_treasury_accounts.find_one(
-        {"account_id": account_id}, {"_id": 0}
-    )
-    if not existing:
-        raise HTTPException(status_code=404, detail="Partner treasury account not found")
-    await _partner_treasury_check_tag_access(user, existing["tag_id"])
-
-    updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
-    if not updates:
-        raise HTTPException(status_code=400, detail="No updates provided")
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-    await db.partner_treasury_accounts.update_one(
-        {"account_id": account_id}, {"$set": updates}
-    )
-    return await db.partner_treasury_accounts.find_one(
-        {"account_id": account_id}, {"_id": 0}
-    )
-
-
-@api_router.delete("/partner-treasury/{account_id}")
-async def delete_partner_treasury_account(
-    account_id: str,
-    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.DELETE)),
-):
-    existing = await db.partner_treasury_accounts.find_one(
-        {"account_id": account_id}, {"_id": 0}
-    )
-    if not existing:
-        raise HTTPException(status_code=404, detail="Partner treasury account not found")
-    await _partner_treasury_check_tag_access(user, existing["tag_id"])
-
-    await db.partner_treasury_accounts.delete_one({"account_id": account_id})
-    return {"success": True}
 
 
 @api_router.get("/reports/treasury-summary")
