@@ -18870,7 +18870,11 @@ async def get_partner_treasury_summary(
     for r in rows:
         dt, eid = r["_id"]["destination_type"], r["_id"]["entity_id"]
         if dt in ("treasury", "usdt"):
-            name = treasury_map.get(eid) or "Unknown Account"
+            # USDT withdrawals pay out to the client's own wallet address, so they
+            # reference no treasury account - same shape as a client bank transfer.
+            name = treasury_map.get(eid) or (
+                "Client USDT Transfers" if dt == "usdt" else "Unknown Account"
+            )
         elif dt == "psp":
             name = psps_map.get(eid) or "Unknown PSP"
         elif dt == "vendor":
@@ -18881,7 +18885,7 @@ async def get_partner_treasury_summary(
         withdrawals = r["withdrawals_usd"]
         grouped[dt].append(
             {
-                "key": eid or "bank",
+                "key": eid or dt,
                 "name": name,
                 "deposits_usd": deposits,
                 "withdrawals_usd": withdrawals,
