@@ -207,6 +207,7 @@ class Modules:
     TRANSACTION_REQUESTS = "transaction_requests"
     REINSTATE = "reinstate"
     PARTNERS = "partners"
+    PARTNER_TREASURY = "partner_treasury"
 
 
 # Standard actions
@@ -244,6 +245,7 @@ ALL_MODULES = [
     Modules.TRANSACTION_REQUESTS,
     Modules.REINSTATE,
     Modules.PARTNERS,
+    Modules.PARTNER_TREASURY,
 ]
 
 # All actions list
@@ -1052,6 +1054,30 @@ class TreasuryAccountUpdate(BaseModel):
     # Blurred-by-default on the Treasury page and excluded from totals/reconciliation
     # until clicked to reveal - not a real access restriction, just a display default.
     is_hidden: Optional[bool] = None
+
+
+# A partner treasury account is a simple, manually-tracked account scoped to one
+# client tag ("partner") - a completely separate ledger from db.treasury_accounts,
+# with no shared balance, no transfer machinery, and no effect on real deposits/
+# withdrawals. It exists purely as money-tracking that belongs to the partner.
+class PartnerTreasuryAccountCreate(BaseModel):
+    tag_id: str
+    account_name: str
+    bank_name: Optional[str] = None
+    account_number: Optional[str] = None
+    currency: str = "USD"
+    balance: float = 0.0
+    description: Optional[str] = None
+
+
+class PartnerTreasuryAccountUpdate(BaseModel):
+    account_name: Optional[str] = None
+    bank_name: Optional[str] = None
+    account_number: Optional[str] = None
+    currency: Optional[str] = None
+    balance: Optional[float] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
 
 
 class TransactionType:
@@ -18753,6 +18779,116 @@ async def get_partner_summary_report(
             "active_partners": len([r for r in results if r["transaction_count"] > 0]),
         },
     }
+
+
+async def _partner_treasury_check_tag_access(user: dict, tag_id: str):
+    """Raise 403 if this user's role restricts them to specific client tags and
+    tag_id isn't one of them - mirrors the allowed_client_tags check already
+    applied to the transactions list and partner-summary report."""
+    if user.get("role") == "admin":
+        return
+    user_role = await get_role_for_user(user)
+    allowed_client_tag_ids = user_role.get("allowed_client_tags") if user_role else None
+    if allowed_client_tag_ids:
+        real_tag_ids = [t for t in allowed_client_tag_ids if t != "__untagged__"]
+        if tag_id not in real_tag_ids:
+            raise HTTPException(status_code=403, detail="Not permitted for this partner")
+
+
+@api_router.get("/partner-treasury")
+async def get_partner_treasury_accounts(
+    tag_id: str,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.VIEW)),
+):
+    """List a single partner's own treasury accounts - a ledger scoped to one
+    client tag, entirely separate from db.treasury_accounts (the real company
+    treasury). No shared balance, no transfers - just manually-tracked accounts
+    that belong to the partner."""
+    await _partner_treasury_check_tag_access(user, tag_id)
+    accounts = (
+        await db.partner_treasury_accounts.find({"tag_id": tag_id}, {"_id": 0})
+        .sort("created_at", -1)
+        .to_list(500)
+    )
+    return {
+        "items": accounts,
+        "total_balance": sum(a.get("balance", 0) for a in accounts),
+    }
+
+
+@api_router.post("/partner-treasury")
+async def create_partner_treasury_account(
+    account_data: PartnerTreasuryAccountCreate,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.CREATE)),
+):
+    await _partner_treasury_check_tag_access(user, account_data.tag_id)
+    tag = await db.client_tags.find_one({"tag_id": account_data.tag_id}, {"_id": 0})
+    if not tag:
+        raise HTTPException(status_code=404, detail="Partner tag not found")
+
+    account_id = f"ptreasury_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    account_doc = {
+        "account_id": account_id,
+        "tag_id": account_data.tag_id,
+        "tag_name": tag["name"],
+        "account_name": account_data.account_name,
+        "bank_name": account_data.bank_name,
+        "account_number": account_data.account_number,
+        "currency": account_data.currency,
+        "balance": account_data.balance,
+        "opening_balance": account_data.balance,
+        "description": account_data.description,
+        "status": "active",
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.partner_treasury_accounts.insert_one(account_doc)
+    return await db.partner_treasury_accounts.find_one(
+        {"account_id": account_id}, {"_id": 0}
+    )
+
+
+@api_router.put("/partner-treasury/{account_id}")
+async def update_partner_treasury_account(
+    account_id: str,
+    update_data: PartnerTreasuryAccountUpdate,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.EDIT)),
+):
+    existing = await db.partner_treasury_accounts.find_one(
+        {"account_id": account_id}, {"_id": 0}
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Partner treasury account not found")
+    await _partner_treasury_check_tag_access(user, existing["tag_id"])
+
+    updates = {k: v for k, v in update_data.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db.partner_treasury_accounts.update_one(
+        {"account_id": account_id}, {"$set": updates}
+    )
+    return await db.partner_treasury_accounts.find_one(
+        {"account_id": account_id}, {"_id": 0}
+    )
+
+
+@api_router.delete("/partner-treasury/{account_id}")
+async def delete_partner_treasury_account(
+    account_id: str,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.DELETE)),
+):
+    existing = await db.partner_treasury_accounts.find_one(
+        {"account_id": account_id}, {"_id": 0}
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Partner treasury account not found")
+    await _partner_treasury_check_tag_access(user, existing["tag_id"])
+
+    await db.partner_treasury_accounts.delete_one({"account_id": account_id})
+    return {"success": True}
 
 
 @api_router.get("/reports/treasury-summary")

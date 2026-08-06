@@ -1,0 +1,24 @@
+[
+  {
+    "_id": "69c6df8eb641a3448e593fb4",
+    "lp_id": "lp_2dd4b4ff7253",
+    "lp_name": "VPFX  N",
+    "account_number": "",
+    "bank_name": "",
+    "swift_code": "",
+    "currency": "USD",
+    "contact_person": "",
+    "contact_email": "",
+    "contact_phone": "",
+    "notes": "",
+    "balance": 0,
+    "total_deposits": 0,
+    "total_withdrawals": 0,
+    "transaction_count": 0,
+    "status": "active",
+    "created_at": "2026-03-27T19:50:38.324385+00:00",
+    "updated_at": "2026-03-27T19:50:38.324385+00:00",
+    "created_by": "user_be4cf855382c",
+    "created_by_name": "Shafeel"
+  }
+]

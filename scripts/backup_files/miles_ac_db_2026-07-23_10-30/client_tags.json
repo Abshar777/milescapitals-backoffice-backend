@@ -1,0 +1,34 @@
+[
+  {
+    "_id": "69c6663cad986f0d4b2f75b1",
+    "tag_id": "tag_0f924e57",
+    "name": "Delta Dxb",
+    "color": "#f4f73b",
+    "created_at": "2026-03-27T11:13:00.571819+00:00",
+    "created_by": "user_be4cf855382c"
+  },
+  {
+    "_id": "69c666514adf091f828324ea",
+    "tag_id": "tag_bab21a73",
+    "name": "Master Manage",
+    "color": "#5af73b",
+    "created_at": "2026-03-27T11:13:21.065065+00:00",
+    "created_by": "user_be4cf855382c"
+  },
+  {
+    "_id": "69f2fcb9c3b56a59f7dc4a4f",
+    "tag_id": "tag_452c3692",
+    "name": "EDU CARLTON",
+    "color": "#3B82F6",
+    "created_at": "2026-04-30T06:54:49.845584+00:00",
+    "created_by": "user_b6f8825c4e3f"
+  },
+  {
+    "_id": "69f361a89c8c4e089d8ff09c",
+    "tag_id": "tag_3726dd73",
+    "name": "CLT",
+    "color": "#f73b45",
+    "created_at": "2026-04-30T14:05:28.379857+00:00",
+    "created_by": "user_b6f8825c4e3f"
+  }
+]
