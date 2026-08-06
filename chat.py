@@ -11,6 +11,7 @@ reference is safe.
 import asyncio
 import json
 import jwt as _jwt
+import re
 import uuid
 import base64
 from datetime import datetime, timezone, timedelta
@@ -610,6 +611,7 @@ async def get_channel_messages(
     page_size: int = 200,
     date_from: Optional[str] = None,  # YYYY-MM-DD, IST calendar day (inclusive)
     date_to: Optional[str] = None,    # YYYY-MM-DD, IST calendar day (inclusive)
+    search: Optional[str] = None,     # case-insensitive substring match on content
     user: dict = Depends(get_current_user),
 ):
     """Get messages for a channel (top-level only) — newest window first, paginated.
@@ -618,6 +620,8 @@ async def get_channel_messages(
     With date_from/date_to, the same pagination applies WITHIN that date range (the
     range is not silently capped at one page), since created_at is stored as UTC but
     the range is expressed in IST calendar days (matching what's shown in the UI).
+    search is matched against the FULL channel history the same way — not just
+    whatever page happens to already be loaded client-side.
     """
     channel = await db.channels.find_one({"channel_id": channel_id})
     if not channel:
@@ -641,6 +645,8 @@ async def get_channel_messages(
                 raise HTTPException(status_code=400, detail="date_to must be YYYY-MM-DD")
             created_range["$lt"] = end_ist.astimezone(timezone.utc).isoformat()
         query["created_at"] = created_range
+    if search and search.strip():
+        query["content"] = {"$regex": re.escape(search.strip()), "$options": "i"}
 
     total = await db.channel_messages.count_documents(query)
     skip = (page - 1) * page_size
