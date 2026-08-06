@@ -5468,7 +5468,7 @@ async def get_psp_summary(
         }, {"_id": 0}).to_list(1000)
         
         pending_count = len(pending_txs)
-        pending_amount_gross = sum(tx.get("psp_net_amount", tx.get("amount", 0)) for tx in pending_txs)
+        pending_amount_gross = sum((tx.get("psp_net_amount") or tx.get("amount") or 0) for tx in pending_txs)
         
         # Check for overdue settlements
         overdue_count = 0
@@ -5485,7 +5485,11 @@ async def get_psp_summary(
         reserve_fund_rate = psp.get("reserve_fund_rate", psp.get("chargeback_rate", 0)) / 100
         reserve_from_pending = 0
         for tx in pending_txs:
-            rf = tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
+            # `.get(key, default)` only falls back when the key is absent - several
+            # creation paths store an explicit null here when the computed reserve
+            # is exactly 0, which `.get` would pass through as None and crash the
+            # comparison below. `or` correctly treats null the same as absent.
+            rf = tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0
             if rf > 0:
                 reserve_from_pending += rf
             else:
@@ -5530,7 +5534,7 @@ async def get_psp_summary(
         }, {"_id": 0, "psp_reserve_fund_amount": 1, "psp_chargeback_amount": 1, "reserve_fund_released": 1}).to_list(10000)
         
         held_from_settled = sum(
-            tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
+            (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
             for tx in settled_with_reserve if not tx.get("reserve_fund_released")
         )
         total_reserve_held += held_from_settled
