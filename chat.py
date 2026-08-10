@@ -667,6 +667,16 @@ async def get_channel_messages(
     }
 
 
+def _activity_parent_snippet(parent: dict) -> str:
+    """Short preview of the message a reply answers, shown as quoted context in the
+    Activity feed. Shared by the fetch and the live-broadcast paths so both render
+    the same text."""
+    snippet = ((parent or {}).get("content") or "").strip()
+    if not snippet and (parent or {}).get("attachments"):
+        snippet = "📎 attachment"
+    return snippet[:140] + "…" if len(snippet) > 140 else snippet
+
+
 @chat_router.get("/channels/activity")
 async def get_channel_activity(
     page: int = 1,
@@ -693,7 +703,10 @@ async def get_channel_activity(
         return {"items": [], "page": page, "page_size": page_size, "total": 0,
                 "total_pages": 1, "channels": []}
 
-    q = {"channel_id": {"$in": visible_ids}, "thread_root_id": None}
+    # Thread replies land here like any other message rather than only bumping their
+    # parent's reply_count - each one carries the message it answers (see below), so
+    # the feed shows the relation instead of an orphaned line of text.
+    q = {"channel_id": {"$in": visible_ids}}
     total = await db.channel_messages.count_documents(q)
     skip = (page - 1) * page_size
     msgs = (
@@ -703,8 +716,29 @@ async def get_channel_activity(
         .limit(page_size)
         .to_list(page_size)
     )
+
+    # One batched lookup for the parents of every reply on this page, rather than a
+    # query per item.
+    root_ids = list({m["thread_root_id"] for m in msgs if m.get("thread_root_id")})
+    parents_by_id = {}
+    if root_ids:
+        parents = await db.channel_messages.find(
+            {"msg_id": {"$in": root_ids}},
+            {"_id": 0, "msg_id": 1, "sender_name": 1, "content": 1, "attachments": 1},
+        ).to_list(len(root_ids))
+        parents_by_id = {p["msg_id"]: p for p in parents}
+
     for m in msgs:
         m["channel_name"] = name_by_id.get(m.get("channel_id"), "")
+        root_id = m.get("thread_root_id")
+        m["is_reply"] = bool(root_id)
+        if not root_id:
+            continue
+        # A parent can be missing if it was deleted - the reply still shows, just
+        # without the quoted context.
+        parent = parents_by_id.get(root_id) or {}
+        m["parent_sender_name"] = parent.get("sender_name")
+        m["parent_content"] = _activity_parent_snippet(parent)
 
     return {
         "items": msgs,
@@ -1010,7 +1044,12 @@ async def send_thread_reply(
     )
     reply_doc.pop("_id", None)
     asyncio.create_task(manager.broadcast(channel.get("members", []), {
-        "type": "thread_reply", "message": reply_doc, "parent_sender_id": parent["sender_id"],
+        "type": "thread_reply", "message": reply_doc,
+        "parent_sender_id": parent["sender_id"],
+        # Carried so the Activity feed can render the reply's relation live, matching
+        # what GET /channels/activity attaches to a fetched reply.
+        "parent_sender_name": parent.get("sender_name"),
+        "parent_content": _activity_parent_snippet(parent),
     }))
 
     # DM the thread's author on every reply, sent FROM the replier so it reads as a
@@ -1690,5 +1729,7 @@ async def tx_complete(data: dict = Body(...), user: dict = Depends(get_current_u
         "type": "thread_reply", "message": reply,
         "channel_id": card["channel_id"], "thread_root_id": card["msg_id"],
         "parent_sender_id": card.get("sender_id"),
+        "parent_sender_name": card.get("sender_name"),
+        "parent_content": _activity_parent_snippet(card),
     }))
     return {"success": True, "msg_id": reply["msg_id"]}
