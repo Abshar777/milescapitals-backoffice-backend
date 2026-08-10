@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import asyncio
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 import os
 import logging
 from pathlib import Path
@@ -12998,6 +12999,42 @@ async def create_transaction_request(
 ):
     now = datetime.now(timezone.utc)
 
+    # Normalise before both the check and the write - storing the raw value while
+    # comparing a stripped one lets " REF1" and "REF1" coexist as distinct references.
+    reference = reference.strip() if reference else reference
+
+    # The bank reference must be unique. Deposits auto-post further down, so without
+    # this a repeat reference reaches db.transactions and dies on its unique index as
+    # an unhandled DuplicateKeyError - a 500 for the operator, with this request row
+    # stranded as "pending" forever. Checked against outstanding requests too, so two
+    # people cannot file the same reference before either one posts.
+    if reference:
+        blocked_statuses = ["cancelled", "rejected", "failed"]
+        existing_tx = await db.transactions.find_one(
+            {"reference": reference, "status": {"$nin": blocked_statuses}},
+            {"_id": 0, "transaction_id": 1},
+        )
+        if existing_tx:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Duplicate reference: '{reference}' has already been used "
+                    f"(Transaction ID: {existing_tx['transaction_id']})"
+                ),
+            )
+        existing_req = await db.transaction_requests.find_one(
+            {"reference": reference, "status": {"$nin": blocked_statuses}},
+            {"_id": 0, "request_id": 1},
+        )
+        if existing_req:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Duplicate reference: '{reference}' is already on request "
+                    f"{existing_req['request_id']}"
+                ),
+            )
+
     # CRM reference: optional — default to "N/A"; skip the uniqueness check for "N/A"
     crm_reference = crm_reference.strip() if (crm_reference and crm_reference.strip()) else "N/A"
     if crm_reference.upper() != "N/A":
@@ -13265,7 +13302,17 @@ async def create_transaction_request(
             "created_at": now.isoformat(),
             "processed_at": None,
         }
-        await db.transactions.insert_one(tx_doc)
+        # Backstop for the check above: two requests filed concurrently can both pass
+        # it and race to here. Roll the request row back rather than leaving it stranded
+        # as "pending" - that residue is indistinguishable from a real queued request.
+        try:
+            await db.transactions.insert_one(tx_doc)
+        except DuplicateKeyError:
+            await db.transaction_requests.delete_one({"request_id": request_id})
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate reference: '{reference}' has already been used",
+            )
 
         # Mark request as processed
         await db.transaction_requests.update_one(
@@ -13639,7 +13686,20 @@ async def process_transaction_request(
         "request_processed_at": now.isoformat(),
     }
 
-    await db.transactions.insert_one(tx_doc)
+    # A reference can become a duplicate between filing and approval (the request may
+    # predate the check added on creation, or the same reference may have been posted
+    # directly meanwhile). Fail with a readable 400 instead of an opaque 500, and leave
+    # the request pending so it can be rejected deliberately.
+    try:
+        await db.transactions.insert_one(tx_doc)
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Duplicate reference: '{tx_doc['reference']}' has already been used. "
+                "Reject this request or correct its reference."
+            ),
+        )
 
     # Update request status
     await db.transaction_requests.update_one(
