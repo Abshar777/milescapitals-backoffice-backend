@@ -16421,8 +16421,8 @@ async def get_vendor_borrowers(
 # === List all loans ===
 
 
-@api_router.get("/loans")
-async def get_loans(
+async def _build_loans_query(
+    user: dict,
     status: Optional[str] = None,
     borrower: Optional[str] = None,
     vendor_id: Optional[str] = None,
@@ -16437,12 +16437,15 @@ async def get_loans(
     repaid_min: Optional[float] = None,
     repaid_max: Optional[float] = None,
     transaction_tag: Optional[str] = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
-    user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW)),
-):
-    """Get all loans with optional filters"""
-    query = {}
+) -> dict:
+    """Build the mongo filter for a loans query.
+
+    Shared by the loans list and all three exports so an export always covers
+    exactly the rows on screen - previously the exports took only vendor_id and
+    silently dumped every loan in the database regardless of the active filters.
+    Pagination deliberately lives with the caller: the list pages, the exports do not.
+    """
+    query: dict = {}
 
     # Tags are stored as an array of tag NAMES, same as on transactions
     if transaction_tag:
@@ -16501,6 +16504,38 @@ async def get_loans(
         if date_to:
             loan_date_range["$lte"] = date_to
         query["loan_date"] = loan_date_range
+
+    return query
+
+
+@api_router.get("/loans")
+async def get_loans(
+    status: Optional[str] = None,
+    borrower: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    search: Optional[str] = None,
+    currency: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    outstanding_min: Optional[float] = None,
+    outstanding_max: Optional[float] = None,
+    repaid_min: Optional[float] = None,
+    repaid_max: Optional[float] = None,
+    transaction_tag: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW)),
+):
+    """Get all loans with optional filters"""
+    query = await _build_loans_query(
+        user, status=status, borrower=borrower, vendor_id=vendor_id, search=search,
+        currency=currency, date_from=date_from, date_to=date_to,
+        amount_min=amount_min, amount_max=amount_max,
+        outstanding_min=outstanding_min, outstanding_max=outstanding_max,
+        repaid_min=repaid_min, repaid_max=repaid_max, transaction_tag=transaction_tag,
+    )
 
     skip = (page - 1) * page_size
     total = await db.loans.count_documents(query)
@@ -17303,13 +17338,36 @@ async def get_loans_summary(
 
 @api_router.get("/loans/export/csv")
 async def export_loans_csv(
+    status: Optional[str] = None,
+    borrower: Optional[str] = None,
+    vendor_id: Optional[str] = None,
+    search: Optional[str] = None,
+    currency: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    outstanding_min: Optional[float] = None,
+    outstanding_max: Optional[float] = None,
+    repaid_min: Optional[float] = None,
+    repaid_max: Optional[float] = None,
+    transaction_tag: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.LOANS, Actions.EXPORT))
 ):
-    """Export all loans as CSV"""
+    """Export loans as CSV, honouring the active filters"""
     from io import StringIO
     import csv
 
-    loans = await db.loans.find({}, {"_id": 0}).sort("loan_date", -1).to_list(50000)
+    # Same filters as the loans list, so an export covers exactly what is on screen.
+    # No pagination here on purpose - an export is the whole filtered set.
+    query = await _build_loans_query(
+        user, status=status, borrower=borrower, vendor_id=vendor_id, search=search,
+        currency=currency, date_from=date_from, date_to=date_to,
+        amount_min=amount_min, amount_max=amount_max,
+        outstanding_min=outstanding_min, outstanding_max=outstanding_max,
+        repaid_min=repaid_min, repaid_max=repaid_max, transaction_tag=transaction_tag,
+    )
+    loans = await db.loans.find(query, {"_id": 0}).sort("loan_date", -1).to_list(50000)
 
     output = StringIO()
     writer = csv.writer(output)
@@ -17319,6 +17377,7 @@ async def export_loans_csv(
             "Borrower",
             "Amount",
             "Currency",
+            "Amount (USD)",
             "Interest Rate (%)",
             "Loan Date",
             "Due Date",
@@ -17343,6 +17402,7 @@ async def export_loans_csv(
                 loan.get("borrower_name", ""),
                 loan.get("amount", 0),
                 loan.get("currency", "USD"),
+                loan.get("amount_usd", 0) or 0,
                 loan.get("interest_rate", 0),
                 loan.get("loan_date", ""),
                 loan.get("due_date", ""),
@@ -17367,17 +17427,36 @@ async def export_loans_csv(
 
 @api_router.get("/loans/export/excel")
 async def export_loans_excel(
+    status: Optional[str] = None,
+    borrower: Optional[str] = None,
     vendor_id: Optional[str] = None,
+    search: Optional[str] = None,
+    currency: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    outstanding_min: Optional[float] = None,
+    outstanding_max: Optional[float] = None,
+    repaid_min: Optional[float] = None,
+    repaid_max: Optional[float] = None,
+    transaction_tag: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.LOANS, Actions.EXPORT))
 ):
-    """Export all loans as Excel"""
+    """Export loans as Excel, honouring the active filters"""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from io import BytesIO
 
-    query = {}
-    if vendor_id:
-        query["vendor_id"] = vendor_id
+    # Same filters as the loans list, so an export covers exactly what is on screen.
+    # No pagination here on purpose - an export is the whole filtered set.
+    query = await _build_loans_query(
+        user, status=status, borrower=borrower, vendor_id=vendor_id, search=search,
+        currency=currency, date_from=date_from, date_to=date_to,
+        amount_min=amount_min, amount_max=amount_max,
+        outstanding_min=outstanding_min, outstanding_max=outstanding_max,
+        repaid_min=repaid_min, repaid_max=repaid_max, transaction_tag=transaction_tag,
+    )
     loans = await db.loans.find(query, {"_id": 0}).sort("loan_date", -1).to_list(50000)
 
     wb = Workbook()
@@ -17401,6 +17480,9 @@ async def export_loans_excel(
         "Borrower",
         "Amount",
         "Currency",
+        # Amounts sit in each loan's own currency, so a mixed INR/AED/USD export
+        # cannot be totalled without a common base.
+        "Amount (USD)",
         "Interest Rate (%)",
         "Loan Date",
         "Due Date",
@@ -17430,20 +17512,23 @@ async def export_loans_excel(
         ws.cell(row=row, column=4, value=loan.get("currency", "USD")).border = (
             thin_border
         )
-        ws.cell(row=row, column=5, value=loan.get("interest_rate", 0)).border = (
+        ws.cell(row=row, column=5, value=loan.get("amount_usd", 0) or 0).border = (
             thin_border
         )
-        ws.cell(row=row, column=6, value=str(loan.get("loan_date", ""))).border = (
+        ws.cell(row=row, column=6, value=loan.get("interest_rate", 0)).border = (
             thin_border
         )
-        ws.cell(row=row, column=7, value=str(loan.get("due_date", ""))).border = (
+        ws.cell(row=row, column=7, value=str(loan.get("loan_date", ""))).border = (
             thin_border
         )
-        ws.cell(row=row, column=8, value=outstanding).border = thin_border
-        ws.cell(row=row, column=9, value=loan.get("total_repaid", 0)).border = (
+        ws.cell(row=row, column=8, value=str(loan.get("due_date", ""))).border = (
             thin_border
         )
-        ws.cell(row=row, column=10, value=loan.get("status", "")).border = thin_border
+        ws.cell(row=row, column=9, value=outstanding).border = thin_border
+        ws.cell(row=row, column=10, value=loan.get("total_repaid", 0)).border = (
+            thin_border
+        )
+        ws.cell(row=row, column=11, value=loan.get("status", "")).border = thin_border
 
     # Auto-adjust column widths
     for col in ws.columns:
@@ -17465,10 +17550,23 @@ async def export_loans_excel(
 
 @api_router.get("/loans/export/pdf")
 async def export_loans_pdf(
+    status: Optional[str] = None,
+    borrower: Optional[str] = None,
     vendor_id: Optional[str] = None,
+    search: Optional[str] = None,
+    currency: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    amount_min: Optional[float] = None,
+    amount_max: Optional[float] = None,
+    outstanding_min: Optional[float] = None,
+    outstanding_max: Optional[float] = None,
+    repaid_min: Optional[float] = None,
+    repaid_max: Optional[float] = None,
+    transaction_tag: Optional[str] = None,
     user: dict = Depends(require_permission(Modules.LOANS, Actions.EXPORT))
 ):
-    """Export all loans as PDF"""
+    """Export loans as PDF, honouring the active filters"""
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib import colors
     from reportlab.platypus import (
@@ -17481,9 +17579,15 @@ async def export_loans_pdf(
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from io import BytesIO
 
-    query = {}
-    if vendor_id:
-        query["vendor_id"] = vendor_id
+    # Same filters as the loans list, so an export covers exactly what is on screen.
+    # No pagination here on purpose - an export is the whole filtered set.
+    query = await _build_loans_query(
+        user, status=status, borrower=borrower, vendor_id=vendor_id, search=search,
+        currency=currency, date_from=date_from, date_to=date_to,
+        amount_min=amount_min, amount_max=amount_max,
+        outstanding_min=outstanding_min, outstanding_max=outstanding_max,
+        repaid_min=repaid_min, repaid_max=repaid_max, transaction_tag=transaction_tag,
+    )
     loans = await db.loans.find(query, {"_id": 0}).sort("loan_date", -1).to_list(50000)
 
     buffer = BytesIO()
@@ -17517,6 +17621,7 @@ async def export_loans_pdf(
             "Borrower",
             "Amount",
             "Currency",
+            "Amount (USD)",
             "Interest",
             "Due Date",
             "Outstanding",
@@ -17529,15 +17634,20 @@ async def export_loans_pdf(
             + loan.get("total_interest", 0)
             - loan.get("total_repaid", 0)
         )
+        # Amounts are in the loan's own currency - previously every row was printed
+        # with a "$" prefix, so an INR loan read as "$74,250.00" while the Currency
+        # column beside it said INR. The USD column is the common base that makes a
+        # mixed-currency export summable.
         data.append(
             [
                 loan.get("loan_id", "")[:12],
                 loan.get("borrower_name", "")[:20],
-                f"${loan.get('amount', 0):,.2f}",
+                f"{loan.get('amount', 0):,.2f}",
                 loan.get("currency", "USD"),
+                f"{loan.get('amount_usd', 0) or 0:,.2f}",
                 f"{loan.get('interest_rate', 0)}%",
                 str(loan.get("due_date", ""))[:10],
-                f"${outstanding:,.2f}",
+                f"{outstanding:,.2f}",
                 loan.get("status", "").replace("_", " ").title(),
             ]
         )
