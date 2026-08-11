@@ -16045,6 +16045,121 @@ async def get_loan_dashboard(
     }
 
 
+# ── Loan tagging ────────────────────────────────────────────────────────────────
+# Loans and loan transactions share the transaction_tags vocabulary with regular
+# transactions (db.transaction_tags), so a tag like "DSLP" means the same thing
+# everywhere and can be reported across both. Tags are stored the same way too:
+# a plain array of tag NAMES on the document.
+#
+# Bulk apply MERGES rather than replaces - a selection usually spans rows with
+# different existing tags, and replacing would silently discard them with no undo.
+# Removal is per-row, through the set-exact endpoints below.
+
+
+class LoanTagsBulkUpdate(BaseModel):
+    loan_ids: List[str] = []
+    transaction_ids: List[str] = []
+    transaction_tags: List[str] = []
+
+
+async def _merge_tags(collection, id_field: str, ids: List[str], tags: List[str]) -> int:
+    """$addToSet each tag onto every matched doc - atomic, and de-dupes on its own,
+    so re-applying a tag that is already there is a no-op rather than a duplicate."""
+    if not ids or not tags:
+        return 0
+    result = await collection.update_many(
+        {id_field: {"$in": ids}},
+        {
+            "$addToSet": {"transaction_tags": {"$each": tags}},
+            "$set": {"updated_at": datetime.now(timezone.utc).isoformat()},
+        },
+    )
+    return result.modified_count
+
+
+@api_router.patch("/loans/bulk-tags")
+async def bulk_update_loan_tags(
+    request: Request,
+    payload: LoanTagsBulkUpdate,
+    user: dict = Depends(require_permission(Modules.LOANS, Actions.EDIT)),
+):
+    """Merge tags into a set of loans."""
+    if not payload.loan_ids:
+        raise HTTPException(status_code=400, detail="No loans selected")
+    if not payload.transaction_tags:
+        raise HTTPException(status_code=400, detail="No tags selected")
+    modified = await _merge_tags(
+        db.loans, "loan_id", payload.loan_ids, payload.transaction_tags
+    )
+    await log_activity(
+        request, user, "edit", "loans",
+        f"Tagged {len(payload.loan_ids)} loan(s) with {', '.join(payload.transaction_tags)}",
+    )
+    return {"success": True, "matched": len(payload.loan_ids), "modified": modified}
+
+
+@api_router.patch("/loans/transactions/bulk-tags")
+async def bulk_update_loan_transaction_tags(
+    request: Request,
+    payload: LoanTagsBulkUpdate,
+    user: dict = Depends(require_permission(Modules.LOANS, Actions.EDIT)),
+):
+    """Merge tags into a set of loan transactions."""
+    if not payload.transaction_ids:
+        raise HTTPException(status_code=400, detail="No transactions selected")
+    if not payload.transaction_tags:
+        raise HTTPException(status_code=400, detail="No tags selected")
+    modified = await _merge_tags(
+        db.loan_transactions, "transaction_id",
+        payload.transaction_ids, payload.transaction_tags,
+    )
+    await log_activity(
+        request, user, "edit", "loans",
+        f"Tagged {len(payload.transaction_ids)} loan transaction(s) with {', '.join(payload.transaction_tags)}",
+    )
+    return {"success": True, "matched": len(payload.transaction_ids), "modified": modified}
+
+
+@api_router.patch("/loans/{loan_id}/tags")
+async def set_loan_tags(
+    request: Request,
+    loan_id: str,
+    payload: LoanTagsBulkUpdate,
+    user: dict = Depends(require_permission(Modules.LOANS, Actions.EDIT)),
+):
+    """Set the exact tag list on one loan - this is how tags get removed."""
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.loans.update_one(
+        {"loan_id": loan_id},
+        {"$set": {"transaction_tags": payload.transaction_tags, "updated_at": now}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    await log_activity(request, user, "edit", "loans", "Updated loan tags")
+    return await db.loans.find_one({"loan_id": loan_id}, {"_id": 0})
+
+
+@api_router.patch("/loans/transactions/{transaction_id}/tags")
+async def set_loan_transaction_tags(
+    request: Request,
+    transaction_id: str,
+    payload: LoanTagsBulkUpdate,
+    user: dict = Depends(require_permission(Modules.LOANS, Actions.EDIT)),
+):
+    """Set the exact tag list on one loan transaction."""
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.loan_transactions.update_one(
+        {"transaction_id": transaction_id},
+        {"$set": {"transaction_tags": payload.transaction_tags, "updated_at": now}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Loan transaction not found")
+    await log_activity(request, user, "edit", "loans", "Updated loan transaction tags")
+    return await db.loan_transactions.find_one(
+        {"transaction_id": transaction_id}, {"_id": 0}
+    )
+
+
 @api_router.get("/loans/transactions")
 async def get_loan_transactions(
     loan_id: Optional[str] = None,
@@ -16054,6 +16169,7 @@ async def get_loan_transactions(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    transaction_tag: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     fetch_all: bool = False,
@@ -16061,6 +16177,8 @@ async def get_loan_transactions(
 ):
     """Get loan transactions log"""
     query = {}
+    if transaction_tag:
+        query["transaction_tags"] = transaction_tag
     if loan_id:
         query["loan_id"] = loan_id
     if transaction_type:
@@ -16318,12 +16436,17 @@ async def get_loans(
     outstanding_max: Optional[float] = None,
     repaid_min: Optional[float] = None,
     repaid_max: Optional[float] = None,
+    transaction_tag: Optional[str] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     user: dict = Depends(require_permission(Modules.LOANS, Actions.VIEW)),
 ):
     """Get all loans with optional filters"""
     query = {}
+
+    # Tags are stored as an array of tag NAMES, same as on transactions
+    if transaction_tag:
+        query["transaction_tags"] = transaction_tag
 
     # Restrict to role-allowed borrower companies (non-admin only)
     if not (user.get("role") == "admin" and not user.get("role_id")):
@@ -16589,6 +16712,7 @@ async def create_loan(
         "total_repaid": 0,
         "repayment_count": 0,
         "status": "pending_approval",
+        "transaction_tags": [],
         "notes": loan_data.notes,
         "created_at": now.isoformat(),
         "created_by": user["user_id"],
@@ -16622,6 +16746,7 @@ async def create_loan(
         "transaction_id": f"ltx_{uuid.uuid4().hex[:12]}",
         "loan_id": loan_id,
         "transaction_type": LoanTransactionType.DISBURSEMENT,
+        "transaction_tags": [],
         "amount": loan_data.amount,
         "currency": loan_data.currency,
         "treasury_account_id": loan_data.treasury_account_id,
@@ -16958,6 +17083,7 @@ async def record_loan_repayment(
         "transaction_id": f"ltx_{uuid.uuid4().hex[:12]}",
         "loan_id": loan_id,
         "transaction_type": LoanTransactionType.REPAYMENT,
+        "transaction_tags": [],
         "amount": repayment.amount,
         "currency": repayment.currency,
         "treasury_account_id": repayment.treasury_account_id,
