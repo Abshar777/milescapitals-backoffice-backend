@@ -678,6 +678,13 @@ class RepaymentMode:
     CUSTOM = "custom"  # Custom schedule
 
 
+# Which loan statuses count towards each money figure. Shared by the borrowers
+# listing and the borrower detail page so the two can never disagree again:
+# "disbursed" is money that actually left, "outstanding" is money still owed.
+LOAN_ACTIVE_STATUSES = ["active", "partially_paid"]
+LOAN_DISBURSED_STATUSES = ["active", "partially_paid", "fully_paid"]
+
+
 class LoanTransactionType:
     DISBURSEMENT = "disbursement"
     REPAYMENT = "repayment"
@@ -16351,6 +16358,7 @@ async def get_vendor_borrowers(
             "_id": 0,
             "vendor_id": 1,
             "amount": 1,
+            "amount_usd": 1,
             "currency": 1,
             "total_repaid": 1,
             "total_interest": 1,
@@ -16370,22 +16378,35 @@ async def get_vendor_borrowers(
                     "currencies": set(),
                 }
 
-            amount_usd = convert_to_usd(loan["amount"], loan.get("currency", "USD"))
-            outstanding = (
-                loan["amount"]
-                + loan.get("total_interest", 0)
-                - loan.get("total_repaid", 0)
-            )
-            outstanding_usd = convert_to_usd(
-                max(0, outstanding), loan.get("currency", "USD")
-            )
-
+            status = loan.get("status")
             vendor_stats[vid]["total_loans"] += 1
-            vendor_stats[vid]["total_disbursed"] += amount_usd
-            vendor_stats[vid]["total_outstanding"] += outstanding_usd
             vendor_stats[vid]["currencies"].add(loan.get("currency", "USD"))
-            if loan["status"] in ["active", "partially_paid"]:
+            if status in LOAN_ACTIVE_STATUSES:
                 vendor_stats[vid]["active_loans"] += 1
+
+            # A rejected or not-yet-approved loan was never paid out, so it counts
+            # towards neither figure. Without this they were counted at full value
+            # with total_repaid = 0, i.e. reported as money still owed to us.
+            if status not in LOAN_DISBURSED_STATUSES:
+                continue
+
+            # Prefer the USD value stored when the loan was booked - re-converting at
+            # today's rate would restate historic disbursements every time FX moves,
+            # and would disagree with the borrower detail page, which uses the stored
+            # figure. Fall back to a live conversion only for older rows without one.
+            vendor_stats[vid]["total_disbursed"] += loan.get("amount_usd") or convert_to_usd(
+                loan["amount"], loan.get("currency", "USD")
+            )
+            # Fully-paid loans were disbursed but nothing is outstanding on them.
+            if status in LOAN_ACTIVE_STATUSES:
+                outstanding = (
+                    loan["amount"]
+                    + loan.get("total_interest", 0)
+                    - loan.get("total_repaid", 0)
+                )
+                vendor_stats[vid]["total_outstanding"] += convert_to_usd(
+                    max(0, outstanding), loan.get("currency", "USD")
+                )
 
     # Combine vendor info with stats
     result = []

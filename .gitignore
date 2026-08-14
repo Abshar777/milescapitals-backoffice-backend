@@ -4,3 +4,5 @@
 __pycache__
 .env.*
 *.bak
+scripts/backup_files/
+.DS_Store
