@@ -9569,7 +9569,10 @@ async def get_transactions(
     if transaction_type:
         query["transaction_type"] = transaction_type
     if status:
-        query["status"] = status
+        # Accept a comma-separated list so a caller can ask for exactly the set a
+        # summary counted (e.g. "approved,completed"); a single value behaves as before.
+        wanted = [x.strip() for x in status.split(",") if x.strip()]
+        query["status"] = wanted[0] if len(wanted) == 1 else {"$in": wanted}
     if base_currency and base_currency != "all":
         query["base_currency"] = base_currency
     if destination_type:
@@ -10509,7 +10512,10 @@ async def export_transactions(
     if transaction_type:
         query["transaction_type"] = transaction_type
     if status:
-        query["status"] = status
+        # Accept a comma-separated list so a caller can ask for exactly the set a
+        # summary counted (e.g. "approved,completed"); a single value behaves as before.
+        wanted = [x.strip() for x in status.split(",") if x.strip()]
+        query["status"] = wanted[0] if len(wanted) == 1 else {"$in": wanted}
     if base_currency and base_currency != "all":
         query["base_currency"] = base_currency
     if destination_type:
@@ -19092,6 +19098,26 @@ async def _partner_treasury_check_tag_access(user: dict, tag_id: str):
             raise HTTPException(status_code=403, detail="Not permitted for this partner")
 
 
+class PartnerTreasuryChargeUpdate(BaseModel):
+    tag_id: str
+    destination_type: str
+    entity_key: str
+    in_rate: float = 0.0    # % applied to deposits into this destination
+    out_rate: float = 0.0   # % applied to withdrawals out of it
+
+
+async def _partner_treasury_charges(tag_id: str) -> dict:
+    """Charge rates for one partner, keyed by (destination_type, entity_key).
+
+    These are a reporting overlay on the Partner Treasury tab only - they are NOT
+    the vendor/PSP commissions that real transactions already carry, and they do
+    not touch the ledger. Rates are per partner, so CLT's rate on an exchanger can
+    differ from another partner's on the same one.
+    """
+    rows = await db.partner_treasury_charges.find({"tag_id": tag_id}, {"_id": 0}).to_list(1000)
+    return {(r["destination_type"], r["entity_key"]): r for r in rows}
+
+
 _PARTNER_TREASURY_DEST_LABELS = [
     ("treasury", "Treasury"),
     ("vendor", "Exchanger"),
@@ -19117,6 +19143,8 @@ async def get_partner_treasury_summary(
     if not tag:
         raise HTTPException(status_code=404, detail="Partner tag not found")
     tag_name = tag["name"]
+
+    charges = await _partner_treasury_charges(tag_id)
 
     known_types = [dt for dt, _ in _PARTNER_TREASURY_DEST_LABELS]
     pipeline = [
@@ -19200,33 +19228,100 @@ async def get_partner_treasury_summary(
             name = "Client Bank Transfers"
         deposits = r["deposits_usd"]
         withdrawals = r["withdrawals_usd"]
+        key = eid or dt
+        ch = charges.get((dt, key), {})
+        in_rate = float(ch.get("in_rate") or 0)
+        out_rate = float(ch.get("out_rate") or 0)
+        # Both charges are costs, so both reduce the net.
+        charge_in = round(deposits * in_rate / 100, 2)
+        charge_out = round(withdrawals * out_rate / 100, 2)
+        net = deposits - withdrawals
         grouped[dt].append(
             {
-                "key": eid or dt,
+                "key": key,
                 "name": name,
                 "deposits_usd": deposits,
                 "withdrawals_usd": withdrawals,
-                "net_usd": deposits - withdrawals,
+                "net_usd": net,
                 "deposit_count": r["deposit_count"],
                 "withdrawal_count": r["withdrawal_count"],
                 "count": r["deposit_count"] + r["withdrawal_count"],
+                "in_rate": in_rate,
+                "out_rate": out_rate,
+                "charge_in_usd": charge_in,
+                "charge_out_usd": charge_out,
+                "charges_usd": round(charge_in + charge_out, 2),
+                "net_after_charges_usd": round(net - charge_in - charge_out, 2),
             }
         )
 
     groups = []
     grand_total = 0.0
+    grand_charges = 0.0
     for dt, label in _PARTNER_TREASURY_DEST_LABELS:
         entries = sorted(grouped[dt], key=lambda e: e["count"], reverse=True)
         subtotal = sum(e["net_usd"] for e in entries)
+        sub_charges = round(sum(e["charges_usd"] for e in entries), 2)
         grand_total += subtotal
-        groups.append({"destination_type": dt, "label": label, "entries": entries, "net_usd": subtotal})
+        grand_charges += sub_charges
+        groups.append({
+            "destination_type": dt,
+            "label": label,
+            "entries": entries,
+            "net_usd": subtotal,
+            "charges_usd": sub_charges,
+            "net_after_charges_usd": round(subtotal - sub_charges, 2),
+        })
 
     return {
         "tag_id": tag_id,
         "tag_name": tag_name,
         "groups": groups,
         "grand_total_net_usd": grand_total,
+        "grand_total_charges_usd": round(grand_charges, 2),
+        "grand_total_net_after_charges_usd": round(grand_total - grand_charges, 2),
     }
+
+
+@api_router.put("/partner-treasury/charges")
+async def set_partner_treasury_charge(
+    request: Request,
+    payload: PartnerTreasuryChargeUpdate,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.EDIT)),
+):
+    """Set the in/out charge percentages for one destination within one partner.
+
+    Display-only: this changes what the Partner Treasury tab reports and nothing
+    else. It does not touch db.transactions, the vendor/PSP commissions those
+    transactions already carry, or any real balance.
+    """
+    await _partner_treasury_check_tag_access(user, payload.tag_id)
+    for rate in (payload.in_rate, payload.out_rate):
+        if rate < 0 or rate > 100:
+            raise HTTPException(status_code=400, detail="Charge must be between 0 and 100 percent")
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.partner_treasury_charges.update_one(
+        {
+            "tag_id": payload.tag_id,
+            "destination_type": payload.destination_type,
+            "entity_key": payload.entity_key,
+        },
+        {"$set": {
+            "in_rate": payload.in_rate,
+            "out_rate": payload.out_rate,
+            "updated_at": now,
+            "updated_by": user["user_id"],
+            "updated_by_name": user.get("name"),
+        }},
+        upsert=True,
+    )
+    await log_activity(
+        request, user, "edit", "partner_treasury",
+        f"Set charges on {payload.destination_type}/{payload.entity_key}: "
+        f"in {payload.in_rate}% / out {payload.out_rate}%",
+    )
+    return {"success": True}
 
 
 @api_router.get("/reports/treasury-summary")
