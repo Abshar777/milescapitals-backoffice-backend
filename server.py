@@ -18987,6 +18987,17 @@ async def get_partner_summary_report(
 
     tag_names = [t["name"] for t in all_tags]
 
+    # Client counts per tag. Clients store tag IDs (db.clients.tags), whereas
+    # transactions store tag NAMES - so this counts off the id, not the name.
+    client_counts = {}
+    if all_tags:
+        cc = await db.clients.aggregate([
+            {"$match": {"tags": {"$in": [t["tag_id"] for t in all_tags]}}},
+            {"$unwind": "$tags"},
+            {"$group": {"_id": "$tags", "n": {"$sum": 1}}},
+        ]).to_list(1000)
+        client_counts = {r["_id"]: r["n"] for r in cc}
+
     results = []
     total_deposits = 0.0
     total_withdrawals = 0.0
@@ -19058,6 +19069,7 @@ async def get_partner_summary_report(
                     "tag_id": tag["tag_id"],
                     "name": tag["name"],
                     "color": tag.get("color"),
+                    "client_count": client_counts.get(tag["tag_id"], 0),
                     "total_deposits_usd": info["deposits_usd"],
                     "total_withdrawals_usd": info["withdrawals_usd"],
                     "net": net,
@@ -19182,6 +19194,31 @@ async def get_partner_treasury_summary(
     ]
     rows = await db.transactions.aggregate(pipeline).to_list(10000)
 
+    # Same grouping again, split by payment currency, so each destination can show
+    # what actually moved in AED/INR/etc rather than only the USD equivalent.
+    cur_pipeline = [dict(pipeline[0]), dict(pipeline[1])]
+    cur_pipeline[1] = {
+        "$group": {
+            "_id": {
+                **pipeline[1]["$group"]["_id"],
+                "currency": {"$ifNull": ["$base_currency", "$currency"]},
+            },
+            "deposits": {"$sum": {"$cond": [{"$eq": ["$transaction_type", "deposit"]},
+                                            {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+            "withdrawals": {"$sum": {"$cond": [{"$eq": ["$transaction_type", "withdrawal"]},
+                                               {"$ifNull": ["$base_amount", "$amount"]}, 0]}},
+        }
+    }
+    cur_rows = await db.transactions.aggregate(cur_pipeline).to_list(20000)
+    by_cur = {}
+    for r in cur_rows:
+        i = r["_id"]
+        k = (i["destination_type"], i["entity_id"] or i["destination_type"])
+        cur = i.get("currency") or "USD"
+        b = by_cur.setdefault(k, {}).setdefault(cur, {"deposits": 0.0, "withdrawals": 0.0})
+        b["deposits"] += r["deposits"]
+        b["withdrawals"] += r["withdrawals"]
+
     treasury_ids, psp_ids, vendor_ids = set(), set(), set()
     for r in rows:
         dt, eid = r["_id"]["destination_type"], r["_id"]["entity_id"]
@@ -19252,6 +19289,12 @@ async def get_partner_treasury_summary(
                 "charge_out_usd": charge_out,
                 "charges_usd": round(charge_in + charge_out, 2),
                 "net_after_charges_usd": round(net - charge_in - charge_out, 2),
+                "by_currency": {
+                    c: {"deposits": round(v["deposits"], 2),
+                        "withdrawals": round(v["withdrawals"], 2),
+                        "net": round(v["deposits"] - v["withdrawals"], 2)}
+                    for c, v in sorted(by_cur.get((dt, key), {}).items())
+                },
             }
         )
 
