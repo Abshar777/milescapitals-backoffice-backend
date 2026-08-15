@@ -18990,6 +18990,7 @@ async def get_partner_summary_report(
     # Client counts per tag. Clients store tag IDs (db.clients.tags), whereas
     # transactions store tag NAMES - so this counts off the id, not the name.
     client_counts = {}
+    active_client_counts = {}
     if all_tags:
         cc = await db.clients.aggregate([
             {"$match": {"tags": {"$in": [t["tag_id"] for t in all_tags]}}},
@@ -18997,6 +18998,20 @@ async def get_partner_summary_report(
             {"$group": {"_id": "$tags", "n": {"$sum": 1}}},
         ]).to_list(1000)
         client_counts = {r["_id"]: r["n"] for r in cc}
+
+        # How many of those clients have actually transacted under this tag. Carrying
+        # a tag and having activity are very different numbers - without both, a
+        # partner reading "189 clients / 12 transactions" looks broken when it is not.
+        ac = await db.transactions.aggregate([
+            {"$match": {"status": {"$in": ["approved", "completed"]},
+                        "client_tags": {"$in": tag_names}}},
+            {"$unwind": "$client_tags"},
+            {"$match": {"client_tags": {"$in": tag_names}}},
+            {"$group": {"_id": {"tag": "$client_tags", "client": "$client_id"}}},
+            {"$group": {"_id": "$_id.tag", "n": {"$sum": 1}}},
+        ]).to_list(1000)
+        by_name = {r["_id"]: r["n"] for r in ac}
+        active_client_counts = {t["tag_id"]: by_name.get(t["name"], 0) for t in all_tags}
 
     results = []
     total_deposits = 0.0
@@ -19070,6 +19085,7 @@ async def get_partner_summary_report(
                     "name": tag["name"],
                     "color": tag.get("color"),
                     "client_count": client_counts.get(tag["tag_id"], 0),
+                    "active_client_count": active_client_counts.get(tag["tag_id"], 0),
                     "total_deposits_usd": info["deposits_usd"],
                     "total_withdrawals_usd": info["withdrawals_usd"],
                     "net": net,
