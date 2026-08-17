@@ -9540,6 +9540,7 @@ async def get_transactions(
     transaction_tag: Optional[str] = None,
     completed: Optional[str] = None,   # "yes" | "no" — chat Completed flag (deposit/withdrawal)
     has_crm: Optional[str] = None,     # "yes" | "no" — has a real CRM ref vs blank/"N/A"
+    settled: Optional[str] = None,     # "yes" | "no" — settled with the exchanger/PSP
     page: int = 1,
     page_size: int = 25,
     limit: int = 100,
@@ -9573,6 +9574,10 @@ async def get_transactions(
         # summary counted (e.g. "approved,completed"); a single value behaves as before.
         wanted = [x.strip() for x in status.split(",") if x.strip()]
         query["status"] = wanted[0] if len(wanted) == 1 else {"$in": wanted}
+    if settled in ("yes", "no"):
+        # `settled` is absent on most rows rather than False, so "no" has to match
+        # missing/null too - not just an explicit False.
+        query["settled"] = True if settled == "yes" else {"$ne": True}
     if base_currency and base_currency != "all":
         query["base_currency"] = base_currency
     if destination_type:
@@ -10490,6 +10495,7 @@ async def export_transactions(
     date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
+    settled: Optional[str] = None,
 ):
     """Export ALL transactions matching the given filters — no pagination cap."""
     # Resolve client_email → client_id(s)
@@ -10516,6 +10522,10 @@ async def export_transactions(
         # summary counted (e.g. "approved,completed"); a single value behaves as before.
         wanted = [x.strip() for x in status.split(",") if x.strip()]
         query["status"] = wanted[0] if len(wanted) == 1 else {"$in": wanted}
+    if settled in ("yes", "no"):
+        # `settled` is absent on most rows rather than False, so "no" has to match
+        # missing/null too - not just an explicit False.
+        query["settled"] = True if settled == "yes" else {"$ne": True}
     if base_currency and base_currency != "all":
         query["base_currency"] = base_currency
     if destination_type:
@@ -19226,6 +19236,32 @@ async def get_partner_treasury_summary(
         }
     }
     cur_rows = await db.transactions.aggregate(cur_pipeline).to_list(20000)
+
+    # Settled vs unsettled per destination, read straight off the transactions'
+    # own `settled` flag. Note this flag is only stamped by the PSP settlement
+    # flow - exchanger settlements do not write it back - so a vendor showing
+    # nothing settled reflects the flag, not necessarily reality.
+    settle_pipeline = [dict(pipeline[0]), {
+        "$group": {
+            "_id": {
+                **pipeline[1]["$group"]["_id"],
+                "settled": {"$eq": [{"$ifNull": ["$settled", False]}, True]},
+            },
+            "amount_usd": {"$sum": "$amount"},
+            "n": {"$sum": 1},
+        }
+    }]
+    settle_rows = await db.transactions.aggregate(settle_pipeline).to_list(20000)
+    by_settled = {}
+    for r in settle_rows:
+        i = r["_id"]
+        k = (i["destination_type"], i["entity_id"] or i["destination_type"])
+        b = by_settled.setdefault(k, {"settled_usd": 0.0, "unsettled_usd": 0.0,
+                                      "settled_count": 0, "unsettled_count": 0})
+        if i["settled"]:
+            b["settled_usd"] += r["amount_usd"]; b["settled_count"] += r["n"]
+        else:
+            b["unsettled_usd"] += r["amount_usd"]; b["unsettled_count"] += r["n"]
     by_cur = {}
     for r in cur_rows:
         i = r["_id"]
@@ -19311,6 +19347,10 @@ async def get_partner_treasury_summary(
                         "net": round(v["deposits"] - v["withdrawals"], 2)}
                     for c, v in sorted(by_cur.get((dt, key), {}).items())
                 },
+                **{k: (round(v, 2) if isinstance(v, float) else v)
+                   for k, v in by_settled.get((dt, key), {
+                       "settled_usd": 0.0, "unsettled_usd": 0.0,
+                       "settled_count": 0, "unsettled_count": 0}).items()},
             }
         )
 
