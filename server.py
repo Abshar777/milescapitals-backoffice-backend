@@ -9540,7 +9540,8 @@ async def get_transactions(
     transaction_tag: Optional[str] = None,
     completed: Optional[str] = None,   # "yes" | "no" — chat Completed flag (deposit/withdrawal)
     has_crm: Optional[str] = None,     # "yes" | "no" — has a real CRM ref vs blank/"N/A"
-    settled: Optional[str] = None,     # "yes" | "no" — settled with the exchanger/PSP
+    partner_settled: Optional[str] = None,   # "yes" | "no" — covered by a partner settlement
+    partner_tag_id: Optional[str] = None,    # which partner's settlements to test against
     page: int = 1,
     page_size: int = 25,
     limit: int = 100,
@@ -9574,10 +9575,6 @@ async def get_transactions(
         # summary counted (e.g. "approved,completed"); a single value behaves as before.
         wanted = [x.strip() for x in status.split(",") if x.strip()]
         query["status"] = wanted[0] if len(wanted) == 1 else {"$in": wanted}
-    if settled in ("yes", "no"):
-        # `settled` is absent on most rows rather than False, so "no" has to match
-        # missing/null too - not just an explicit False.
-        query["settled"] = True if settled == "yes" else {"$ne": True}
     if base_currency and base_currency != "all":
         query["base_currency"] = base_currency
     if destination_type:
@@ -9688,6 +9685,16 @@ async def get_transactions(
     # No caching — always return fresh data from DB
 
     # Get total count for pagination
+    # Partner settlement is a Partners-only concept and has no bearing on the
+    # `settled` flag the exchanger/PSP flow writes; it is resolved from the partner's
+    # own settlement records here so the list can still paginate server-side.
+    if partner_settled in ("yes", "no") and partner_tag_id:
+        _ps = await _partner_settled_tx_ids(partner_tag_id)
+        _ids = set()
+        for _v in _ps.values():
+            _ids |= _v
+        query["transaction_id"] = {"$in": list(_ids)} if partner_settled == "yes" else {"$nin": list(_ids)}
+
     total = await db.transactions.count_documents(query)
     total_pages = (total + actual_limit - 1) // actual_limit
 
@@ -10495,7 +10502,6 @@ async def export_transactions(
     date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
-    settled: Optional[str] = None,
 ):
     """Export ALL transactions matching the given filters — no pagination cap."""
     # Resolve client_email → client_id(s)
@@ -10522,10 +10528,6 @@ async def export_transactions(
         # summary counted (e.g. "approved,completed"); a single value behaves as before.
         wanted = [x.strip() for x in status.split(",") if x.strip()]
         query["status"] = wanted[0] if len(wanted) == 1 else {"$in": wanted}
-    if settled in ("yes", "no"):
-        # `settled` is absent on most rows rather than False, so "no" has to match
-        # missing/null too - not just an explicit False.
-        query["settled"] = True if settled == "yes" else {"$ne": True}
     if base_currency and base_currency != "all":
         query["base_currency"] = base_currency
     if destination_type:
@@ -19136,6 +19138,35 @@ async def _partner_treasury_check_tag_access(user: dict, tag_id: str):
             raise HTTPException(status_code=403, detail="Not permitted for this partner")
 
 
+class PartnerSettlementCreate(BaseModel):
+    tag_id: str
+    destination_type: str
+    entity_key: str
+    transaction_ids: List[str] = []
+    settled_amount: float = 0.0      # what was actually paid across
+    currency: str = "USD"
+    settlement_date: Optional[str] = None
+    notes: Optional[str] = None
+
+
+async def _partner_settled_tx_ids(tag_id: str) -> dict:
+    """Transaction ids covered by this partner's own settlements, keyed by
+    (destination_type, entity_key).
+
+    Deliberately parallel to - and with no relation to - the vendor/PSP settlement
+    flow. Those live in vendor_settlements / psp_settlements and stamp `settled` on
+    the transaction itself; a partner settlement records its coverage inside its own
+    record and writes nothing to db.transactions. So a transaction can be settled
+    with an exchanger and unsettled with a partner, or the reverse, independently.
+    """
+    out = {}
+    async for r in db.partner_settlements.find({"tag_id": tag_id}, {"_id": 0}):
+        out.setdefault((r["destination_type"], r["entity_key"]), set()).update(
+            r.get("transaction_ids") or []
+        )
+    return out
+
+
 class PartnerTreasuryChargeUpdate(BaseModel):
     tag_id: str
     destination_type: str
@@ -19183,6 +19214,7 @@ async def get_partner_treasury_summary(
     tag_name = tag["name"]
 
     charges = await _partner_treasury_charges(tag_id)
+    settled_ids = await _partner_settled_tx_ids(tag_id)
 
     known_types = [dt for dt, _ in _PARTNER_TREASURY_DEST_LABELS]
     pipeline = [
@@ -19237,31 +19269,26 @@ async def get_partner_treasury_summary(
     }
     cur_rows = await db.transactions.aggregate(cur_pipeline).to_list(20000)
 
-    # Settled vs unsettled per destination, read straight off the transactions'
-    # own `settled` flag. Note this flag is only stamped by the PSP settlement
-    # flow - exchanger settlements do not write it back - so a vendor showing
-    # nothing settled reflects the flag, not necessarily reality.
-    settle_pipeline = [dict(pipeline[0]), {
-        "$group": {
-            "_id": {
-                **pipeline[1]["$group"]["_id"],
-                "settled": {"$eq": [{"$ifNull": ["$settled", False]}, True]},
-            },
-            "amount_usd": {"$sum": "$amount"},
-            "n": {"$sum": 1},
-        }
-    }]
-    settle_rows = await db.transactions.aggregate(settle_pipeline).to_list(20000)
-    by_settled = {}
-    for r in settle_rows:
-        i = r["_id"]
-        k = (i["destination_type"], i["entity_id"] or i["destination_type"])
-        b = by_settled.setdefault(k, {"settled_usd": 0.0, "unsettled_usd": 0.0,
-                                      "settled_count": 0, "unsettled_count": 0})
-        if i["settled"]:
-            b["settled_usd"] += r["amount_usd"]; b["settled_count"] += r["n"]
-        else:
-            b["unsettled_usd"] += r["amount_usd"]; b["unsettled_count"] += r["n"]
+    # Gross USD covered by this partner's own settlements, per destination. Driven by
+    # the ids recorded on the settlement, so it never consults the shared `settled`
+    # flag the exchanger/PSP flow writes.
+    all_settled = set()
+    for v in settled_ids.values():
+        all_settled |= v
+    ps_by_dest = {}
+    if all_settled:
+        ps_pipeline = [
+            {"$match": {**pipeline[0]["$match"], "transaction_id": {"$in": list(all_settled)}}},
+            {"$group": {"_id": pipeline[1]["$group"]["_id"],
+                        "gross_usd": {"$sum": {"$abs": "$amount"}},
+                        "n": {"$sum": 1}}},
+        ]
+        for r in await db.transactions.aggregate(ps_pipeline).to_list(20000):
+            i = r["_id"]
+            ps_by_dest[(i["destination_type"], i["entity_id"] or i["destination_type"])] = {
+                "gross_usd": r["gross_usd"], "n": r["n"],
+            }
+
     by_cur = {}
     for r in cur_rows:
         i = r["_id"]
@@ -19317,7 +19344,9 @@ async def get_partner_treasury_summary(
             name = "Client Bank Transfers"
         deposits = r["deposits_usd"]
         withdrawals = r["withdrawals_usd"]
+        gross = abs(deposits) + abs(withdrawals)
         key = eid or dt
+        ps = ps_by_dest.get((dt, eid or dt), {})
         ch = charges.get((dt, key), {})
         in_rate = float(ch.get("in_rate") or 0)
         out_rate = float(ch.get("out_rate") or 0)
@@ -19347,10 +19376,11 @@ async def get_partner_treasury_summary(
                         "net": round(v["deposits"] - v["withdrawals"], 2)}
                     for c, v in sorted(by_cur.get((dt, key), {}).items())
                 },
-                **{k: (round(v, 2) if isinstance(v, float) else v)
-                   for k, v in by_settled.get((dt, key), {
-                       "settled_usd": 0.0, "unsettled_usd": 0.0,
-                       "settled_count": 0, "unsettled_count": 0}).items()},
+                # Partner-owned settlement position - unrelated to the exchanger/PSP one
+                "partner_settled_usd": round(ps.get("gross_usd", 0.0), 2),
+                "partner_settled_count": ps.get("n", 0),
+                "partner_unsettled_usd": round(gross - ps.get("gross_usd", 0.0), 2),
+                "partner_unsettled_count": (r["deposit_count"] + r["withdrawal_count"]) - ps.get("n", 0),
             }
         )
 
@@ -19380,6 +19410,108 @@ async def get_partner_treasury_summary(
         "grand_total_charges_usd": round(grand_charges, 2),
         "grand_total_net_after_charges_usd": round(grand_total - grand_charges, 2),
     }
+
+
+@api_router.get("/partner-settlements")
+async def list_partner_settlements(
+    tag_id: str,
+    destination_type: Optional[str] = None,
+    entity_key: Optional[str] = None,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.VIEW)),
+):
+    """This partner's own settlements. Nothing to do with vendor_settlements or
+    psp_settlements - see _partner_settled_tx_ids for why they are kept apart."""
+    await _partner_treasury_check_tag_access(user, tag_id)
+    q = {"tag_id": tag_id}
+    if destination_type:
+        q["destination_type"] = destination_type
+    if entity_key:
+        q["entity_key"] = entity_key
+    rows = await db.partner_settlements.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return {"items": rows, "total": len(rows)}
+
+
+@api_router.post("/partner-settlements")
+async def create_partner_settlement(
+    request: Request,
+    payload: PartnerSettlementCreate,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.EDIT)),
+):
+    """Settle a chosen set of this partner's transactions against one destination.
+
+    The covered ids live on this record only - db.transactions is never written to,
+    so the exchanger/PSP `settled` flag is entirely unaffected.
+    """
+    await _partner_treasury_check_tag_access(user, payload.tag_id)
+    if not payload.transaction_ids:
+        raise HTTPException(status_code=400, detail="Select at least one transaction")
+
+    tag = await db.client_tags.find_one({"tag_id": payload.tag_id}, {"_id": 0})
+    if not tag:
+        raise HTTPException(status_code=404, detail="Partner tag not found")
+
+    # A transaction may only be covered once per partner, or the settled totals
+    # would double-count it.
+    already = await _partner_settled_tx_ids(payload.tag_id)
+    covered = set()
+    for v in already.values():
+        covered |= v
+    clash = [t for t in payload.transaction_ids if t in covered]
+    if clash:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{len(clash)} of the selected transactions are already settled for this partner",
+        )
+
+    txs = await db.transactions.find(
+        {"transaction_id": {"$in": payload.transaction_ids}},
+        {"_id": 0, "transaction_id": 1, "amount": 1},
+    ).to_list(len(payload.transaction_ids))
+    if len(txs) != len(payload.transaction_ids):
+        raise HTTPException(status_code=400, detail="Some transactions were not found")
+
+    now = datetime.now(timezone.utc)
+    doc = {
+        "settlement_id": f"pstl_{uuid.uuid4().hex[:12]}",
+        "tag_id": payload.tag_id,
+        "tag_name": tag["name"],
+        "destination_type": payload.destination_type,
+        "entity_key": payload.entity_key,
+        "transaction_ids": payload.transaction_ids,
+        "transaction_count": len(payload.transaction_ids),
+        "gross_usd": round(sum(abs(t.get("amount") or 0) for t in txs), 2),
+        "settled_amount": payload.settled_amount,
+        "currency": payload.currency,
+        "settlement_date": payload.settlement_date or now.strftime("%Y-%m-%d"),
+        "notes": payload.notes,
+        "created_at": now.isoformat(),
+        "created_by": user["user_id"],
+        "created_by_name": user.get("name"),
+    }
+    await db.partner_settlements.insert_one(doc)
+    await log_activity(
+        request, user, "create", "partner_treasury",
+        f"Partner settlement {doc['settlement_id']} covering {doc['transaction_count']} txn(s)",
+    )
+    return await db.partner_settlements.find_one({"settlement_id": doc["settlement_id"]}, {"_id": 0})
+
+
+@api_router.delete("/partner-settlements/{settlement_id}")
+async def delete_partner_settlement(
+    request: Request,
+    settlement_id: str,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.DELETE)),
+):
+    """Undo a partner settlement. Its transactions simply become unsettled again -
+    nothing else is affected, because nothing else was ever changed."""
+    existing = await db.partner_settlements.find_one({"settlement_id": settlement_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Partner settlement not found")
+    await _partner_treasury_check_tag_access(user, existing["tag_id"])
+    await db.partner_settlements.delete_one({"settlement_id": settlement_id})
+    await log_activity(request, user, "delete", "partner_treasury",
+                       f"Removed partner settlement {settlement_id}")
+    return {"success": True}
 
 
 @api_router.put("/partner-treasury/charges")
