@@ -12349,6 +12349,11 @@ async def approve_transaction(
                 detail="Proof of payment screenshot is required for deposit approvals",
             )
 
+    # An approval is never blocked on balance - the account is allowed to go
+    # negative and the shortfall is reported back instead, so the operator sees
+    # what they just did rather than being stopped.
+    balance_warnings = []
+
     # For withdrawals with bank/usdt destination, require source account
     if tx["transaction_type"] == TransactionType.WITHDRAWAL:
         if tx.get("destination_type") in ["bank", "usdt"]:
@@ -12432,10 +12437,14 @@ async def approve_transaction(
                 )
 
                 if psp_balance < withdrawal_amount:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Insufficient PSP balance. Required: {withdrawal_amount:,.2f} {psp_currency}, Available: {psp_balance:,.2f} {psp_currency}",
-                    )
+                    balance_warnings.append({
+                        "account_name": psp_account.get("psp_name"),
+                        "account_type": "psp",
+                        "currency": psp_currency,
+                        "required": round(withdrawal_amount, 2),
+                        "available": round(psp_balance, 2),
+                        "resulting_balance": round(psp_balance - withdrawal_amount, 2),
+                    })
 
                 updates["source_account_id"] = psp_id
                 updates["source_account_name"] = psp_account.get("psp_name")
@@ -12502,11 +12511,16 @@ async def approve_transaction(
                     usd_amount = convert_to_usd(tx["amount"], tx_currency)
                     withdrawal_amount = convert_from_usd(usd_amount, source_currency)
 
-                if source_account.get("balance", 0) < withdrawal_amount:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Insufficient balance in source account. Required: {withdrawal_amount:,.2f} {source_currency}, Available: {source_account.get('balance', 0):,.2f} {source_currency}",
-                    )
+                _avail = source_account.get("balance", 0) or 0
+                if _avail < withdrawal_amount:
+                    balance_warnings.append({
+                        "account_name": source_account.get("account_name"),
+                        "account_type": "treasury",
+                        "currency": source_currency,
+                        "required": round(withdrawal_amount, 2),
+                        "available": round(_avail, 2),
+                        "resulting_balance": round(_avail - withdrawal_amount, 2),
+                    })
 
                 # Deduct from source account
                 await db.treasury_accounts.update_one(
@@ -12588,11 +12602,16 @@ async def approve_transaction(
                     usd_amount = convert_to_usd(tx["amount"], tx_currency)
                     withdrawal_amount = convert_from_usd(usd_amount, dest_currency)
 
-                if dest_account.get("balance", 0) < withdrawal_amount:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Insufficient balance in treasury account. Required: {withdrawal_amount:,.2f} {dest_currency}, Available: {dest_account.get('balance', 0):,.2f} {dest_currency}",
-                    )
+                _avail = dest_account.get("balance", 0) or 0
+                if _avail < withdrawal_amount:
+                    balance_warnings.append({
+                        "account_name": dest_account.get("account_name"),
+                        "account_type": "treasury",
+                        "currency": dest_currency,
+                        "required": round(withdrawal_amount, 2),
+                        "available": round(_avail, 2),
+                        "resulting_balance": round(_avail - withdrawal_amount, 2),
+                    })
 
                 # Deduct from treasury account
                 await db.treasury_accounts.update_one(
@@ -12769,9 +12788,14 @@ async def approve_transaction(
     except Exception as _e:
         logger.error(f"tx-channel status failed: {_e}")
 
-    return await db.transactions.find_one(
+    _approved = await db.transactions.find_one(
         {"transaction_id": transaction_id}, {"_id": 0}
     )
+    # Non-fatal: the approval already went through. Carried so the UI can name
+    # the account that went negative and by how much.
+    if balance_warnings:
+        _approved["balance_warnings"] = balance_warnings
+    return _approved
 
 
 @api_router.post("/transactions/{transaction_id}/upload-proof")
