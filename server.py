@@ -18998,6 +18998,24 @@ async def get_client_balances_report(
     }
 
 
+# TEMPORARY - testing only. The Partners section reports on transactions from this
+# date forward and nothing earlier. Delete this constant and its three uses below
+# (plus PARTNERS_DATE_FLOOR in the frontend's PartnerDetail.js) to restore full
+# history. Deliberately confined to the Partners endpoints: /transactions and
+# /transactions/export are shared with Transactions Summary, Reports and the vendor
+# dashboard, and must not inherit it.
+PARTNERS_DATE_FLOOR = "2026-08-15"
+
+# transaction_date is the real field; some rows only carry created_at, which is the
+# same fallback the transactions list uses for its own date range.
+_PARTNERS_FLOOR_CLAUSE = {
+    "$or": [
+        {"transaction_date": {"$gte": PARTNERS_DATE_FLOOR}},
+        {"transaction_date": {"$exists": False}, "created_at": {"$gte": PARTNERS_DATE_FLOOR}},
+    ]
+}
+
+
 @api_router.get("/reports/partner-summary")
 async def get_partner_summary_report(
     user: dict = Depends(require_permission(Modules.PARTNERS, Actions.VIEW)),
@@ -19040,7 +19058,8 @@ async def get_partner_summary_report(
         # partner reading "189 clients / 12 transactions" looks broken when it is not.
         ac = await db.transactions.aggregate([
             {"$match": {"status": {"$in": ["approved", "completed"]},
-                        "client_tags": {"$in": tag_names}}},
+                        "client_tags": {"$in": tag_names},
+                        **_PARTNERS_FLOOR_CLAUSE}},
             {"$unwind": "$client_tags"},
             {"$match": {"client_tags": {"$in": tag_names}}},
             {"$group": {"_id": {"tag": "$client_tags", "client": "$client_id"}}},
@@ -19058,6 +19077,7 @@ async def get_partner_summary_report(
                 "$match": {
                     "status": {"$in": ["approved", "completed"]},
                     "client_tags": {"$in": tag_names},
+                    **_PARTNERS_FLOOR_CLAUSE,
                 }
             },
             {"$unwind": "$client_tags"},
@@ -19249,7 +19269,8 @@ async def get_partner_treasury_summary(
 
     known_types = [dt for dt, _ in _PARTNER_TREASURY_DEST_LABELS]
     pipeline = [
-        {"$match": {"status": {"$in": ["approved", "completed"]}, "client_tags": tag_name}},
+        {"$match": {"status": {"$in": ["approved", "completed"]}, "client_tags": tag_name,
+                    **_PARTNERS_FLOOR_CLAUSE}},
         {
             "$group": {
                 "_id": {
