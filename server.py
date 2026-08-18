@@ -19167,6 +19167,13 @@ async def _partner_settled_tx_ids(tag_id: str) -> dict:
     return out
 
 
+class PartnerTreasuryHiddenUpdate(BaseModel):
+    tag_id: str
+    destination_type: str
+    entity_key: str
+    is_hidden: bool
+
+
 class PartnerTreasuryChargeUpdate(BaseModel):
     tag_id: str
     destination_type: str
@@ -19348,6 +19355,7 @@ async def get_partner_treasury_summary(
         key = eid or dt
         ps = ps_by_dest.get((dt, eid or dt), {})
         ch = charges.get((dt, key), {})
+        is_hidden = bool(ch.get("is_hidden"))
         in_rate = float(ch.get("in_rate") or 0)
         out_rate = float(ch.get("out_rate") or 0)
         # Both charges are costs, so both reduce the net.
@@ -19358,6 +19366,7 @@ async def get_partner_treasury_summary(
             {
                 "key": key,
                 "name": name,
+                "is_hidden": is_hidden,
                 "deposits_usd": deposits,
                 "withdrawals_usd": withdrawals,
                 "net_usd": net,
@@ -19389,14 +19398,19 @@ async def get_partner_treasury_summary(
     grand_charges = 0.0
     for dt, label in _PARTNER_TREASURY_DEST_LABELS:
         entries = sorted(grouped[dt], key=lambda e: e["count"], reverse=True)
-        subtotal = sum(e["net_usd"] for e in entries)
-        sub_charges = round(sum(e["charges_usd"] for e in entries), 2)
+        # Hidden entries are excluded from every total here - same rule the
+        # Treasury page applies to hidden accounts - but still returned, so the
+        # tab can show them blurred with a click-to-reveal.
+        shown = [e for e in entries if not e["is_hidden"]]
+        subtotal = sum(e["net_usd"] for e in shown)
+        sub_charges = round(sum(e["charges_usd"] for e in shown), 2)
         grand_total += subtotal
         grand_charges += sub_charges
         groups.append({
             "destination_type": dt,
             "label": label,
             "entries": entries,
+            "hidden_count": len(entries) - len(shown),
             "net_usd": subtotal,
             "charges_usd": sub_charges,
             "net_after_charges_usd": round(subtotal - sub_charges, 2),
@@ -19511,6 +19525,42 @@ async def delete_partner_settlement(
     await db.partner_settlements.delete_one({"settlement_id": settlement_id})
     await log_activity(request, user, "delete", "partner_treasury",
                        f"Removed partner settlement {settlement_id}")
+    return {"success": True}
+
+
+@api_router.put("/partner-treasury/hidden")
+async def set_partner_treasury_hidden(
+    request: Request,
+    payload: PartnerTreasuryHiddenUpdate,
+    user: dict = Depends(require_permission(Modules.PARTNER_TREASURY, Actions.EDIT)),
+):
+    """Hide one destination within one partner's treasury tab.
+
+    Per partner and display-only, like the charges on the same record: it changes
+    what this tab reports and nothing else. In particular it is unrelated to the
+    `is_hidden` flag on db.treasury_accounts that the Treasury page uses - hiding
+    an exchanger for one partner leaves it visible everywhere else.
+    """
+    await _partner_treasury_check_tag_access(user, payload.tag_id)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.partner_treasury_charges.update_one(
+        {
+            "tag_id": payload.tag_id,
+            "destination_type": payload.destination_type,
+            "entity_key": payload.entity_key,
+        },
+        {"$set": {
+            "is_hidden": payload.is_hidden,
+            "updated_at": now,
+            "updated_by": user["user_id"],
+            "updated_by_name": user.get("name"),
+        }},
+        upsert=True,
+    )
+    await log_activity(
+        request, user, "edit", "partner_treasury",
+        f"{'Hid' if payload.is_hidden else 'Unhid'} {payload.destination_type}/{payload.entity_key}",
+    )
     return {"success": True}
 
 
