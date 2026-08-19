@@ -12120,10 +12120,11 @@ async def update_transaction_completed(
     data: dict = Body(...),
     user: dict = Depends(require_permission(Modules.TRANSACTIONS, Actions.EDIT)),
 ):
-    """Toggle the Completed flag on a deposit/withdrawal from the Transactions table.
-    Mirrors the flag onto the tx-card badge so chat agrees with the table; unlike
+    """Toggle the Completed flag on a deposit/withdrawal from the Transactions table,
+    or correct the completion date on one that is already completed.
+
+    Mirrors onto the tx-card badge so chat agrees with the table; unlike
     /chat/tx-complete this posts no thread reply and can also un-complete."""
-    completed = bool(data.get("completed"))
     tx = await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
@@ -12132,6 +12133,52 @@ async def update_transaction_completed(
             status_code=400, detail="Only deposits and withdrawals can be completed"
         )
     now = datetime.now(timezone.utc).isoformat()
+
+    # A date-only edit must not touch the flag. `completed` is read as a tri-state:
+    # absent means "leave it alone" - reading it as bool would make every date edit
+    # an un-complete, wiping completed_at, completed_by and the chat badge with it.
+    date_edit = data.get("completed_at")
+    if date_edit is not None and "completed" not in data:
+        if not tx.get("completed"):
+            raise HTTPException(
+                status_code=400,
+                detail="Mark the transaction completed before setting a completion date",
+            )
+        stamp = str(date_edit).strip()
+        if len(stamp) == 10:  # a bare YYYY-MM-DD from a date input
+            stamp = f"{stamp}T00:00:00+00:00"
+        try:
+            parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid completion date")
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        if parsed > datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="Completion date cannot be in the future")
+        new_at = parsed.isoformat()
+        old_at = tx.get("completed_at")
+        await db.transactions.update_one(
+            {"transaction_id": transaction_id},
+            {"$set": {"completed_at": new_at, "updated_at": now}},
+        )
+        # Keep the chat badge on the same date. Only the timestamp moves - passing
+        # completed_by here would relabel who completed it.
+        try:
+            from chat import _update_tx_cards
+
+            await _update_tx_cards(
+                tx.get("request_id") or transaction_id, {"tx_completed_at": new_at}
+            )
+        except Exception as e:
+            print(f"tx card completion sync failed: {e}")
+        await log_activity(
+            request, user, "edit", "transactions",
+            f"Changed completion date from {old_at} to {new_at}",
+            reference_id=transaction_id,
+        )
+        return await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
+
+    completed = bool(data.get("completed"))
     updates = (
         {
             "completed": True,
