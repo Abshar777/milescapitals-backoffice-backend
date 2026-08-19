@@ -9536,6 +9536,8 @@ async def get_transactions(
     bank_receipt_date_to: Optional[str] = None,
     request_processed_date_from: Optional[str] = None,
     request_processed_date_to: Optional[str] = None,
+    completed_date_from: Optional[str] = None,
+    completed_date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
     completed: Optional[str] = None,   # "yes" | "no" — chat Completed flag (deposit/withdrawal)
@@ -9631,6 +9633,15 @@ async def get_transactions(
         if bank_receipt_date_to:
             brd_q["$lte"] = bank_receipt_date_to
         and_clauses.append({"bank_receipt_date": brd_q})
+    # completed_at is a full UTC ISO instant, so bare YYYY-MM-DD bounds are padded
+    # the same way the approved/request-processed ranges above are.
+    if completed_date_from or completed_date_to:
+        comp_q = {}
+        if completed_date_from:
+            comp_q["$gte"] = completed_date_from + "T00:00:00"
+        if completed_date_to:
+            comp_q["$lte"] = completed_date_to + "T23:59:59.999"
+        and_clauses.append({"completed_at": comp_q})
     if request_processed_date_from or request_processed_date_to:
         rpd_q = {}
         if request_processed_date_from:
@@ -10500,6 +10511,8 @@ async def export_transactions(
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    completed_date_from: Optional[str] = None,
+    completed_date_to: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
 ):
@@ -10568,6 +10581,15 @@ async def export_transactions(
                 {"transaction_id": {"$regex": search, "$options": "i"}},
             ]
         })
+
+    # Same padding as the list endpoint, so an export matches what is on screen.
+    if completed_date_from or completed_date_to:
+        comp_q = {}
+        if completed_date_from:
+            comp_q["$gte"] = completed_date_from + "T00:00:00"
+        if completed_date_to:
+            comp_q["$lte"] = completed_date_to + "T23:59:59.999"
+        and_clauses.append({"completed_at": comp_q})
 
     if and_clauses:
         query["$and"] = and_clauses
