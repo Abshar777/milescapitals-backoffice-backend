@@ -19123,14 +19123,11 @@ async def _partner_hidden_clauses(tag_id: str) -> list:
 # dashboard, and must not inherit it.
 PARTNERS_DATE_FLOOR = "2026-08-15"
 
-# transaction_date is the real field; some rows only carry created_at, which is the
-# same fallback the transactions list uses for its own date range.
-_PARTNERS_FLOOR_CLAUSE = {
-    "$or": [
-        {"transaction_date": {"$gte": PARTNERS_DATE_FLOOR}},
-        {"transaction_date": {"$exists": False}, "created_at": {"$gte": PARTNERS_DATE_FLOOR}},
-    ]
-}
+# Keyed off completed_at, not the transaction date: what this section reports on is
+# when work was completed. completed_at is a full ISO instant, so a bare YYYY-MM-DD
+# compares correctly against it lexicographically. A transaction with no completion
+# date does not match $gte at all, so anything not yet completed is out of scope.
+_PARTNERS_FLOOR_CLAUSE = {"completed_at": {"$gte": PARTNERS_DATE_FLOOR}}
 
 
 @api_router.get("/reports/partner-summary")
