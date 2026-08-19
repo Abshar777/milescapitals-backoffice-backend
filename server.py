@@ -9538,6 +9538,10 @@ async def get_transactions(
     request_processed_date_to: Optional[str] = None,
     completed_date_from: Optional[str] = None,
     completed_date_to: Optional[str] = None,
+    # Opt-in, and only ever sent by the Partners page: drop transactions whose
+    # destination is hidden on that partner. This endpoint is shared with the
+    # Transactions Summary and Reports, which must keep seeing everything.
+    exclude_hidden_tag_id: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
     completed: Optional[str] = None,   # "yes" | "no" — chat Completed flag (deposit/withdrawal)
@@ -9633,6 +9637,11 @@ async def get_transactions(
         if bank_receipt_date_to:
             brd_q["$lte"] = bank_receipt_date_to
         and_clauses.append({"bank_receipt_date": brd_q})
+    if exclude_hidden_tag_id:
+        _hidden = await _partner_hidden_clauses(exclude_hidden_tag_id)
+        if _hidden:
+            and_clauses.append({"$nor": _hidden})
+
     # completed_at is a full UTC ISO instant, so bare YYYY-MM-DD bounds are padded
     # the same way the approved/request-processed ranges above are.
     if completed_date_from or completed_date_to:
@@ -10513,6 +10522,7 @@ async def export_transactions(
     date_to: Optional[str] = None,
     completed_date_from: Optional[str] = None,
     completed_date_to: Optional[str] = None,
+    exclude_hidden_tag_id: Optional[str] = None,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
 ):
@@ -10581,6 +10591,11 @@ async def export_transactions(
                 {"transaction_id": {"$regex": search, "$options": "i"}},
             ]
         })
+
+    if exclude_hidden_tag_id:
+        _hidden = await _partner_hidden_clauses(exclude_hidden_tag_id)
+        if _hidden:
+            and_clauses.append({"$nor": _hidden})
 
     # Same padding as the list endpoint, so an export matches what is on screen.
     if completed_date_from or completed_date_to:
@@ -19067,6 +19082,39 @@ async def get_client_balances_report(
     }
 
 
+def _hidden_dest_clause(destination_type: str, entity_key: str) -> Optional[dict]:
+    """One transaction-matching clause for a hidden partner-treasury destination.
+
+    Mirrors the entity_id switch the treasury aggregation uses: treasury/usdt key
+    off destination_account_id, psp off psp_id, vendor off vendor_id, and the
+    no-entity buckets (client bank / client USDT transfers) carry the destination
+    type as their own key.
+    """
+    if not destination_type:
+        return None
+    if entity_key == destination_type:      # the no-entity bucket
+        return {"destination_type": destination_type}
+    if destination_type in ("treasury", "usdt"):
+        return {"destination_type": destination_type, "destination_account_id": entity_key}
+    if destination_type == "psp":
+        return {"destination_type": destination_type, "psp_id": entity_key}
+    if destination_type == "vendor":
+        return {"destination_type": destination_type, "vendor_id": entity_key}
+    return None
+
+
+async def _partner_hidden_clauses(tag_id: str) -> list:
+    """Clauses for everything hidden on one partner, for use inside $nor."""
+    out = []
+    async for r in db.partner_treasury_charges.find(
+        {"tag_id": tag_id, "is_hidden": True}, {"_id": 0}
+    ):
+        c = _hidden_dest_clause(r.get("destination_type"), r.get("entity_key"))
+        if c:
+            out.append(c)
+    return out
+
+
 # TEMPORARY - testing only. The Partners section reports on transactions from this
 # date forward and nothing earlier. Delete this constant and its three uses below
 # (plus PARTNERS_DATE_FLOOR in the frontend's PartnerDetail.js) to restore full
@@ -19110,6 +19158,21 @@ async def get_partner_summary_report(
 
     tag_names = [t["name"] for t in all_tags]
 
+    # A destination hidden on a partner is hidden everywhere on that partner - its
+    # transactions must not reach these totals either, or the header cards would
+    # disagree with the treasury tab that excluded them.
+    hidden_rows = await db.partner_treasury_charges.find(
+        {"is_hidden": True}, {"_id": 0}
+    ).to_list(2000)
+    tag_name_by_id = {t["tag_id"]: t["name"] for t in all_tags}
+    hidden_nor = []
+    for r in hidden_rows:
+        name = tag_name_by_id.get(r.get("tag_id"))
+        c = _hidden_dest_clause(r.get("destination_type"), r.get("entity_key"))
+        if name and c:
+            hidden_nor.append({**c, "client_tags": name})
+
+
     # Client counts per tag. Clients store tag IDs (db.clients.tags), whereas
     # transactions store tag NAMES - so this counts off the id, not the name.
     client_counts = {}
@@ -19131,6 +19194,7 @@ async def get_partner_summary_report(
                         **_PARTNERS_FLOOR_CLAUSE}},
             {"$unwind": "$client_tags"},
             {"$match": {"client_tags": {"$in": tag_names}}},
+            *([{"$match": {"$nor": hidden_nor}}] if hidden_nor else []),
             {"$group": {"_id": {"tag": "$client_tags", "client": "$client_id"}}},
             {"$group": {"_id": "$_id.tag", "n": {"$sum": 1}}},
         ]).to_list(1000)
@@ -19151,6 +19215,7 @@ async def get_partner_summary_report(
             },
             {"$unwind": "$client_tags"},
             {"$match": {"client_tags": {"$in": tag_names}}},
+            *([{"$match": {"$nor": hidden_nor}}] if hidden_nor else []),
             {
                 "$group": {
                     "_id": {
