@@ -4701,6 +4701,18 @@ async def send_dealing_pnl_email(
 # ============== PSP ROUTES ==============
 
 
+def _psp_money(*values, default=0):
+    """First value that is not None.
+
+    Money fields on a PSP transaction may be stored as null rather than absent,
+    so dict.get's default never fires. Unlike `or`, this keeps a legitimate 0.0
+    instead of falling through to the next candidate.
+    """
+    for v in values:
+        if v is not None:
+            return v
+    return default
+
 @api_router.get("/psp")
 async def get_psps(user: dict = Depends(require_listing_or_view(Modules.PSP))):
     psps = await db.psps.find({}, {"_id": 0}).to_list(1000)
@@ -5021,7 +5033,7 @@ async def create_settlement(
     reserve_fund_amount = round(gross_amount * reserve_fund_rate, 2)
 
     # Extra charges (sum from individual transactions)
-    total_extra_charges = sum(tx.get("psp_extra_charges", 0) for tx in pending_txs)
+    total_extra_charges = sum((tx.get("psp_extra_charges") or 0) for tx in pending_txs)
 
     # Gateway fees (per transaction)
     gateway_fee = psp.get("gateway_fee", 0)
@@ -5029,7 +5041,7 @@ async def create_settlement(
 
     # Individual transaction reserve fund amounts (override PSP rate if set per transaction)
     total_tx_reserve = sum(
-        tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
+        (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
         for tx in pending_txs
     )
     # Use transaction-level amounts if any, otherwise use PSP rate
@@ -5334,14 +5346,14 @@ async def update_psp_deposit_extra_commission(
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
 
-    old_extra = tx.get("psp_extra_commission", 0) or 0
+    old_extra = (tx.get("psp_extra_commission") or 0)
 
     # Recalculate net amount: gross - commission - extra charges - reserve fund - extra commission
     gross = tx.get("amount", 0)
-    commission = tx.get("psp_commission_amount", 0)
-    extra_charges = tx.get("psp_extra_charges", 0) or 0
+    commission = (tx.get("psp_commission_amount") or 0)
+    extra_charges = (tx.get("psp_extra_charges") or 0)
     reserve_fund = (
-        tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0)) or 0
+        (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
     )
     new_net = round(
         gross - commission - extra_charges - reserve_fund - extra_commission, 2
@@ -5452,7 +5464,7 @@ async def get_psp_summary(
         }, {"_id": 0}).to_list(1000)
         
         pending_count = len(pending_txs)
-        pending_amount_gross = sum((tx.get("psp_net_amount") or tx.get("amount") or 0) for tx in pending_txs)
+        pending_amount_gross = sum(_psp_money(tx.get("psp_net_amount"), tx.get("amount")) for tx in pending_txs)
         
         # Check for overdue settlements
         overdue_count = 0
@@ -5481,7 +5493,7 @@ async def get_psp_summary(
 
         # Pending Amount = Deposit Net - Reserve Fund - Withdrawals - Withdrawal Extra Commission
         withdrawal_total = sum(tx.get("amount", 0) for tx in withdrawal_txs)
-        withdrawal_extra_comm = sum(tx.get("psp_withdrawal_extra_commission", 0) or 0 for tx in withdrawal_txs)
+        withdrawal_extra_comm = sum((tx.get("psp_withdrawal_extra_commission") or 0) or 0 for tx in withdrawal_txs)
         pending_amount = max(round(pending_amount_gross - reserve_from_pending - withdrawal_total - withdrawal_extra_comm, 2), 0)
 
         # Anchored provider balance — uses the same available_balance definition as
@@ -5572,15 +5584,15 @@ async def update_psp_transaction_charges(
     now = datetime.now(timezone.utc)
 
     # Calculate old net for pending_settlement adjustment
-    old_extra_charges = tx.get("psp_extra_charges", 0) or 0
+    old_extra_charges = (tx.get("psp_extra_charges") or 0)
     old_reserve_fund = (
-        tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0)) or 0
+        (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
     )
-    extra_commission = tx.get("psp_extra_commission", 0) or 0
+    extra_commission = (tx.get("psp_extra_commission") or 0)
 
     # Calculate new net amount (include extra_commission if it exists)
     gross_amount = tx.get("amount", 0)
-    commission = tx.get("psp_commission_amount", 0)
+    commission = (tx.get("psp_commission_amount") or 0)
     new_net = round(
         gross_amount
         - commission
@@ -5717,7 +5729,7 @@ async def record_psp_payment(
         )
 
     # Amount to settle - use actual amount if provided, otherwise calculated net
-    expected_amount = tx.get("psp_net_amount", tx.get("amount", 0))
+    expected_amount = _psp_money(tx.get("psp_net_amount"), tx.get("amount"))
     settle_amount = (
         actual_amount_received
         if actual_amount_received is not None
@@ -5768,11 +5780,9 @@ async def record_psp_payment(
     # Create PSP settlement record for Settlement History
     settlement_id = f"stl_{uuid.uuid4().hex[:12]}"
     gross_amount = tx.get("amount", 0)
-    commission_amount = tx.get("psp_commission_amount", 0)
-    reserve_fund_amount = tx.get(
-        "psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0)
-    )
-    extra_charges = tx.get("psp_extra_charges", 0)
+    commission_amount = (tx.get("psp_commission_amount") or 0)
+    reserve_fund_amount = (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
+    extra_charges = (tx.get("psp_extra_charges") or 0)
 
     settlement_doc = {
         "settlement_id": settlement_id,
@@ -5790,7 +5800,7 @@ async def record_psp_payment(
         ),
         "chargeback_amount": reserve_fund_amount,
         "extra_charges": extra_charges,
-        "gateway_fees": tx.get("psp_gateway_fee", 0),
+        "gateway_fees": (tx.get("psp_gateway_fee") or 0),
         "total_deductions": commission_amount + reserve_fund_amount + extra_charges,
         "net_amount": settle_amount,
         "actual_amount_received": settle_amount,
@@ -5830,7 +5840,7 @@ async def record_psp_payment(
 
     # Update PSP stats
     if psp:
-        commission_amount = tx.get("psp_commission_amount", 0)
+        commission_amount = (tx.get("psp_commission_amount") or 0)
         await db.psps.update_one(
             {"psp_id": tx.get("psp_id")},
             {
@@ -5898,7 +5908,7 @@ async def settle_psp_transaction(
         )
 
     # Amount to settle (net amount after commission)
-    settle_amount = tx.get("psp_net_amount", tx.get("amount", 0))
+    settle_amount = _psp_money(tx.get("psp_net_amount"), tx.get("amount"))
 
     # Currency conversion: convert from transaction currency to treasury account currency
     tx_currency = tx.get("currency", "USD")
@@ -5956,7 +5966,7 @@ async def settle_psp_transaction(
 
     # Update PSP stats
     if psp:
-        commission_amount = tx.get("psp_commission_amount", 0)
+        commission_amount = (tx.get("psp_commission_amount") or 0)
         await db.psps.update_one(
             {"psp_id": tx.get("psp_id")},
             {
@@ -6023,13 +6033,13 @@ async def batch_settle_psp_transactions(
 
     # Calculate compound totals
     gross_amount = sum(tx.get("amount", 0) for tx in selected_txs)
-    total_commission = sum(tx.get("psp_commission_amount", 0) for tx in selected_txs)
+    total_commission = sum((tx.get("psp_commission_amount") or 0) for tx in selected_txs)
     total_reserve = sum(
-        tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
+        (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
         for tx in selected_txs
     )
-    total_extra = sum(tx.get("psp_extra_charges", 0) for tx in selected_txs)
-    total_gateway = sum(tx.get("psp_gateway_fee", 0) for tx in selected_txs)
+    total_extra = sum((tx.get("psp_extra_charges") or 0) for tx in selected_txs)
+    total_gateway = sum((tx.get("psp_gateway_fee") or 0) for tx in selected_txs)
     total_deductions = total_commission + total_reserve + total_extra + total_gateway
     net_amount = gross_amount - total_deductions
 
@@ -6240,18 +6250,18 @@ async def net_settle_psp(
 
     # Calculate deposit totals
     dep_gross = sum(tx.get("amount", 0) for tx in deposit_txs)
-    dep_commission = sum(tx.get("psp_commission_amount", 0) or 0 for tx in deposit_txs)
+    dep_commission = sum((tx.get("psp_commission_amount") or 0) for tx in deposit_txs)
     dep_reserve = sum(
         (
-            tx.get("psp_reserve_fund_amount", 0)
-            or tx.get("psp_chargeback_amount", 0)
+            (tx.get("psp_reserve_fund_amount") or 0)
+            or (tx.get("psp_chargeback_amount") or 0)
             or 0
         )
         for tx in deposit_txs
     )
-    dep_extra_charges = sum(tx.get("psp_extra_charges", 0) or 0 for tx in deposit_txs)
-    dep_extra_comm = sum(tx.get("psp_extra_commission", 0) or 0 for tx in deposit_txs)
-    dep_gateway = sum(tx.get("psp_gateway_fee", 0) or 0 for tx in deposit_txs)
+    dep_extra_charges = sum((tx.get("psp_extra_charges") or 0) for tx in deposit_txs)
+    dep_extra_comm = sum((tx.get("psp_extra_commission") or 0) for tx in deposit_txs)
+    dep_gateway = sum((tx.get("psp_gateway_fee") or 0) for tx in deposit_txs)
     dep_total_deductions = (
         dep_commission + dep_reserve + dep_extra_charges + dep_extra_comm + dep_gateway
     )
@@ -6260,7 +6270,7 @@ async def net_settle_psp(
     # Calculate withdrawal totals
     wdr_gross = sum(tx.get("amount", 0) for tx in withdrawal_txs)
     wdr_extra_comm = sum(
-        tx.get("psp_withdrawal_extra_commission", 0) or 0 for tx in withdrawal_txs
+        (tx.get("psp_withdrawal_extra_commission") or 0) or 0 for tx in withdrawal_txs
     )
     wdr_total = wdr_gross + wdr_extra_comm
 
@@ -6445,17 +6455,13 @@ async def backfill_psp_settlements(
         # Create settlement record
         settlement_id = f"stl_{uuid.uuid4().hex[:12]}"
         gross_amount = tx.get("amount", 0)
-        commission_amount = tx.get("psp_commission_amount", 0)
-        reserve_fund_amount = tx.get(
-            "psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0)
-        )
-        extra_charges = tx.get("psp_extra_charges", 0)
-        settle_amount = tx.get(
-            "psp_actual_amount_received",
-            tx.get(
-                "psp_net_amount",
-                gross_amount - commission_amount - reserve_fund_amount - extra_charges,
-            ),
+        commission_amount = (tx.get("psp_commission_amount") or 0)
+        reserve_fund_amount = (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
+        extra_charges = (tx.get("psp_extra_charges") or 0)
+        settle_amount = _psp_money(
+            tx.get("psp_actual_amount_received"),
+            tx.get("psp_net_amount"),
+            default=gross_amount - commission_amount - reserve_fund_amount - extra_charges,
         )
 
         settlement_doc = {
@@ -6480,11 +6486,11 @@ async def backfill_psp_settlements(
             ),
             "chargeback_amount": reserve_fund_amount,
             "extra_charges": extra_charges,
-            "gateway_fees": tx.get("psp_gateway_fee", 0),
+            "gateway_fees": (tx.get("psp_gateway_fee") or 0),
             "total_deductions": commission_amount + reserve_fund_amount + extra_charges,
             "net_amount": settle_amount,
             "actual_amount_received": settle_amount,
-            "variance": tx.get("psp_settlement_variance", 0),
+            "variance": (tx.get("psp_settlement_variance") or 0),
             "holding_days": psp.get("holding_days", 0) if psp else 0,
             "transaction_count": 1,
             "transaction_ids": [tx.get("transaction_id")],
@@ -6654,9 +6660,7 @@ async def get_psp_reserve_funds(
     due_this_week = 0
 
     for tx in txs:
-        rf_amount = tx.get(
-            "psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0)
-        )
+        rf_amount = (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
         if rf_amount <= 0:
             rf_amount = round(tx.get("amount", 0) * reserve_fund_rate, 2)
         if rf_amount <= 0:
@@ -6740,7 +6744,7 @@ async def release_reserve_fund(
         raise HTTPException(status_code=400, detail="Reserve fund already released")
 
     now = datetime.now(timezone.utc)
-    rf_amount = tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
+    rf_amount = (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
 
     # Fall back to calculating from PSP rate if amount not stored (legacy transactions)
     if not rf_amount or rf_amount <= 0:
@@ -6836,9 +6840,7 @@ async def bulk_release_reserve_funds(
         )
         if not tx:
             continue
-        rf_amount = tx.get(
-            "psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0)
-        )
+        rf_amount = (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
         # Fall back to calculating from PSP rate if amount not stored (legacy transactions)
         if not rf_amount or rf_amount <= 0:
             psp_for_rate = await db.psps.find_one(
@@ -6965,7 +6967,7 @@ async def get_global_reserve_fund_summary(
         ).to_list(10000)
 
         for tx in txs:
-            rf = tx.get("psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0))
+            rf = (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0)
             if rf <= 0:
                 rf = round(tx.get("amount", 0) * rf_rate, 2)
             if rf <= 0:
@@ -20609,9 +20611,9 @@ async def get_psp_reconciliation(
             }
 
         psp_summary[pid]["total_transactions"] += 1
-        expected = tx.get("psp_net_amount", tx.get("amount", 0))
+        expected = _psp_money(tx.get("psp_net_amount"), tx.get("amount"))
         actual = tx.get("psp_actual_amount_received", expected)
-        variance = tx.get("psp_settlement_variance", 0)
+        variance = (tx.get("psp_settlement_variance") or 0)
 
         psp_summary[pid]["expected_amount"] += expected
         psp_summary[pid]["actual_amount"] += actual
@@ -20638,7 +20640,7 @@ async def get_psp_reconciliation_details(
 
     result = []
     for tx in txs:
-        expected = tx.get("psp_net_amount", tx.get("amount", 0))
+        expected = _psp_money(tx.get("psp_net_amount"), tx.get("amount"))
         actual = tx.get("psp_actual_amount_received", expected)
         variance = tx.get("psp_settlement_variance", actual - expected)
 
@@ -20651,11 +20653,9 @@ async def get_psp_reconciliation_details(
                 "base_amount": tx.get("base_amount"),
                 "base_currency": tx.get("base_currency"),
                 "currency": tx.get("currency", "USD"),
-                "commission": tx.get("psp_commission_amount", 0),
-                "chargeback": tx.get(
-                    "psp_reserve_fund_amount", tx.get("psp_chargeback_amount", 0)
-                ),
-                "extra_charges": tx.get("psp_extra_charges", 0),
+                "commission": (tx.get("psp_commission_amount") or 0),
+                "chargeback": (tx.get("psp_reserve_fund_amount") or tx.get("psp_chargeback_amount") or 0),
+                "extra_charges": (tx.get("psp_extra_charges") or 0),
                 "expected_net": expected,
                 "actual_received": actual,
                 "variance": variance,
@@ -25118,7 +25118,7 @@ async def generate_monthly_report_html(year: int = None, month: int = None):
         pid = p.get("psp_id")
         p_txs = [t for t in approved_txs if t.get("psp_id") == pid]
         p_vol = sum(t.get("amount", 0) for t in p_txs)
-        p_comm = sum(t.get("psp_commission_amount", 0) or 0 for t in p_txs)
+        p_comm = sum((t.get("psp_commission_amount") or 0) for t in p_txs)
         psp_rows += f"<tr><td>{p.get('psp_name', '-')}</td><td>{len(p_txs)}</td><td>${p_vol:,.0f}</td><td>${p_comm:,.2f}</td><td>${p.get('pending_settlement', 0):,.0f}</td></tr>"
 
     # --- Outstanding Accounts ---
@@ -25703,9 +25703,9 @@ async def run_audit_checks() -> dict:
         # 3a. Verify net amount math
         # Note: psp_net_amount is amount after commission only (reserve fund deducted at settlement)
         amount = tx.get("amount", 0)
-        commission = tx.get("psp_commission_amount", 0)
+        commission = (tx.get("psp_commission_amount") or 0)
         expected_net = amount - commission
-        actual_net = tx.get("psp_net_amount", 0)
+        actual_net = (tx.get("psp_net_amount") or 0)
 
         if actual_net and abs(expected_net - actual_net) > 0.02:
             findings.append(
@@ -25721,7 +25721,7 @@ async def run_audit_checks() -> dict:
             stats["critical"] += 1
 
         # 3b. Check reserve fund rate matches PSP setting
-        reserve_fund = tx.get("psp_reserve_fund_amount", 0) or 0
+        reserve_fund = (tx.get("psp_reserve_fund_amount") or 0)
         if reserve_fund > 0 and amount > 0:
             expected_rate = psp.get("reserve_fund_rate", 0)
             actual_rate = round(reserve_fund / amount * 100, 2)
