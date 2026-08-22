@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import asyncio
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 import os
 import logging
@@ -36,6 +37,8 @@ import boto3
 from botocore.config import Config as BotoConfig
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from cache import (
@@ -91,6 +94,12 @@ s3_client = boto3.client(
     config=BotoConfig(signature_version="s3v4"),
     region_name="auto",
 )
+
+
+# The company this deployment bills and mails as. One constant, so a new feature
+# adds a single brand-divergent line between the two copies rather than one per
+# string.
+COMPANY_NAME = "Miles Capitals"
 
 
 def upload_to_r2(
@@ -209,6 +218,7 @@ class Modules:
     REINSTATE = "reinstate"
     PARTNERS = "partners"
     PARTNER_TREASURY = "partner_treasury"
+    BILLING = "billing"
 
 
 # Standard actions
@@ -220,6 +230,8 @@ class Actions:
     DELETE = "delete"
     APPROVE = "approve"
     EXPORT = "export"
+    SEND = "send"                      # email a document to a client
+    RECORD_PAYMENT = "record_payment"  # book money received against an invoice
 
 
 # All modules list
@@ -247,6 +259,7 @@ ALL_MODULES = [
     Modules.REINSTATE,
     Modules.PARTNERS,
     Modules.PARTNER_TREASURY,
+    Modules.BILLING,
 ]
 
 # All actions list
@@ -258,6 +271,8 @@ ALL_ACTIONS = [
     Actions.DELETE,
     Actions.APPROVE,
     Actions.EXPORT,
+    Actions.SEND,
+    Actions.RECORD_PAYMENT,
 ]
 
 # Safe fields returned when a user only has 'listing' permission (no balance / credentials)
@@ -304,6 +319,9 @@ MODULE_DISPLAY_NAMES = {
     Modules.APPROVALS: "Pending Approvals",
     Modules.TRANSACTION_REQUESTS: "Transaction Requests",
     Modules.REINSTATE: "Reinstate Center",
+    Modules.PARTNERS: "Partners",
+    Modules.PARTNER_TREASURY: "Partner Treasury",
+    Modules.BILLING: "Billing",
 }
 
 
@@ -1123,6 +1141,74 @@ class TransactionUpdate(BaseModel):
     reference: Optional[str] = None
     transaction_date: Optional[str] = None
     client_tags: Optional[list] = None
+
+
+class BillingLineItem(BaseModel):
+    description: str
+    quantity: float = 1.0
+    unit_price: float = 0.0
+
+
+class QuotationCreate(BaseModel):
+    client_id: str
+    line_items: List[BillingLineItem] = []
+    currency: str = "USD"
+    tax_rate: Optional[float] = None
+    valid_until: Optional[str] = None
+    notes: Optional[str] = None
+    terms: Optional[str] = None
+
+
+class QuotationUpdate(BaseModel):
+    client_id: Optional[str] = None
+    line_items: Optional[List[BillingLineItem]] = None
+    currency: Optional[str] = None
+    tax_rate: Optional[float] = None
+    valid_until: Optional[str] = None
+    notes: Optional[str] = None
+    terms: Optional[str] = None
+
+
+class InvoiceCreate(BaseModel):
+    client_id: str
+    line_items: List[BillingLineItem] = []
+    currency: str = "USD"
+    tax_rate: Optional[float] = None
+    due_date: Optional[str] = None
+    notes: Optional[str] = None
+    terms: Optional[str] = None
+    quotation_id: Optional[str] = None
+
+
+class InvoiceUpdate(BaseModel):
+    client_id: Optional[str] = None
+    line_items: Optional[List[BillingLineItem]] = None
+    currency: Optional[str] = None
+    tax_rate: Optional[float] = None
+    due_date: Optional[str] = None
+    notes: Optional[str] = None
+    terms: Optional[str] = None
+
+
+class InvoicePaymentCreate(BaseModel):
+    amount: float
+    treasury_account_id: str
+    paid_on: Optional[str] = None
+    method: Optional[str] = None
+    reference: Optional[str] = None
+    proof_url: Optional[str] = None
+    # Required only when the invoice currency differs from the receiving
+    # account's. Explicit rather than inferred: convert_currency reads a cache it
+    # does not populate and will silently fall back to hardcoded rates.
+    exchange_rate: Optional[float] = None
+    idempotency_key: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class BillingDocumentSend(BaseModel):
+    to_emails: Optional[List[str]] = None
+    subject: Optional[str] = None
+    message: Optional[str] = None
 
 
 # ============== HELPER FUNCTIONS ==============
@@ -23911,17 +23997,32 @@ async def send_email(
     smtp_email: str,
     smtp_password: str,
     smtp_from_email: str = None,
+    attachments: Optional[List[dict]] = None,
 ):
-    """Send email via SMTP"""
+    """Send email via SMTP. Each attachment is {"filename": str, "content": bytes}."""
     from_email = smtp_from_email or smtp_email
 
-    message = MIMEMultipart("alternative")
+    # An "alternative" container holds competing renderings of the SAME content and
+    # the client displays only the last part it understands, so a PDF attached there
+    # is silently dropped by Gmail, Outlook and Apple Mail alike. A message carrying
+    # attachments has to be "mixed".
+    message = MIMEMultipart("mixed" if attachments else "alternative")
     message["From"] = from_email
     message["To"] = ", ".join(to_emails)
     message["Subject"] = subject
 
     html_part = MIMEText(html_content, "html")
     message.attach(html_part)
+
+    for att in attachments or []:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(att.get("content") or b"")
+        encoders.encode_base64(part)
+        part.add_header(
+            "Content-Disposition",
+            f'attachment; filename="{att.get("filename") or "attachment"}"',
+        )
+        message.attach(part)
 
     # Determine TLS settings based on port
     use_ssl = smtp_port == 465  # Direct SSL port
@@ -27604,6 +27705,1320 @@ async def reinstate_treasury_transfer(
     return {"message": "Treasury transfer reinstated successfully", "transfer_id": transfer_id}
 
 
+# ============== BILLING: QUOTATIONS, INVOICES & PAYMENTS ==============
+#
+# Billing is deliberately a separate book from the FX ledger. Recording a payment
+# credits a treasury account and does nothing else - no `transactions` record is
+# written - so invoice income stays out of Transactions Summary, partner totals
+# and the existing reports. Anything that needs to report on billing queries
+# these collections directly.
+
+BILLING_DEFAULT_TAX_RATE = 5.0  # UAE VAT, overridable per document and in settings
+
+QUOTATION_STATUSES = ("draft", "sent", "accepted", "declined", "expired", "converted")
+INVOICE_STATUSES = ("draft", "sent", "partially_paid", "paid", "overdue", "void")
+
+
+def _billing_today() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+async def _billing_settings() -> dict:
+    """Company details printed on documents. Absent keys fall back to sane values."""
+    doc = await db.app_settings.find_one({"setting_type": "billing"}, {"_id": 0}) or {}
+    return {
+        "company_name": doc.get("company_name") or COMPANY_NAME,
+        "address": doc.get("address") or "",
+        "trn": doc.get("trn") or "",
+        "tax_rate": doc.get("tax_rate", BILLING_DEFAULT_TAX_RATE),
+        "footer_note": doc.get("footer_note") or "",
+        "bank_details": doc.get("bank_details") or "",
+    }
+
+
+async def _next_document_number(series: str, prefix: str) -> str:
+    """Gap-free sequential number, safe against concurrent callers.
+
+    $inc inside find_one_and_update is atomic, so two users issuing at the same
+    moment cannot be handed the same number. The counter is per series per year.
+    """
+    year = datetime.now(timezone.utc).year
+    counter = await db.document_counters.find_one_and_update(
+        {"series": series, "year": year},
+        {"$inc": {"next_number": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return f"{prefix}-{year}-{counter['next_number']:04d}"
+
+
+def _billing_totals(line_items: list, tax_rate: float) -> dict:
+    """Totals are always computed here and never taken from the client."""
+    items = []
+    subtotal = 0.0
+    for raw in line_items or []:
+        item = raw if isinstance(raw, dict) else raw.model_dump()
+        qty = float(item.get("quantity") or 0)
+        price = float(item.get("unit_price") or 0)
+        line_total = round(qty * price, 2)
+        subtotal += line_total
+        items.append(
+            {
+                "description": item.get("description") or "",
+                "quantity": qty,
+                "unit_price": price,
+                "line_total": line_total,
+            }
+        )
+    subtotal = round(subtotal, 2)
+    rate = float(tax_rate or 0)
+    tax_amount = round(subtotal * rate / 100.0, 2)
+    return {
+        "line_items": items,
+        "subtotal": subtotal,
+        "tax_rate": rate,
+        "tax_amount": tax_amount,
+        "total": round(subtotal + tax_amount, 2),
+    }
+
+
+async def _billing_client_snapshot(client_id: str) -> dict:
+    """Freeze the client's details onto the document.
+
+    A document that has been sent must keep showing what was sent, even if the
+    client record is edited afterwards.
+    """
+    client = await db.clients.find_one({"client_id": client_id}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    name = " ".join(
+        p for p in [client.get("first_name"), client.get("last_name")] if p
+    ).strip()
+    return {
+        "client_id": client_id,
+        "client_name": name or client.get("name") or "Unknown",
+        "client_email": client.get("email") or "",
+        "client_phone": client.get("phone") or "",
+        "client_country": client.get("country") or "",
+    }
+
+
+def _invoice_status_for(inv: dict) -> str:
+    """Derived from money and dates - never set directly except draft and void."""
+    current = inv.get("status")
+    if current in ("draft", "void"):
+        return current
+    total = round(float(inv.get("total") or 0), 2)
+    paid = round(float(inv.get("amount_paid") or 0), 2)
+    if total > 0 and paid + 0.005 >= total:
+        return "paid"
+    due = inv.get("due_date")
+    if due and due < _billing_today():
+        return "overdue"
+    return "partially_paid" if paid > 0 else "sent"
+
+
+def _billing_public(doc: dict) -> dict:
+    """Strip internals before returning a document to the client."""
+    if not doc:
+        return doc
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/billing/settings")
+async def get_billing_settings(
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.VIEW)),
+):
+    """Company details printed on quotations and invoices."""
+    return await _billing_settings()
+
+
+@api_router.put("/billing/settings")
+async def update_billing_settings(
+    payload: dict,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.SETTINGS, Actions.EDIT)),
+):
+    allowed = {
+        "company_name",
+        "address",
+        "trn",
+        "tax_rate",
+        "footer_note",
+        "bank_details",
+    }
+    updates = {k: v for k, v in (payload or {}).items() if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid settings supplied")
+    if "tax_rate" in updates:
+        try:
+            rate = float(updates["tax_rate"])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Tax rate must be a number")
+        if rate < 0 or rate > 100:
+            raise HTTPException(
+                status_code=400, detail="Tax rate must be between 0 and 100"
+            )
+        updates["tax_rate"] = rate
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    updates["updated_by"] = user["user_id"]
+    await db.app_settings.update_one(
+        {"setting_type": "billing"}, {"$set": updates}, upsert=True
+    )
+    await log_activity(request, user, "edit", "billing", "Updated billing settings")
+    return await _billing_settings()
+
+
+# -------------------- quotations --------------------
+
+
+@api_router.post("/quotations")
+async def create_quotation(
+    payload: QuotationCreate,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.CREATE)),
+):
+    """Create a quotation as a draft. It gets no number until it is issued."""
+    settings = await _billing_settings()
+    snapshot = await _billing_client_snapshot(payload.client_id)
+    tax_rate = payload.tax_rate if payload.tax_rate is not None else settings["tax_rate"]
+    totals = _billing_totals(payload.line_items, tax_rate)
+
+    quotation_id = f"quo_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "quotation_id": quotation_id,
+        "quotation_number": None,
+        "status": "draft",
+        **snapshot,
+        **totals,
+        "currency": (payload.currency or "USD").upper(),
+        "valid_until": payload.valid_until,
+        "notes": payload.notes,
+        "terms": payload.terms,
+        "invoice_id": None,
+        "created_at": now,
+        "updated_at": now,
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+    }
+    await db.quotations.insert_one(doc)
+    await log_activity(
+        request,
+        user,
+        "create",
+        "billing",
+        f"Created quotation for {snapshot['client_name']}",
+        reference_id=quotation_id,
+    )
+    return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+
+
+@api_router.get("/quotations")
+async def list_quotations(
+    status: Optional[str] = None,
+    client_id: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.VIEW)),
+):
+    query = {}
+    if status:
+        query["status"] = {"$in": [s.strip() for s in status.split(",") if s.strip()]}
+    if client_id:
+        query["client_id"] = client_id
+    if search:
+        query["$or"] = [
+            {"quotation_number": {"$regex": search, "$options": "i"}},
+            {"client_name": {"$regex": search, "$options": "i"}},
+            {"client_email": {"$regex": search, "$options": "i"}},
+        ]
+    total = await db.quotations.count_documents(query)
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    items = (
+        await db.quotations.find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .skip((page - 1) * page_size)
+        .limit(page_size)
+        .to_list(page_size)
+    )
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@api_router.get("/quotations/{quotation_id}")
+async def get_quotation(
+    quotation_id: str,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.VIEW)),
+):
+    doc = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    return doc
+
+
+@api_router.put("/quotations/{quotation_id}")
+async def update_quotation(
+    quotation_id: str,
+    payload: QuotationUpdate,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.EDIT)),
+):
+    doc = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if doc.get("status") != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="Only a draft quotation can be edited. Issue a new one instead.",
+        )
+
+    data = payload.model_dump(exclude_unset=True)
+    updates = {k: v for k, v in data.items() if v is not None and k != "line_items"}
+    if payload.client_id:
+        updates.update(await _billing_client_snapshot(payload.client_id))
+    if payload.currency:
+        updates["currency"] = payload.currency.upper()
+
+    if payload.line_items is not None or payload.tax_rate is not None:
+        items = (
+            payload.line_items
+            if payload.line_items is not None
+            else doc.get("line_items", [])
+        )
+        rate = payload.tax_rate if payload.tax_rate is not None else doc.get("tax_rate", 0)
+        updates.update(_billing_totals(items, rate))
+
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.quotations.update_one({"quotation_id": quotation_id}, {"$set": updates})
+    await log_activity(
+        request,
+        user,
+        "edit",
+        "billing",
+        f"Updated quotation {doc.get('quotation_number') or quotation_id}",
+        reference_id=quotation_id,
+    )
+    return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+
+
+@api_router.delete("/quotations/{quotation_id}")
+async def delete_quotation(
+    quotation_id: str,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.DELETE)),
+):
+    doc = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if doc.get("status") != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="Only a draft quotation can be deleted. Decline it instead.",
+        )
+    await db.quotations.delete_one({"quotation_id": quotation_id})
+    await log_activity(
+        request,
+        user,
+        "delete",
+        "billing",
+        f"Deleted draft quotation {quotation_id}",
+        reference_id=quotation_id,
+    )
+    return {"message": "Quotation deleted"}
+
+
+@api_router.post("/quotations/{quotation_id}/issue")
+async def issue_quotation(
+    quotation_id: str,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.EDIT)),
+):
+    """Move a draft to issued and hand it its permanent number."""
+    doc = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if doc.get("status") != "draft":
+        raise HTTPException(status_code=400, detail="Quotation has already been issued")
+    if not doc.get("line_items"):
+        raise HTTPException(
+            status_code=400, detail="Add at least one line item before issuing"
+        )
+
+    number = await _next_document_number("quotation", "QUO")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.quotations.update_one(
+        {"quotation_id": quotation_id},
+        {
+            "$set": {
+                "quotation_number": number,
+                "status": "sent",
+                "issued_at": now,
+                "issued_by": user["user_id"],
+                "issued_by_name": user["name"],
+                "updated_at": now,
+            }
+        },
+    )
+    await log_activity(
+        request, user, "edit", "billing", f"Issued quotation {number}",
+        reference_id=quotation_id,
+    )
+    return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+
+
+@api_router.post("/quotations/{quotation_id}/status")
+async def set_quotation_status(
+    quotation_id: str,
+    payload: dict,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.EDIT)),
+):
+    """Mark an issued quotation accepted, declined or expired."""
+    new_status = (payload or {}).get("status")
+    if new_status not in ("accepted", "declined", "expired"):
+        raise HTTPException(
+            status_code=400, detail="Status must be accepted, declined or expired"
+        )
+    doc = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if doc.get("status") == "draft":
+        raise HTTPException(status_code=400, detail="Issue the quotation first")
+    if doc.get("status") == "converted":
+        raise HTTPException(
+            status_code=400, detail="This quotation has already become an invoice"
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.quotations.update_one(
+        {"quotation_id": quotation_id},
+        {"$set": {"status": new_status, "updated_at": now}},
+    )
+    await log_activity(
+        request, user, "edit", "billing",
+        f"Marked quotation {doc.get('quotation_number') or quotation_id} {new_status}",
+        reference_id=quotation_id,
+    )
+    return await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+
+
+@api_router.post("/quotations/{quotation_id}/convert")
+async def convert_quotation_to_invoice(
+    quotation_id: str,
+    payload: dict,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.CREATE)),
+):
+    """Turn an accepted quotation into a draft invoice.
+
+    The invoice takes its own copy of the line items rather than pointing back, so
+    a later revision of the quotation can never rewrite an issued bill.
+    """
+    quote = await db.quotations.find_one({"quotation_id": quotation_id}, {"_id": 0})
+    if not quote:
+        raise HTTPException(status_code=404, detail="Quotation not found")
+    if quote.get("status") == "converted" and quote.get("invoice_id"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Already converted to invoice {quote['invoice_id']}",
+        )
+    if quote.get("status") not in ("accepted", "sent"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only an issued or accepted quotation can be converted",
+        )
+
+    invoice_id = f"inv_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "invoice_id": invoice_id,
+        "invoice_number": None,
+        "status": "draft",
+        "quotation_id": quotation_id,
+        "quotation_number": quote.get("quotation_number"),
+        "client_id": quote.get("client_id"),
+        "client_name": quote.get("client_name"),
+        "client_email": quote.get("client_email"),
+        "client_phone": quote.get("client_phone"),
+        "client_country": quote.get("client_country"),
+        "line_items": quote.get("line_items", []),
+        "subtotal": quote.get("subtotal", 0),
+        "tax_rate": quote.get("tax_rate", 0),
+        "tax_amount": quote.get("tax_amount", 0),
+        "total": quote.get("total", 0),
+        "currency": quote.get("currency", "USD"),
+        "due_date": (payload or {}).get("due_date"),
+        "notes": quote.get("notes"),
+        "terms": quote.get("terms"),
+        "amount_paid": 0.0,
+        "balance_due": quote.get("total", 0),
+        "created_at": now,
+        "updated_at": now,
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+    }
+    await db.invoices.insert_one(doc)
+    await db.quotations.update_one(
+        {"quotation_id": quotation_id},
+        {"$set": {"status": "converted", "invoice_id": invoice_id, "updated_at": now}},
+    )
+    await log_activity(
+        request, user, "create", "billing",
+        f"Converted quotation {quote.get('quotation_number')} to an invoice",
+        reference_id=invoice_id,
+    )
+    return await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+
+
+# -------------------- invoices --------------------
+
+
+@api_router.post("/invoices")
+async def create_invoice(
+    payload: InvoiceCreate,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.CREATE)),
+):
+    settings = await _billing_settings()
+    snapshot = await _billing_client_snapshot(payload.client_id)
+    tax_rate = payload.tax_rate if payload.tax_rate is not None else settings["tax_rate"]
+    totals = _billing_totals(payload.line_items, tax_rate)
+
+    invoice_id = f"inv_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "invoice_id": invoice_id,
+        "invoice_number": None,
+        "status": "draft",
+        "quotation_id": payload.quotation_id,
+        **snapshot,
+        **totals,
+        "currency": (payload.currency or "USD").upper(),
+        "due_date": payload.due_date,
+        "notes": payload.notes,
+        "terms": payload.terms,
+        "amount_paid": 0.0,
+        "balance_due": totals["total"],
+        "created_at": now,
+        "updated_at": now,
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+    }
+    await db.invoices.insert_one(doc)
+    await log_activity(
+        request, user, "create", "billing",
+        f"Created invoice for {snapshot['client_name']}",
+        reference_id=invoice_id,
+    )
+    return await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+
+
+@api_router.get("/invoices")
+async def list_invoices(
+    status: Optional[str] = None,
+    client_id: Optional[str] = None,
+    search: Optional[str] = None,
+    overdue_only: bool = False,
+    page: int = 1,
+    page_size: int = 20,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.VIEW)),
+):
+    query = {}
+    if status:
+        query["status"] = {"$in": [s.strip() for s in status.split(",") if s.strip()]}
+    if client_id:
+        query["client_id"] = client_id
+    if overdue_only:
+        query["due_date"] = {"$lt": _billing_today()}
+        query["status"] = {"$in": ["sent", "partially_paid", "overdue"]}
+    if search:
+        query["$or"] = [
+            {"invoice_number": {"$regex": search, "$options": "i"}},
+            {"client_name": {"$regex": search, "$options": "i"}},
+            {"client_email": {"$regex": search, "$options": "i"}},
+        ]
+    total = await db.invoices.count_documents(query)
+    page = max(1, page)
+    page_size = min(max(1, page_size), 200)
+    items = (
+        await db.invoices.find(query, {"_id": 0})
+        .sort("created_at", -1)
+        .skip((page - 1) * page_size)
+        .limit(page_size)
+        .to_list(page_size)
+    )
+    # Overdue is a function of today's date, so reflect it on read rather than
+    # relying on a nightly job to have run.
+    for it in items:
+        it["status"] = _invoice_status_for(it)
+
+    outstanding = await db.invoices.aggregate(
+        [
+            {"$match": {"status": {"$nin": ["draft", "void", "paid"]}}},
+            {"$group": {"_id": "$currency", "balance": {"$sum": "$balance_due"}}},
+        ]
+    ).to_list(20)
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "outstanding_by_currency": {r["_id"]: round(r["balance"], 2) for r in outstanding},
+    }
+
+
+@api_router.get("/invoices/{invoice_id}")
+async def get_invoice(
+    invoice_id: str,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.VIEW)),
+):
+    doc = await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    doc["status"] = _invoice_status_for(doc)
+    doc["payments"] = await db.invoice_payments.find(
+        {"invoice_id": invoice_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(500)
+    return doc
+
+
+@api_router.put("/invoices/{invoice_id}")
+async def update_invoice(
+    invoice_id: str,
+    payload: InvoiceUpdate,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.EDIT)),
+):
+    doc = await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if doc.get("status") != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail="An issued invoice cannot be edited. Void it and raise a new one.",
+        )
+
+    data = payload.model_dump(exclude_unset=True)
+    updates = {k: v for k, v in data.items() if v is not None and k != "line_items"}
+    if payload.client_id:
+        updates.update(await _billing_client_snapshot(payload.client_id))
+    if payload.currency:
+        updates["currency"] = payload.currency.upper()
+
+    if payload.line_items is not None or payload.tax_rate is not None:
+        items = (
+            payload.line_items
+            if payload.line_items is not None
+            else doc.get("line_items", [])
+        )
+        rate = payload.tax_rate if payload.tax_rate is not None else doc.get("tax_rate", 0)
+        totals = _billing_totals(items, rate)
+        updates.update(totals)
+        updates["balance_due"] = round(
+            totals["total"] - float(doc.get("amount_paid") or 0), 2
+        )
+
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.invoices.update_one({"invoice_id": invoice_id}, {"$set": updates})
+    await log_activity(
+        request, user, "edit", "billing", f"Updated draft invoice {invoice_id}",
+        reference_id=invoice_id,
+    )
+    return await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+
+
+@api_router.post("/invoices/{invoice_id}/issue")
+async def issue_invoice(
+    invoice_id: str,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.EDIT)),
+):
+    doc = await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if doc.get("status") != "draft":
+        raise HTTPException(status_code=400, detail="Invoice has already been issued")
+    if not doc.get("line_items"):
+        raise HTTPException(
+            status_code=400, detail="Add at least one line item before issuing"
+        )
+
+    number = await _next_document_number("invoice", "INV")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.invoices.update_one(
+        {"invoice_id": invoice_id},
+        {
+            "$set": {
+                "invoice_number": number,
+                "status": "sent",
+                "issued_at": now,
+                "issued_by": user["user_id"],
+                "issued_by_name": user["name"],
+                "updated_at": now,
+            }
+        },
+    )
+    await log_activity(
+        request, user, "edit", "billing", f"Issued invoice {number}",
+        reference_id=invoice_id,
+    )
+    return await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+
+
+@api_router.post("/invoices/{invoice_id}/void")
+async def void_invoice(
+    invoice_id: str,
+    payload: dict,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.DELETE)),
+):
+    """Void an issued invoice. Its number is retained so the series stays gap-free."""
+    doc = await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if doc.get("status") == "void":
+        raise HTTPException(status_code=400, detail="Invoice is already void")
+    if float(doc.get("amount_paid") or 0) > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="This invoice has payments recorded against it and cannot be voided",
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.invoices.update_one(
+        {"invoice_id": invoice_id},
+        {
+            "$set": {
+                "status": "void",
+                "void_reason": (payload or {}).get("reason"),
+                "voided_at": now,
+                "voided_by": user["user_id"],
+                "voided_by_name": user["name"],
+                "updated_at": now,
+            }
+        },
+    )
+    await log_activity(
+        request, user, "delete", "billing",
+        f"Voided invoice {doc.get('invoice_number') or invoice_id}",
+        reference_id=invoice_id,
+    )
+    return await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+
+
+@api_router.post("/invoices/{invoice_id}/payments")
+async def record_invoice_payment(
+    invoice_id: str,
+    payload: InvoicePaymentCreate,
+    request: Request,
+    user: dict = Depends(
+        require_permission(Modules.BILLING, Actions.RECORD_PAYMENT)
+    ),
+):
+    """Record money received against an invoice and credit a treasury account.
+
+    Writes are ordered so that a failure part-way through is visible rather than
+    silent: the payment row, then the treasury ledger row, then the account
+    balance, then the invoice. There are no multi-document transactions available
+    in this deployment, so if the process dies mid-way the earlier rows are the
+    evidence needed to finish or reverse by hand. Crediting the balance before
+    writing the ledger row - which is what the PSP path does - would instead
+    leave a balance that is silently too high with nothing recording why.
+    """
+    invoice = await db.invoices.find_one({"invoice_id": invoice_id}, {"_id": 0})
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if invoice.get("status") == "draft":
+        raise HTTPException(
+            status_code=400, detail="Issue the invoice before recording a payment"
+        )
+    if invoice.get("status") == "void":
+        raise HTTPException(
+            status_code=400, detail="This invoice is void"
+        )
+
+    amount = round(float(payload.amount or 0), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be positive")
+
+    outstanding = round(
+        float(invoice.get("total") or 0) - float(invoice.get("amount_paid") or 0), 2
+    )
+    if amount - outstanding > 0.01:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Payment of {amount:,.2f} exceeds the {outstanding:,.2f} still "
+                f"outstanding on this invoice"
+            ),
+        )
+
+    account = await db.treasury_accounts.find_one(
+        {"account_id": payload.treasury_account_id}, {"_id": 0}
+    )
+    if not account:
+        raise HTTPException(status_code=404, detail="Treasury account not found")
+    if account.get("status") != TreasuryAccountStatus.ACTIVE:
+        raise HTTPException(
+            status_code=400, detail="That treasury account is not active"
+        )
+
+    # Idempotency: a double-submitted form must not credit the treasury twice.
+    if payload.idempotency_key:
+        existing = await db.invoice_payments.find_one(
+            {"idempotency_key": payload.idempotency_key}, {"_id": 0}
+        )
+        if existing:
+            return existing
+
+    invoice_ccy = (invoice.get("currency") or "USD").upper()
+    account_ccy = (account.get("currency") or "USD").upper()
+    if invoice_ccy == account_ccy:
+        rate = 1.0
+        credited = amount
+    else:
+        if not payload.exchange_rate or float(payload.exchange_rate) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"This invoice is in {invoice_ccy} but the account holds "
+                    f"{account_ccy}. Supply the exchange rate used."
+                ),
+            )
+        rate = float(payload.exchange_rate)
+        credited = round(amount * rate, 2)
+
+    payment_id = f"pay_{uuid.uuid4().hex[:12]}"
+    ttx_id = f"ttx_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # 1. the payment itself
+    payment_doc = {
+        "payment_id": payment_id,
+        "invoice_id": invoice_id,
+        "invoice_number": invoice.get("invoice_number"),
+        "client_id": invoice.get("client_id"),
+        "client_name": invoice.get("client_name"),
+        "amount": amount,
+        "currency": invoice_ccy,
+        "treasury_account_id": payload.treasury_account_id,
+        "treasury_account_name": account.get("account_name"),
+        "treasury_currency": account_ccy,
+        "exchange_rate": rate,
+        "credited_amount": credited,
+        "treasury_transaction_id": ttx_id,
+        "paid_on": payload.paid_on or _billing_today(),
+        "method": payload.method,
+        "reference": payload.reference,
+        "proof_url": payload.proof_url,
+        "notes": payload.notes,
+        "idempotency_key": payload.idempotency_key,
+        "posted": False,
+        "created_at": now,
+        "created_by": user["user_id"],
+        "created_by_name": user["name"],
+    }
+    try:
+        await db.invoice_payments.insert_one(dict(payment_doc))
+    except DuplicateKeyError:
+        existing = await db.invoice_payments.find_one(
+            {"idempotency_key": payload.idempotency_key}, {"_id": 0}
+        )
+        if existing:
+            return existing
+        raise
+
+    # 2. the treasury ledger row, before the balance moves
+    await db.treasury_transactions.insert_one(
+        {
+            "treasury_transaction_id": ttx_id,
+            "account_id": payload.treasury_account_id,
+            "transaction_type": "deposit",
+            "amount": credited,
+            "currency": account_ccy,
+            "original_amount": amount,
+            "original_currency": invoice_ccy,
+            "exchange_rate": rate,
+            "client_id": invoice.get("client_id"),
+            "reference": invoice.get("invoice_number") or invoice_id,
+            "description": f"Invoice payment {invoice.get('invoice_number') or invoice_id}",
+            "created_at": now,
+            "created_by": user["user_id"],
+            "created_by_name": user["name"],
+        }
+    )
+
+    # 3. the balance
+    await db.treasury_accounts.update_one(
+        {"account_id": payload.treasury_account_id},
+        {"$inc": {"balance": credited}, "$set": {"updated_at": now}},
+    )
+
+    # 4. the invoice. $inc is atomic, so concurrent payments cannot lose one.
+    updated = await db.invoices.find_one_and_update(
+        {"invoice_id": invoice_id},
+        {"$inc": {"amount_paid": amount}, "$set": {"updated_at": now}},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0},
+    )
+    updated["balance_due"] = round(
+        float(updated.get("total") or 0) - float(updated.get("amount_paid") or 0), 2
+    )
+    updated["status"] = _invoice_status_for(updated)
+    await db.invoices.update_one(
+        {"invoice_id": invoice_id},
+        {
+            "$set": {
+                "balance_due": updated["balance_due"],
+                "status": updated["status"],
+            }
+        },
+    )
+    await db.invoice_payments.update_one(
+        {"payment_id": payment_id}, {"$set": {"posted": True}}
+    )
+    payment_doc["posted"] = True
+
+    await log_activity(
+        request,
+        user,
+        "create",
+        "billing",
+        (
+            f"Recorded {invoice_ccy} {amount:,.2f} against invoice "
+            f"{invoice.get('invoice_number') or invoice_id} into "
+            f"{account.get('account_name')}"
+        ),
+        reference_id=invoice_id,
+    )
+    return {"payment": payment_doc, "invoice": updated}
+
+
+@api_router.get("/invoices/{invoice_id}/payments")
+async def list_invoice_payments(
+    invoice_id: str,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.VIEW)),
+):
+    return await db.invoice_payments.find({"invoice_id": invoice_id}, {"_id": 0}).sort(
+        "created_at", 1
+    ).to_list(500)
+
+
+def _build_billing_pdf(doc: dict, kind: str, settings: dict) -> bytes:
+    """Render a quotation or invoice to PDF bytes.
+
+    Portrait A4, unlike the landscape data-grid exports elsewhere in this file.
+    The header colour matches the brand indigo used by the outgoing email so a
+    document and the mail carrying it look like one piece.
+    """
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Table,
+        TableStyle,
+        Paragraph,
+        Spacer,
+    )
+
+    brand = colors.HexColor("#4f46e5")
+    muted = colors.HexColor("#6b7280")
+    rule = colors.HexColor("#e5e7eb")
+
+    buf = BytesIO()
+    pdf = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        title=doc.get("invoice_number") or doc.get("quotation_number") or kind,
+    )
+    ss = getSampleStyleSheet()
+    h_company = ParagraphStyle(
+        "company", parent=ss["Heading1"], fontSize=17, textColor=brand, spaceAfter=2
+    )
+    small = ParagraphStyle(
+        "small", parent=ss["Normal"], fontSize=8.5, textColor=muted, leading=12
+    )
+    body = ParagraphStyle("body", parent=ss["Normal"], fontSize=9.5, leading=13)
+    label = ParagraphStyle(
+        "label", parent=ss["Normal"], fontSize=7.5, textColor=muted, leading=11
+    )
+    doc_title = ParagraphStyle(
+        "doctitle",
+        parent=ss["Heading1"],
+        fontSize=20,
+        alignment=2,
+        textColor=colors.HexColor("#111827"),
+        spaceAfter=2,
+    )
+    right_small = ParagraphStyle(
+        "rsmall", parent=small, alignment=2
+    )
+
+    number = doc.get("invoice_number") or doc.get("quotation_number") or "DRAFT"
+    heading = "TAX INVOICE" if kind == "invoice" else "QUOTATION"
+    if kind == "invoice" and not float(doc.get("tax_amount") or 0):
+        heading = "INVOICE"
+
+    company_lines = [settings.get("company_name") or ""]
+    if settings.get("address"):
+        company_lines.append(settings["address"].replace("\n", "<br/>"))
+    if settings.get("trn"):
+        company_lines.append(f"TRN: {settings['trn']}")
+
+    el = []
+    el.append(
+        Table(
+            [
+                [
+                    Paragraph(settings.get("company_name") or "", h_company),
+                    Paragraph(heading, doc_title),
+                ],
+                [
+                    Paragraph("<br/>".join(company_lines[1:]), small),
+                    Paragraph(
+                        f"<b>{number}</b><br/>"
+                        f"Issued {doc.get('issued_at', '')[:10] or '-'}<br/>"
+                        + (
+                            f"Due {doc.get('due_date') or '-'}"
+                            if kind == "invoice"
+                            else f"Valid until {doc.get('valid_until') or '-'}"
+                        ),
+                        right_small,
+                    ),
+                ],
+            ],
+            colWidths=[95 * mm, 79 * mm],
+            style=TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ]
+            ),
+        )
+    )
+    el.append(Spacer(1, 7 * mm))
+    el.append(
+        Table(
+            [[""]],
+            colWidths=[174 * mm],
+            style=TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.8, rule)]),
+        )
+    )
+    el.append(Spacer(1, 5 * mm))
+
+    el.append(Paragraph("BILL TO", label))
+    bill_to = [f"<b>{doc.get('client_name') or ''}</b>"]
+    for k in ("client_email", "client_phone", "client_country"):
+        if doc.get(k):
+            bill_to.append(str(doc[k]))
+    el.append(Paragraph("<br/>".join(bill_to), body))
+    el.append(Spacer(1, 6 * mm))
+
+    ccy = doc.get("currency") or "USD"
+    rows = [["#", "Description", "Qty", f"Unit ({ccy})", f"Amount ({ccy})"]]
+    for i, li in enumerate(doc.get("line_items") or [], 1):
+        rows.append(
+            [
+                str(i),
+                Paragraph(str(li.get("description") or ""), body),
+                f"{float(li.get('quantity') or 0):,.2f}",
+                f"{float(li.get('unit_price') or 0):,.2f}",
+                f"{float(li.get('line_total') or 0):,.2f}",
+            ]
+        )
+
+    el.append(
+        Table(
+            rows,
+            colWidths=[10 * mm, 84 * mm, 20 * mm, 28 * mm, 32 * mm],
+            repeatRows=1,
+            style=TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), brand),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+                    ("ALIGN", (2, 0), (-1, -1), "RIGHT"),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("GRID", (0, 0), (-1, -1), 0.4, rule),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9fafb")]),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            ),
+        )
+    )
+    el.append(Spacer(1, 4 * mm))
+
+    money = [
+        ["Subtotal", f"{float(doc.get('subtotal') or 0):,.2f}"],
+        [f"VAT {float(doc.get('tax_rate') or 0):g}%", f"{float(doc.get('tax_amount') or 0):,.2f}"],
+        ["Total", f"{ccy} {float(doc.get('total') or 0):,.2f}"],
+    ]
+    if kind == "invoice" and float(doc.get("amount_paid") or 0) > 0:
+        money.append(["Paid", f"-{float(doc.get('amount_paid') or 0):,.2f}"])
+        money.append(["Balance due", f"{ccy} {float(doc.get('balance_due') or 0):,.2f}"])
+
+    el.append(
+        Table(
+            money,
+            colWidths=[110 * mm, 64 * mm],
+            hAlign="RIGHT",
+            style=TableStyle(
+                [
+                    ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 9.5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ("LINEABOVE", (0, 2), (-1, 2), 0.8, rule),
+                    ("FONTNAME", (0, 2), (-1, 2), "Helvetica-Bold"),
+                    ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                    ("TEXTCOLOR", (0, -1), (-1, -1), brand),
+                ]
+            ),
+        )
+    )
+
+    for heading_text, key in (("Notes", "notes"), ("Terms", "terms")):
+        if doc.get(key):
+            el.append(Spacer(1, 5 * mm))
+            el.append(Paragraph(heading_text.upper(), label))
+            el.append(Paragraph(str(doc[key]).replace("\n", "<br/>"), small))
+
+    if settings.get("bank_details"):
+        el.append(Spacer(1, 5 * mm))
+        el.append(Paragraph("PAYMENT DETAILS", label))
+        el.append(Paragraph(settings["bank_details"].replace("\n", "<br/>"), small))
+
+    if settings.get("footer_note"):
+        el.append(Spacer(1, 7 * mm))
+        el.append(Paragraph(settings["footer_note"].replace("\n", "<br/>"), small))
+
+    pdf.build(el)
+    return buf.getvalue()
+
+
+async def _billing_doc_or_404(kind: str, doc_id: str) -> dict:
+    if kind == "invoice":
+        doc = await db.invoices.find_one({"invoice_id": doc_id}, {"_id": 0})
+    else:
+        doc = await db.quotations.find_one({"quotation_id": doc_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail=f"{kind.title()} not found")
+    return doc
+
+
+@api_router.get("/invoices/{invoice_id}/pdf")
+async def invoice_pdf(
+    invoice_id: str,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.VIEW)),
+):
+    from fastapi.responses import Response
+
+    doc = await _billing_doc_or_404("invoice", invoice_id)
+    pdf_bytes = _build_billing_pdf(doc, "invoice", await _billing_settings())
+    name = doc.get("invoice_number") or invoice_id
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
+    )
+
+
+@api_router.get("/quotations/{quotation_id}/pdf")
+async def quotation_pdf(
+    quotation_id: str,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.VIEW)),
+):
+    from fastapi.responses import Response
+
+    doc = await _billing_doc_or_404("quotation", quotation_id)
+    pdf_bytes = _build_billing_pdf(doc, "quotation", await _billing_settings())
+    name = doc.get("quotation_number") or quotation_id
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
+    )
+
+
+async def _billing_smtp() -> dict:
+    """Resolve SMTP settings once instead of repeating the block at every caller."""
+    s = await db.app_settings.find_one({"setting_type": "email"}, {"_id": 0}) or {}
+    addr = s.get("smtp_email") or os.environ.get("SMTP_USER", "")
+    password = s.get("smtp_password") or os.environ.get("SMTP_PASSWORD", "")
+    if not addr or not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is not configured. Add SMTP details under Settings first.",
+        )
+    return {
+        "smtp_host": s.get("smtp_host") or os.environ.get("SMTP_HOST", "smtp.gmail.com"),
+        "smtp_port": int(s.get("smtp_port") or os.environ.get("SMTP_PORT", "587")),
+        "smtp_email": addr,
+        "smtp_password": password,
+        "smtp_from_email": s.get("smtp_from_email")
+        or os.environ.get("SMTP_FROM_EMAIL")
+        or addr,
+    }
+
+
+def _billing_email_html(doc: dict, kind: str, settings: dict, message: str) -> str:
+    number = doc.get("invoice_number") or doc.get("quotation_number") or ""
+    ccy = doc.get("currency") or "USD"
+    total = float(doc.get("total") or 0)
+    company = settings.get("company_name") or COMPANY_NAME
+    when_label = "Due" if kind == "invoice" else "Valid until"
+    when_value = (
+        doc.get("due_date") if kind == "invoice" else doc.get("valid_until")
+    ) or "-"
+    intro = (
+        message
+        or f"Please find your {kind} attached as a PDF."
+    )
+    return f"""
+<div style="font-family:Arial,Helvetica,sans-serif;max-width:600px;margin:0 auto;
+            color:#111827;line-height:1.55">
+  <div style="background:#4f46e5;color:#fff;padding:22px 26px;border-radius:8px 8px 0 0">
+    <h1 style="margin:0;font-size:19px">{company}</h1>
+    <p style="margin:4px 0 0;font-size:12px;opacity:.85">{kind.title()} {number}</p>
+  </div>
+  <div style="border:1px solid #e5e7eb;border-top:0;border-radius:0 0 8px 8px;padding:26px">
+    <p style="margin:0 0 16px">Dear {doc.get('client_name') or 'Sir or Madam'},</p>
+    <p style="margin:0 0 20px">{intro}</p>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin:0 0 20px">
+      <tr>
+        <td style="padding:8px 0;color:#6b7280">{kind.title()} number</td>
+        <td style="padding:8px 0;text-align:right"><b>{number}</b></td>
+      </tr>
+      <tr>
+        <td style="padding:8px 0;color:#6b7280;border-top:1px solid #f3f4f6">{when_label}</td>
+        <td style="padding:8px 0;text-align:right;border-top:1px solid #f3f4f6">{when_value}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 0;color:#6b7280;border-top:1px solid #e5e7eb">Total</td>
+        <td style="padding:10px 0;text-align:right;border-top:1px solid #e5e7eb;
+                   font-size:17px;font-weight:bold;color:#4f46e5">{ccy} {total:,.2f}</td>
+      </tr>
+    </table>
+    <p style="margin:0;color:#6b7280;font-size:12px">
+      {settings.get('footer_note') or f'Thank you for your business. &mdash; {company}'}
+    </p>
+  </div>
+</div>
+"""
+
+
+async def _send_billing_document(
+    kind: str, doc: dict, payload: BillingDocumentSend, request: Request, user: dict
+) -> dict:
+    settings = await _billing_settings()
+    number = doc.get("invoice_number") or doc.get("quotation_number")
+    if not number:
+        raise HTTPException(
+            status_code=400, detail=f"Issue the {kind} before sending it"
+        )
+    if kind == "invoice" and doc.get("status") == "void":
+        raise HTTPException(status_code=400, detail="This invoice is void")
+
+    recipients = [e for e in (payload.to_emails or []) if e] or (
+        [doc.get("client_email")] if doc.get("client_email") else []
+    )
+    if not recipients:
+        raise HTTPException(
+            status_code=400,
+            detail="No recipient. This client has no email address on file.",
+        )
+
+    smtp = await _billing_smtp()
+    pdf_bytes = _build_billing_pdf(doc, kind, settings)
+    subject = payload.subject or f"{kind.title()} {number} from {settings['company_name']}"
+    html = _billing_email_html(doc, kind, settings, payload.message or "")
+
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        await send_email(
+            to_emails=recipients,
+            subject=subject,
+            html_content=html,
+            attachments=[{"filename": f"{number}.pdf", "content": pdf_bytes}],
+            **smtp,
+        )
+        status = "sent"
+        error = None
+    except Exception as exc:  # noqa: BLE001 - surfaced to the caller below
+        status = "failed"
+        error = str(exc)[:400]
+
+    await db.email_logs.insert_one(
+        {
+            "log_id": f"log_{uuid.uuid4().hex[:12]}",
+            "type": f"billing_{kind}",
+            "recipients": recipients,
+            "status": status,
+            "sent_at": now,
+            "error": error,
+            "document_type": kind,
+            "document_id": doc.get("invoice_id") or doc.get("quotation_id"),
+            "document_number": number,
+            "sent_by": user["user_id"],
+            "sent_by_name": user["name"],
+        }
+    )
+    if status == "failed":
+        raise HTTPException(status_code=502, detail=f"Could not send email: {error}")
+
+    coll = db.invoices if kind == "invoice" else db.quotations
+    key = "invoice_id" if kind == "invoice" else "quotation_id"
+    await coll.update_one(
+        {key: doc[key]},
+        {
+            "$set": {"last_sent_at": now, "last_sent_to": recipients, "updated_at": now},
+            "$inc": {"send_count": 1},
+        },
+    )
+    await log_activity(
+        request, user, "edit", "billing",
+        f"Emailed {kind} {number} to {', '.join(recipients)}",
+        reference_id=doc[key],
+    )
+    return {"message": f"{kind.title()} {number} sent", "recipients": recipients}
+
+
+@api_router.post("/invoices/{invoice_id}/send")
+async def send_invoice(
+    invoice_id: str,
+    payload: BillingDocumentSend,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.SEND)),
+):
+    doc = await _billing_doc_or_404("invoice", invoice_id)
+    return await _send_billing_document("invoice", doc, payload, request, user)
+
+
+@api_router.post("/quotations/{quotation_id}/send")
+async def send_quotation(
+    quotation_id: str,
+    payload: BillingDocumentSend,
+    request: Request,
+    user: dict = Depends(require_permission(Modules.BILLING, Actions.SEND)),
+):
+    doc = await _billing_doc_or_404("quotation", quotation_id)
+    return await _send_billing_document("quotation", doc, payload, request, user)
+
+
 # Include router
 app.include_router(api_router)
 
@@ -27693,6 +29108,24 @@ async def startup_db_indexes():
             [("entry_type", 1), ("created_at", -1)]
         )
         await db.income_expense_entries.create_index([("vendor_id", 1), ("status", 1)])
+
+        # Billing indexes
+        await db.invoices.create_index("invoice_id", unique=True, sparse=True)
+        await db.invoices.create_index("invoice_number", unique=True, sparse=True)
+        await db.invoices.create_index([("status", 1), ("created_at", -1)])
+        await db.invoices.create_index([("client_id", 1), ("created_at", -1)])
+        await db.quotations.create_index("quotation_id", unique=True, sparse=True)
+        await db.quotations.create_index("quotation_number", unique=True, sparse=True)
+        await db.quotations.create_index([("status", 1), ("created_at", -1)])
+        await db.invoice_payments.create_index("payment_id", unique=True, sparse=True)
+        await db.invoice_payments.create_index([("invoice_id", 1), ("created_at", 1)])
+        # Guards a double-submitted payment against crediting treasury twice
+        await db.invoice_payments.create_index(
+            "idempotency_key", unique=True, sparse=True
+        )
+        await db.document_counters.create_index(
+            [("series", 1), ("year", 1)], unique=True
+        )
 
         # Treasury transaction indexes
         await db.treasury_transactions.create_index(
