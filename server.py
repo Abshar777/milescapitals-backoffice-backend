@@ -9630,6 +9630,9 @@ async def get_transactions(
     # destination is hidden on that partner. This endpoint is shared with the
     # Transactions Summary and Reports, which must keep seeing everything.
     exclude_hidden_tag_id: Optional[str] = None,
+    # Partners-only for the same reason: drops transactions carrying a business
+    # tag, keeping those tagged only with PARTNERS_TAG_EXEMPT.
+    exclude_business_tags: bool = False,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
     completed: Optional[str] = None,   # "yes" | "no" — chat Completed flag (deposit/withdrawal)
@@ -9729,6 +9732,8 @@ async def get_transactions(
         _hidden = await _partner_hidden_clauses(exclude_hidden_tag_id)
         if _hidden:
             and_clauses.append({"$nor": _hidden})
+    if exclude_business_tags:
+        and_clauses.append(_PARTNERS_BUSINESS_TAG_CLAUSE)
 
     # completed_at is a full UTC ISO instant, so bare YYYY-MM-DD bounds are padded
     # the same way the approved/request-processed ranges above are.
@@ -10611,6 +10616,9 @@ async def export_transactions(
     completed_date_from: Optional[str] = None,
     completed_date_to: Optional[str] = None,
     exclude_hidden_tag_id: Optional[str] = None,
+    # Partners-only for the same reason: drops transactions carrying a business
+    # tag, keeping those tagged only with PARTNERS_TAG_EXEMPT.
+    exclude_business_tags: bool = False,
     client_tag: Optional[str] = None,
     transaction_tag: Optional[str] = None,
 ):
@@ -10684,6 +10692,8 @@ async def export_transactions(
         _hidden = await _partner_hidden_clauses(exclude_hidden_tag_id)
         if _hidden:
             and_clauses.append({"$nor": _hidden})
+    if exclude_business_tags:
+        and_clauses.append(_PARTNERS_BUSINESS_TAG_CLAUSE)
 
     # Same padding as the list endpoint, so an export matches what is on screen.
     if completed_date_from or completed_date_to:
@@ -19217,6 +19227,20 @@ PARTNERS_DATE_FLOOR = "2026-08-15"
 # date does not match $gte at all, so anything not yet completed is out of scope.
 _PARTNERS_FLOOR_CLAUSE = {"completed_at": {"$gte": PARTNERS_DATE_FLOOR}}
 
+# Tags that do NOT take a transaction out of the Partners section. "Edited" is
+# written automatically whenever a transaction is corrected, so it describes the
+# record's history rather than the money - fixing a typo must never silently move
+# a partner's totals. Every other tag marks the transaction as belonging to
+# another book and takes it out of this section.
+PARTNERS_TAG_EXEMPT = ["Edited"]
+
+# Keep a transaction only if it carries no tag beyond the exempt ones. Untagged,
+# or tagged only "Edited", stays; anything carrying a business tag is excluded
+# even when it also carries "Edited".
+_PARTNERS_BUSINESS_TAG_CLAUSE = {
+    "transaction_tags": {"$not": {"$elemMatch": {"$nin": PARTNERS_TAG_EXEMPT}}}
+}
+
 
 @api_router.get("/reports/partner-summary")
 async def get_partner_summary_report(
@@ -19276,7 +19300,8 @@ async def get_partner_summary_report(
         ac = await db.transactions.aggregate([
             {"$match": {"status": {"$in": ["approved", "completed"]},
                         "client_tags": {"$in": tag_names},
-                        **_PARTNERS_FLOOR_CLAUSE}},
+                        **_PARTNERS_FLOOR_CLAUSE,
+                        **_PARTNERS_BUSINESS_TAG_CLAUSE}},
             {"$unwind": "$client_tags"},
             {"$match": {"client_tags": {"$in": tag_names}}},
             *([{"$match": {"$nor": hidden_nor}}] if hidden_nor else []),
@@ -19296,6 +19321,7 @@ async def get_partner_summary_report(
                     "status": {"$in": ["approved", "completed"]},
                     "client_tags": {"$in": tag_names},
                     **_PARTNERS_FLOOR_CLAUSE,
+                    **_PARTNERS_BUSINESS_TAG_CLAUSE,
                 }
             },
             {"$unwind": "$client_tags"},
@@ -19489,7 +19515,8 @@ async def get_partner_treasury_summary(
     known_types = [dt for dt, _ in _PARTNER_TREASURY_DEST_LABELS]
     pipeline = [
         {"$match": {"status": {"$in": ["approved", "completed"]}, "client_tags": tag_name,
-                    **_PARTNERS_FLOOR_CLAUSE}},
+                    **_PARTNERS_FLOOR_CLAUSE,
+                    **_PARTNERS_BUSINESS_TAG_CLAUSE}},
         {
             "$group": {
                 "_id": {
