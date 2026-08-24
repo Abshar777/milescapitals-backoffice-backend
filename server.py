@@ -19227,12 +19227,19 @@ PARTNERS_DATE_FLOOR = "2026-08-15"
 # date does not match $gte at all, so anything not yet completed is out of scope.
 _PARTNERS_FLOOR_CLAUSE = {"completed_at": {"$gte": PARTNERS_DATE_FLOOR}}
 
-# Tags that do NOT take a transaction out of the Partners section. "Edited" is
-# written automatically whenever a transaction is corrected, so it describes the
-# record's history rather than the money - fixing a typo must never silently move
-# a partner's totals. Every other tag marks the transaction as belonging to
-# another book and takes it out of this section.
-PARTNERS_TAG_EXEMPT = ["Edited"]
+# Tags that do NOT take a transaction out of the Partners section.
+#
+# "Edited" is written automatically whenever a transaction is corrected, so it
+# describes the record's history rather than the money - fixing a typo must never
+# silently move a partner's totals.
+#
+# The CPW tags are ordinary partner withdrawal activity that happens to be
+# classified, so they stay in the section too. Note this does NOT include
+# "EDU CPW", which is still treated as another book.
+#
+# Every tag not listed here marks the transaction as belonging to another book
+# and takes it out of this section.
+PARTNERS_TAG_EXEMPT = ["Edited", "DELTA CPW", "CLT CPW"]
 
 # Keep a transaction only if it carries no tag beyond the exempt ones. Untagged,
 # or tagged only "Edited", stays; anything carrying a business tag is excluded
