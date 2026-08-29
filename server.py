@@ -19219,7 +19219,7 @@ async def _partner_hidden_clauses(tag_id: str) -> list:
 # history. Deliberately confined to the Partners endpoints: /transactions and
 # /transactions/export are shared with Transactions Summary, Reports and the vendor
 # dashboard, and must not inherit it.
-PARTNERS_DATE_FLOOR = "2026-08-15"
+PARTNERS_DATE_FLOOR = "2026-08-01"
 
 # Keyed off completed_at, not the transaction date: what this section reports on is
 # when work was completed. completed_at is a full ISO instant, so a bare YYYY-MM-DD
