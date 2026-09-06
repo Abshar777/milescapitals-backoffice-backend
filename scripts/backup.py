@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,7 +133,41 @@ async def send_message_to_telegram(text: str):
 
 # ── Main backup ───────────────────────────────────────────────────────────────
 
+def _sweep_orphans(max_age_hours: float = 2.0) -> int:
+    """Remove scratch files left behind by earlier runs.
+
+    run_backup deletes its own run directory and zip once it finishes, because R2
+    and Telegram are the real stores and nothing is meant to persist here. But that
+    cleanup sits at the end of the happy path, so any failure in between - a failed
+    R2 upload, a Telegram timeout - used to leave the directory behind forever.
+
+    Sweeping on entry makes a leak self-healing: backups run hourly, so anything in
+    here older than a couple of hours is by definition an orphan. Without this the
+    leftovers accumulated for months, filled the disk and took MongoDB down with it.
+    """
+    if not BACKUP_DIR.exists():
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    removed = 0
+    for path in BACKUP_DIR.iterdir():
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+            removed += 1
+        except Exception:
+            continue
+    if removed:
+        logger.info(f"🧹 Cleared {removed} orphaned backup file(s) from earlier runs")
+    return removed
+
 async def run_backup(to_r2: bool = True, to_telegram: bool = True):
+    # Anything still here belongs to a run that died before its own cleanup.
+    _sweep_orphans()
+
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M")
     run_name = f"{DB_NAME}_{timestamp}"
     run_dir = BACKUP_DIR / run_name
