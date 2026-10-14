@@ -29143,6 +29143,35 @@ async def startup_db_indexes():
         )
         await db.income_expense_entries.create_index([("vendor_id", 1), ("status", 1)])
 
+        # Chat indexes. channel_messages and user_messages had no indexes at all, so
+        # opening a channel was a COLLSCAN over every message in every channel - twice,
+        # once for count_documents and once for the find - and got linearly slower as the
+        # history grew. The compound index matches the channel query exactly: equality on
+        # channel_id and thread_root_id, then created_at for the sort.
+        await db.channel_messages.create_index(
+            [("channel_id", 1), ("thread_root_id", 1), ("created_at", -1)],
+            background=True,
+        )
+        # Thread replies read by root, newest last.
+        await db.channel_messages.create_index(
+            [("thread_root_id", 1), ("created_at", 1)], background=True
+        )
+        await db.channel_messages.create_index("msg_id", unique=True, sparse=True)
+        # DMs are fetched as an $or of the two directions, so index each side.
+        await db.user_messages.create_index(
+            [("sender_id", 1), ("recipient_id", 1), ("created_at", -1)], background=True
+        )
+        await db.user_messages.create_index(
+            [("recipient_id", 1), ("sender_id", 1), ("created_at", -1)], background=True
+        )
+        # The unread badge counts {recipient_id, read != true} on every poll.
+        await db.user_messages.create_index(
+            [("recipient_id", 1), ("read", 1)], background=True
+        )
+        await db.user_messages.create_index("message_id", unique=True, sparse=True)
+        await db.channels.create_index("channel_id", unique=True, sparse=True)
+        await db.channels.create_index([("members", 1)], background=True)
+
         # Billing indexes
         await db.invoices.create_index("invoice_id", unique=True, sparse=True)
         await db.invoices.create_index("invoice_number", unique=True, sparse=True)
