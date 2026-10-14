@@ -608,7 +608,7 @@ async def add_channel_members(
 async def get_channel_messages(
     channel_id: str,
     page: int = 1,
-    page_size: int = 200,
+    page_size: int = 50,
     date_from: Optional[str] = None,  # YYYY-MM-DD, IST calendar day (inclusive)
     date_to: Optional[str] = None,    # YYYY-MM-DD, IST calendar day (inclusive)
     search: Optional[str] = None,     # case-insensitive substring match on content
