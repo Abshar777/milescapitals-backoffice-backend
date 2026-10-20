@@ -1331,7 +1331,7 @@ async def react_user_message(
 
 
 # ── Status tags (workflow labels, e.g. #scalping-check) ───────────────────────
-TAG_OPTIONS = ["Approved", "Processed", "Hold", "Rejected", "Pending", "Query"]
+TAG_OPTIONS = ["Approved", "Processed", "Hold", "Rejected", "Cancelled", "Pending", "Query"]
 
 
 def _toggle_tag(tags: dict, tag: str, user: dict) -> dict:
