@@ -9674,14 +9674,31 @@ async def get_transactions(
         query["status"] = wanted[0] if len(wanted) == 1 else {"$in": wanted}
     if base_currency and base_currency != "all":
         query["base_currency"] = base_currency
-    if destination_type:
+    # A treasury account is the DESTINATION of a deposit but the SOURCE of a
+    # withdrawal - the money leaves it and goes to the client's bank or an
+    # exchanger. Matching destination alone therefore hid most of an account's
+    # activity: MILES CAPITALS FZE showed 413 transactions when 1,279 touched it.
+    #
+    # So when a specific treasury/USDT account is picked, match either side, and
+    # skip the destination_type clause - it would re-exclude those withdrawals,
+    # whose destination_type is "bank" or "vendor". Pinning the account is the
+    # more precise filter anyway. vendor and psp are unaffected: they are only
+    # ever destinations here.
+    _acct_both_sides = bool(destination_account_id) and destination_type in ("treasury", "usdt", None)
+    if destination_type and not _acct_both_sides:
         query["destination_type"] = destination_type
     if vendor_id:
         query["vendor_id"] = vendor_id
     if psp_id:
         query["psp_id"] = psp_id
     if destination_account_id:
-        query["destination_account_id"] = destination_account_id
+        if _acct_both_sides:
+            and_clauses.append({"$or": [
+                {"destination_account_id": destination_account_id},
+                {"source_account_id": destination_account_id},
+            ]})
+        else:
+            query["destination_account_id"] = destination_account_id
     if completed == "yes":
         query["completed"] = True
     elif completed == "no":
@@ -10649,14 +10666,31 @@ async def export_transactions(
         query["status"] = wanted[0] if len(wanted) == 1 else {"$in": wanted}
     if base_currency and base_currency != "all":
         query["base_currency"] = base_currency
-    if destination_type:
+    # A treasury account is the DESTINATION of a deposit but the SOURCE of a
+    # withdrawal - the money leaves it and goes to the client's bank or an
+    # exchanger. Matching destination alone therefore hid most of an account's
+    # activity: MILES CAPITALS FZE showed 413 transactions when 1,279 touched it.
+    #
+    # So when a specific treasury/USDT account is picked, match either side, and
+    # skip the destination_type clause - it would re-exclude those withdrawals,
+    # whose destination_type is "bank" or "vendor". Pinning the account is the
+    # more precise filter anyway. vendor and psp are unaffected: they are only
+    # ever destinations here.
+    _acct_both_sides = bool(destination_account_id) and destination_type in ("treasury", "usdt", None)
+    if destination_type and not _acct_both_sides:
         query["destination_type"] = destination_type
     if vendor_id:
         query["vendor_id"] = vendor_id
     if psp_id:
         query["psp_id"] = psp_id
     if destination_account_id:
-        query["destination_account_id"] = destination_account_id
+        if _acct_both_sides:
+            and_clauses.append({"$or": [
+                {"destination_account_id": destination_account_id},
+                {"source_account_id": destination_account_id},
+            ]})
+        else:
+            query["destination_account_id"] = destination_account_id
     if client_tag:
         query["client_tags"] = client_tag
     if transaction_tag:
