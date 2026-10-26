@@ -6158,11 +6158,34 @@ async def batch_settle_psp_transactions(
         base_gross = sum(
             tx.get("base_amount", 0) for tx in selected_txs if tx.get("base_amount")
         )
-        rates = [
-            tx.get("exchange_rate") for tx in selected_txs if tx.get("exchange_rate")
-        ]
-        avg_rate = sum(rates) / len(rates) if rates else 1
-        base_deductions = total_deductions / avg_rate if avg_rate else 0
+        # Convert each transaction's own deductions at its own rate. Averaging the
+        # rates across the batch weights a small transaction the same as a large
+        # one, and the net then drifts a fils or two off what the PSP really sends.
+        base_deductions = 0.0
+        unrated_deductions = 0.0
+        for tx in selected_txs:
+            tx_deductions = (
+                (tx.get("psp_commission_amount") or 0)
+                + (
+                    tx.get("psp_reserve_fund_amount")
+                    or tx.get("psp_chargeback_amount")
+                    or 0
+                )
+                + (tx.get("psp_extra_charges") or 0)
+                + (tx.get("psp_gateway_fee") or 0)
+            )
+            if not tx_deductions:
+                continue
+            tx_rate = tx.get("exchange_rate")
+            if tx_rate:
+                base_deductions += tx_deductions / tx_rate
+            else:
+                unrated_deductions += tx_deductions
+        if unrated_deductions:
+            # No rate stored on those rows - fall back to the batch's implied rate
+            implied_rate = (gross_amount / base_gross) if base_gross else 0
+            if implied_rate:
+                base_deductions += unrated_deductions / implied_rate
         treasury_amount = round(base_gross - base_deductions, 2)
     else:
         treasury_amount = convert_currency(net_amount, "USD", dest_currency)
