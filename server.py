@@ -29228,6 +29228,14 @@ async def startup_db_indexes():
             [("thread_root_id", 1), ("created_at", 1)], background=True
         )
         await db.channel_messages.create_index("msg_id", unique=True, sparse=True)
+        # The pinned bar reads {channel_id, pinned: True} every time a channel opens.
+        # Partial so the index only holds the handful of pinned messages per channel
+        # rather than one entry per message in the whole history.
+        await db.channel_messages.create_index(
+            [("channel_id", 1), ("pinned_at", -1)],
+            partialFilterExpression={"pinned": True},
+            background=True,
+        )
         # DMs are fetched as an $or of the two directions, so index each side.
         await db.user_messages.create_index(
             [("sender_id", 1), ("recipient_id", 1), ("created_at", -1)], background=True

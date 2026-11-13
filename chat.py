@@ -1395,6 +1395,94 @@ async def tag_channel_message(
     return {"success": True, "tags": tags}
 
 
+# ── Pinned messages ───────────────────────────────────────────────────────────
+# A pin is a property of the CHANNEL, not of the person who set it: any member can
+# pin or unpin, and everyone sees the same bar. That differs deliberately from
+# status tags, where only the setter may remove their own tag - a tag is a claim
+# about who did what, a pin is just "this matters, keep it to hand".
+PIN_LIMIT = 50
+
+
+@chat_router.get("/channels/{channel_id}/pins")
+async def list_pinned_messages(channel_id: str, user: dict = Depends(get_current_user)):
+    """Every pinned message in a channel, most recently pinned first."""
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+    items = (
+        await db.channel_messages.find(
+            {"channel_id": channel_id, "pinned": True}, {"_id": 0}
+        )
+        .sort("pinned_at", -1)
+        .to_list(PIN_LIMIT)
+    )
+    return {"items": items, "total": len(items)}
+
+
+@chat_router.post("/channels/{channel_id}/messages/{msg_id}/pin")
+async def pin_channel_message(
+    channel_id: str, msg_id: str, request: Request, user: dict = Depends(get_current_user)
+):
+    """Pin or unpin a channel message (any member).
+
+    Body may carry {"pinned": true|false} to set it explicitly; with no body the
+    current state is toggled. Broadcasts a 'pin' update so every open client
+    refreshes its bar without a poll.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    channel = await db.channels.find_one({"channel_id": channel_id})
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    if user["user_id"] not in channel.get("members", []):
+        raise HTTPException(status_code=403, detail="Not a member of this channel")
+    msg = await db.channel_messages.find_one(
+        {"msg_id": msg_id, "channel_id": channel_id}, {"_id": 0}
+    )
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    want = data.get("pinned")
+    pinned = (not bool(msg.get("pinned"))) if want is None else bool(want)
+
+    if pinned and not msg.get("pinned"):
+        current = await db.channel_messages.count_documents(
+            {"channel_id": channel_id, "pinned": True}
+        )
+        if current >= PIN_LIMIT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"This channel already has {PIN_LIMIT} pinned messages - unpin one first",
+            )
+
+    if pinned:
+        update = {"$set": {
+            "pinned": True,
+            "pinned_at": datetime.now(timezone.utc).isoformat(),
+            "pinned_by": user["user_id"],
+            "pinned_by_name": user.get("name") or "",
+        }}
+    else:
+        # Keep the field present and False rather than unsetting it, so the
+        # {channel_id, pinned} index stays usable for both directions.
+        update = {"$set": {"pinned": False},
+                  "$unset": {"pinned_at": "", "pinned_by": "", "pinned_by_name": ""}}
+    await db.channel_messages.update_one({"msg_id": msg_id}, update)
+
+    payload = {
+        "type": "pin", "scope": "channel", "channel_id": channel_id,
+        "channel_name": channel.get("name", ""), "msg_id": msg_id,
+        "pinned": pinned,
+        "by_id": user["user_id"], "by": user.get("name") or "",
+    }
+    asyncio.create_task(manager.broadcast(list(channel.get("members", [])), payload))
+    return {"success": True, "pinned": pinned}
+
+
 # ── Transaction-request auto-notifications (#deposite_only / #withdraw_only) ──
 TX_CHANNELS = {"deposit": "deposite_only", "withdrawal": "withdraw_only"}
 TX_BOT_ID = "user_txbot"
