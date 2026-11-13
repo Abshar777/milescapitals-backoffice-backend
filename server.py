@@ -121,7 +121,15 @@ def upload_to_r2(
 
 
 # Create the main app
-app = FastAPI(title="FX Broker Back-Office API")
+# The interactive docs publish the full API schema to anyone who can reach the
+# port, so they stay off unless ENABLE_DOCS is set explicitly (local dev only).
+ENABLE_DOCS = os.environ.get("ENABLE_DOCS", "").strip().lower() in ("1", "true", "yes")
+app = FastAPI(
+    title="FX Broker Back-Office API",
+    docs_url="/docs" if ENABLE_DOCS else None,
+    redoc_url="/redoc" if ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_DOCS else None,
+)
 
 # Create router with /api prefix
 api_router = APIRouter(prefix="/api")
