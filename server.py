@@ -19298,26 +19298,21 @@ _PARTNERS_FLOOR_CLAUSE = {"completed_at": {"$gte": PARTNERS_DATE_FLOOR}}
 # describes the record's history rather than the money - fixing a typo must never
 # silently move a partner's totals.
 #
-# The CPW, CREDIT, FREE and service-charge tags are ordinary partner activity
-# that happens to be classified, so they stay in the section too.
+# The CPW tags are ordinary partner activity that happens to be classified, so
+# they stay in the section too.
 #
-# "CLT  FREE" carries a double space on purpose: that is how the tag is stored.
-# A single-spaced "CLT FREE" is a different string and would not be exempt.
+# Every other tag marks the transaction as belonging to another book and takes
+# it out of this section - the CREDIT, FREE and service-charge tags among them,
+# alongside MMC, DSLP, DSLP PRO, DQMP, DGMP, DPF and DELTA BLR CPW.
 #
-# Every tag not listed here marks the transaction as belonging to another book
-# and takes it out of this section - currently MMC, DSLP, DSLP PRO, DQMP, DGMP,
-# DPF and DELTA BLR CPW.
+# Tag strings must match exactly as stored. "CLT  FREE", for instance, carries a
+# double space; if it is ever added here a single-spaced "CLT FREE" would be a
+# different string and would not be exempt.
 PARTNERS_TAG_EXEMPT = [
     "Edited",
     "DELTA CPW",
     "CLT CPW",
     "EDU CPW",
-    "CLT CREDIT",
-    "EDU CREDIT",
-    "DELTA CREDIT",
-    "CLT  FREE",
-    "EDU FREE",
-    "CARLTON EDU SERVICE CHARGE",
 ]
 
 # Keep a transaction only if it carries no tag beyond the exempt ones. Untagged,
