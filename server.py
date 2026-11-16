@@ -9781,7 +9781,7 @@ async def get_transactions(
         if _hidden:
             and_clauses.append({"$nor": _hidden})
     if exclude_business_tags:
-        and_clauses.append(_PARTNERS_BUSINESS_TAG_CLAUSE)
+        and_clauses.append(await partners_business_tag_clause())
 
     # completed_at is a full UTC ISO instant, so bare YYYY-MM-DD bounds are padded
     # the same way the approved/request-processed ranges above are.
@@ -10758,7 +10758,7 @@ async def export_transactions(
         if _hidden:
             and_clauses.append({"$nor": _hidden})
     if exclude_business_tags:
-        and_clauses.append(_PARTNERS_BUSINESS_TAG_CLAUSE)
+        and_clauses.append(await partners_business_tag_clause())
 
     # Same padding as the list endpoint, so an export matches what is on screen.
     if completed_date_from or completed_date_to:
@@ -19305,22 +19305,153 @@ _PARTNERS_FLOOR_CLAUSE = {"completed_at": {"$gte": PARTNERS_DATE_FLOOR}}
 # it out of this section - the CREDIT, FREE and service-charge tags among them,
 # alongside MMC, DSLP, DSLP PRO, DQMP, DGMP, DPF and DELTA BLR CPW.
 #
-# Tag strings must match exactly as stored. "CLT  FREE", for instance, carries a
-# double space; if it is ever added here a single-spaced "CLT FREE" would be a
-# different string and would not be exempt.
-PARTNERS_TAG_EXEMPT = [
+# This is only the shipped default. Admins change the live list from the Partners
+# settings panel; the default applies until they do, and is the fallback if the
+# settings document is missing or empty.
+PARTNERS_TAG_EXEMPT_DEFAULT = [
     "Edited",
     "DELTA CPW",
     "CLT CPW",
     "EDU CPW",
 ]
 
-# Keep a transaction only if it carries no tag beyond the exempt ones. Untagged,
-# or tagged only "Edited", stays; anything carrying a business tag is excluded
-# even when it also carries "Edited".
-_PARTNERS_BUSINESS_TAG_CLAUSE = {
-    "transaction_tags": {"$not": {"$elemMatch": {"$nin": PARTNERS_TAG_EXEMPT}}}
-}
+# "Edited" is written automatically whenever a transaction is corrected, so it
+# describes the record's history rather than the money. It is exempt no matter
+# what the saved list says, and the settings panel cannot remove it: without
+# that, fixing a typo would silently move a partner's totals.
+PARTNERS_TAG_ALWAYS_EXEMPT = "Edited"
+
+PARTNERS_TAG_SETTING_TYPE = "partners_tags"
+
+# Resolved per request so the panel can change it without a deploy, but held in
+# process between writes: the clause sits in five hot query paths and a settings
+# read on every Partners page load is pure overhead. Each backend runs as a
+# single pm2 fork, so clearing the cache on write is enough to stay consistent.
+_partners_tag_exempt_cache: Optional[List[str]] = None
+
+
+def _invalidate_partners_tag_cache() -> None:
+    global _partners_tag_exempt_cache
+    _partners_tag_exempt_cache = None
+
+
+async def get_partners_tag_exempt() -> List[str]:
+    """Tags that do not take a transaction out of the Partners section."""
+    global _partners_tag_exempt_cache
+    if _partners_tag_exempt_cache is None:
+        doc = await db.app_settings.find_one(
+            {"setting_type": PARTNERS_TAG_SETTING_TYPE}, {"_id": 0}
+        )
+        saved = (doc or {}).get("exempt_tags")
+        tags = (
+            [t for t in saved if isinstance(t, str)]
+            if isinstance(saved, list) and saved
+            else list(PARTNERS_TAG_EXEMPT_DEFAULT)
+        )
+        if PARTNERS_TAG_ALWAYS_EXEMPT not in tags:
+            tags.append(PARTNERS_TAG_ALWAYS_EXEMPT)
+        _partners_tag_exempt_cache = tags
+    return _partners_tag_exempt_cache
+
+
+async def partners_business_tag_clause() -> dict:
+    """Keep a transaction only if it carries no tag beyond the exempt ones.
+
+    Untagged, or tagged only "Edited", stays; anything carrying a business tag is
+    excluded even when it also carries "Edited".
+    """
+    return {
+        "transaction_tags": {
+            "$not": {"$elemMatch": {"$nin": await get_partners_tag_exempt()}}
+        }
+    }
+
+
+@api_router.get("/partners/tag-settings")
+async def get_partners_tag_settings(admin: dict = Depends(require_admin)):
+    """Which transaction tags keep a transaction in the Partners section."""
+    exempt = await get_partners_tag_exempt()
+    available = [
+        t
+        for t in await db.transactions.distinct("transaction_tags")
+        if isinstance(t, str) and t
+    ]
+    for t in exempt:
+        if t not in available:
+            available.append(t)
+    return {
+        "exempt_tags": exempt,
+        "available_tags": sorted(available),
+        "locked_tags": [PARTNERS_TAG_ALWAYS_EXEMPT],
+        "default_tags": PARTNERS_TAG_EXEMPT_DEFAULT,
+    }
+
+
+@api_router.put("/partners/tag-settings")
+async def update_partners_tag_settings(
+    request: Request, data: dict = Body(...), admin: dict = Depends(require_admin)
+):
+    """Replace the exempt tag list. Admin only, and the change is logged."""
+    raw = data.get("exempt_tags")
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="exempt_tags must be a list")
+
+    known = {
+        t
+        for t in await db.transactions.distinct("transaction_tags")
+        if isinstance(t, str)
+    }
+    tags: List[str] = []
+    for t in raw:
+        if not isinstance(t, str) or not t.strip():
+            raise HTTPException(
+                status_code=400, detail="Tag names must be non-empty strings"
+            )
+        if t in tags:
+            continue
+        # Tags match exactly, so one that no transaction carries is almost always
+        # a typo - a single-spaced "CLT FREE" against the stored "CLT  FREE"
+        # would save cleanly and then silently do nothing.
+        if t not in known and t != PARTNERS_TAG_ALWAYS_EXEMPT:
+            raise HTTPException(
+                status_code=400, detail=f"No transaction carries the tag {t!r}"
+            )
+        tags.append(t)
+    if PARTNERS_TAG_ALWAYS_EXEMPT not in tags:
+        tags.append(PARTNERS_TAG_ALWAYS_EXEMPT)
+
+    before = list(await get_partners_tag_exempt())
+    await db.app_settings.update_one(
+        {"setting_type": PARTNERS_TAG_SETTING_TYPE},
+        {
+            "$set": {
+                "exempt_tags": tags,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_by": admin["user_id"],
+                "updated_by_name": admin.get("name", ""),
+            }
+        },
+        upsert=True,
+    )
+    _invalidate_partners_tag_cache()
+
+    # create_log rather than log_activity: this records old -> new, and
+    # log_activity does not forward those fields.
+    await create_log(
+        log_type="activity",
+        action="edit",
+        module="partners",
+        user_id=admin.get("user_id"),
+        user_name=admin.get("name"),
+        user_email=admin.get("email"),
+        user_role=admin.get("role"),
+        description="Updated Partners tag visibility",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent", ""),
+        old_value={"exempt_tags": before},
+        new_value={"exempt_tags": tags},
+    )
+    return {"message": "Partners tag visibility updated", "exempt_tags": tags}
 
 
 @api_router.get("/reports/partner-summary")
@@ -19378,11 +19509,12 @@ async def get_partner_summary_report(
         # How many of those clients have actually transacted under this tag. Carrying
         # a tag and having activity are very different numbers - without both, a
         # partner reading "189 clients / 12 transactions" looks broken when it is not.
+        _tag_clause = await partners_business_tag_clause()
         ac = await db.transactions.aggregate([
             {"$match": {"status": {"$in": ["approved", "completed"]},
                         "client_tags": {"$in": tag_names},
                         **_PARTNERS_FLOOR_CLAUSE,
-                        **_PARTNERS_BUSINESS_TAG_CLAUSE}},
+                        **_tag_clause}},
             {"$unwind": "$client_tags"},
             {"$match": {"client_tags": {"$in": tag_names}}},
             *([{"$match": {"$nor": hidden_nor}}] if hidden_nor else []),
@@ -19392,6 +19524,7 @@ async def get_partner_summary_report(
         by_name = {r["_id"]: r["n"] for r in ac}
         active_client_counts = {t["tag_id"]: by_name.get(t["name"], 0) for t in all_tags}
 
+    _tag_clause = await partners_business_tag_clause()
     results = []
     total_deposits = 0.0
     total_withdrawals = 0.0
@@ -19402,7 +19535,7 @@ async def get_partner_summary_report(
                     "status": {"$in": ["approved", "completed"]},
                     "client_tags": {"$in": tag_names},
                     **_PARTNERS_FLOOR_CLAUSE,
-                    **_PARTNERS_BUSINESS_TAG_CLAUSE,
+                    **_tag_clause,
                 }
             },
             {"$unwind": "$client_tags"},
@@ -19593,11 +19726,12 @@ async def get_partner_treasury_summary(
     charges = await _partner_treasury_charges(tag_id)
     settled_ids = await _partner_settled_tx_ids(tag_id)
 
+    _tag_clause = await partners_business_tag_clause()
     known_types = [dt for dt, _ in _PARTNER_TREASURY_DEST_LABELS]
     pipeline = [
         {"$match": {"status": {"$in": ["approved", "completed"]}, "client_tags": tag_name,
                     **_PARTNERS_FLOOR_CLAUSE,
-                    **_PARTNERS_BUSINESS_TAG_CLAUSE}},
+                    **_tag_clause}},
         {
             "$group": {
                 "_id": {
